@@ -1,0 +1,35 @@
+[Unit]
+Description=Imperial Auto Governor passive network observer
+Documentation=file:@RUNTIME_ROOT@/agent_runtime/README.md
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=@RUNTIME_ROOT@/agent_config.json
+ConditionPathExists=@VENV_ROOT@/bin/python
+
+[Service]
+Type=simple
+User=@SERVICE_USER@
+Group=@SERVICE_GROUP@
+WorkingDirectory=@RUNTIME_ROOT@
+Environment=HOME=@SERVICE_HOME@
+Environment=PYTHONUNBUFFERED=1
+ExecStart=@VENV_ROOT@/bin/python @RUNTIME_ROOT@/agent_runtime/passive_network_observer.py --config @RUNTIME_ROOT@/agent_config.json
+Restart=always
+RestartSec=2s
+TimeoutStopSec=5s
+UMask=0077
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@RUNTIME_ROOT@/state
+ProtectKernelTunables=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_PACKET
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

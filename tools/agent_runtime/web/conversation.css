@@ -1,0 +1,542 @@
+.conversation-workspace {
+  grid-template-columns: minmax(220px, .34fr) minmax(0, 1.12fr) minmax(340px, .58fr);
+}
+
+.campaign-list-panel {
+  min-height: 620px;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+}
+
+.campaign-list-panel .panel-heading {
+  margin-bottom: 12px;
+}
+
+.campaign-new-button {
+  width: 100%;
+  margin-bottom: 11px;
+}
+
+.campaign-binding-card {
+  border: 1px solid rgba(95, 196, 181, .2);
+  background: rgba(4, 19, 23, .76);
+  padding: 10px;
+  margin-bottom: 10px;
+  box-shadow: inset 2px 0 rgba(126, 161, 156, .35);
+}
+
+.campaign-binding-card[data-state="ready"] {
+  border-color: rgba(112, 215, 155, .38);
+  box-shadow: inset 2px 0 var(--green);
+}
+
+.campaign-binding-card[data-state="assigned_elsewhere"],
+.campaign-binding-card[data-state="unbound"] {
+  border-color: rgba(229, 170, 88, .42);
+  box-shadow: inset 2px 0 var(--amber);
+}
+
+.campaign-binding-card small {
+  display: block;
+  color: var(--gold);
+  font: 9px Consolas, monospace;
+  letter-spacing: .13em;
+}
+
+.campaign-binding-card strong {
+  display: block;
+  color: var(--teal);
+  font-size: 13px;
+  margin-top: 5px;
+}
+
+.campaign-binding-card[data-state="ready"] strong {
+  color: var(--green);
+}
+
+.campaign-binding-card[data-state="assigned_elsewhere"] strong,
+.campaign-binding-card[data-state="unbound"] strong {
+  color: var(--amber);
+}
+
+.campaign-binding-card p {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+  margin: 6px 0 8px;
+}
+
+.campaign-binding-target {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  margin-top: 8px;
+}
+
+.campaign-binding-target select {
+  margin-top: 5px;
+}
+
+.campaign-binding-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.campaign-binding-actions button {
+  flex: 1;
+  padding: 7px 8px;
+  font-size: 11px;
+}
+
+.campaign-editor {
+  border: 1px solid var(--line-hot);
+  background: rgba(5, 28, 31, .95);
+  padding: 10px;
+  margin-bottom: 10px;
+}
+
+.campaign-editor[hidden] {
+  display: none;
+}
+
+.campaign-editor label {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.campaign-editor input[type="text"],
+.campaign-editor input:not([type]) {
+  margin-top: 5px;
+}
+
+.campaign-editor .campaign-bind-check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 9px;
+}
+
+.campaign-bind-check input,
+.campaign-archive-toggle input {
+  width: auto;
+  margin: 0;
+}
+
+.campaign-editor-actions {
+  display: flex;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.campaign-editor-actions button {
+  flex: 1;
+  padding: 7px 8px;
+  font-size: 11px;
+}
+
+.campaign-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 7px;
+  min-height: 120px;
+  max-height: 390px;
+  overflow-y: auto;
+  padding-right: 2px;
+  scrollbar-color: rgba(100, 227, 208, .35) rgba(1, 10, 13, .72);
+}
+
+.campaign-card {
+  border: 1px solid rgba(95, 196, 181, .16);
+  background: rgba(6, 24, 28, .68);
+  padding: 9px;
+  cursor: pointer;
+}
+
+.campaign-card:hover {
+  border-color: rgba(100, 227, 208, .45);
+  background: rgba(12, 44, 47, .74);
+}
+
+.campaign-card.active {
+  border-color: rgba(100, 227, 208, .72);
+  background: rgba(18, 62, 63, .68);
+  box-shadow: inset 2px 0 var(--teal);
+}
+
+.campaign-card.archived {
+  opacity: .58;
+}
+
+.campaign-card-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 7px;
+}
+
+.campaign-card-title strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.campaign-card-badge {
+  color: var(--gold);
+  font: 9px Consolas, monospace;
+  white-space: nowrap;
+}
+
+.campaign-card-meta {
+  color: var(--muted);
+  font: 10px Consolas, "Microsoft YaHei UI", monospace;
+  line-height: 1.5;
+  margin-top: 5px;
+}
+
+.campaign-card-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.campaign-card-actions button {
+  border-color: rgba(95, 196, 181, .25);
+  background: transparent;
+  color: var(--muted);
+  padding: 4px 7px;
+  font-size: 10px;
+}
+
+.campaign-card-actions button:hover {
+  color: var(--text);
+}
+
+.campaign-archive-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 10px;
+}
+
+.conversation-panel {
+  min-height: 620px;
+  display: flex;
+  flex-direction: column;
+}
+
+.conversation-toolbar {
+  display: grid;
+  grid-template-columns: minmax(230px, 1fr) auto auto;
+  gap: 9px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+.conversation-toolbar label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.conversation-toolbar select {
+  margin-top: 5px;
+}
+
+.conversation-status-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 11px;
+  margin: -3px 2px 8px;
+}
+
+.conversation-status-row b {
+  color: var(--gold);
+  font: 600 12px Consolas, monospace;
+}
+
+.strategy-console {
+  border: 1px solid rgba(95, 196, 181, .22);
+  background: rgba(3, 18, 22, .72);
+  margin-bottom: 10px;
+}
+
+.strategy-console > summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  color: var(--teal);
+  cursor: pointer;
+  padding: 9px 11px;
+  list-style: none;
+}
+
+.strategy-console > summary::-webkit-details-marker {
+  display: none;
+}
+
+.strategy-console[open] > summary {
+  border-bottom: 1px solid rgba(95, 196, 181, .18);
+}
+
+.strategy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 11px;
+}
+
+.strategy-block {
+  border-left: 2px solid rgba(100, 227, 208, .5);
+  background: rgba(8, 31, 35, .62);
+  padding: 10px;
+}
+
+.strategy-block[hidden] {
+  display: none;
+}
+
+.strategy-block-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 7px;
+}
+
+.strategy-block-heading strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.strategy-block textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+
+.strategy-block label {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 8px;
+}
+
+.strategy-block label input,
+.strategy-block label textarea {
+  margin-top: 5px;
+}
+
+.strategy-block.emergency-block {
+  border-left-color: rgba(227, 109, 109, .62);
+}
+
+.strategy-block.emergency-block.active {
+  background: rgba(64, 22, 25, .5);
+  border-color: rgba(227, 109, 109, .8);
+}
+
+.conversation-log {
+  min-height: 360px;
+  height: 470px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(rgba(1, 9, 12, .78), rgba(1, 9, 12, .78)),
+    radial-gradient(circle at 80% 20%, rgba(100, 227, 208, .12), transparent 45%);
+  padding: 14px;
+  scrollbar-color: rgba(100, 227, 208, .45) rgba(1, 10, 13, .72);
+}
+
+.conversation-empty {
+  color: var(--muted);
+  text-align: center;
+  margin: 145px 0 0;
+}
+
+.conversation-message {
+  width: min(88%, 880px);
+  margin: 0 0 12px;
+  border: 1px solid rgba(95, 196, 181, .18);
+  background: rgba(10, 35, 39, .72);
+  padding: 10px 12px;
+  clip-path: polygon(7px 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%, 0 7px);
+}
+
+.conversation-message.role-user {
+  margin-left: auto;
+  border-color: rgba(216, 184, 107, .42);
+  background: rgba(57, 47, 25, .46);
+}
+
+.conversation-message.role-assistant {
+  border-color: rgba(100, 227, 208, .42);
+  box-shadow: inset 2px 0 rgba(100, 227, 208, .55);
+}
+
+.conversation-message.role-tool {
+  width: min(94%, 960px);
+  margin-left: auto;
+  margin-right: auto;
+  color: #9dbab5;
+  background: rgba(8, 24, 29, .82);
+  border-style: dashed;
+  font-size: 12px;
+}
+
+.conversation-message.role-system {
+  width: min(94%, 960px);
+  margin-left: auto;
+  margin-right: auto;
+  color: var(--amber);
+  background: rgba(55, 35, 15, .44);
+  border-color: rgba(229, 170, 88, .35);
+}
+
+.conversation-message.kind-error {
+  color: #f0b2b2;
+  border-color: rgba(227, 109, 109, .55);
+  background: rgba(68, 20, 24, .55);
+}
+
+.conversation-message-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--teal);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.role-user .conversation-message-heading {
+  color: var(--gold);
+}
+
+.conversation-message-heading time {
+  color: var(--muted);
+  font: 10px Consolas, monospace;
+}
+
+.conversation-message p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.62;
+  margin: 0;
+}
+
+.conversation-composer {
+  margin-top: 10px;
+}
+
+.conversation-composer textarea {
+  resize: vertical;
+  min-height: 82px;
+  max-height: 220px;
+}
+
+.template-description {
+  min-height: 38px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: -2px 0 8px;
+}
+
+.settings-panel .check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-panel .check-row input {
+  width: auto;
+  margin: 0;
+}
+
+.model-feature-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 12px 0 4px;
+}
+
+.compact-setting-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 10px;
+}
+
+.settings-panel textarea {
+  font-family: Consolas, "Microsoft YaHei UI", monospace;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.research-settings {
+  border: 1px solid rgba(95, 196, 181, .22);
+  background: rgba(3, 18, 22, .58);
+  margin-top: 10px;
+  padding: 0 10px 10px;
+}
+
+.research-settings > summary {
+  color: var(--teal);
+  cursor: pointer;
+  padding: 9px 0;
+}
+
+@media (max-width: 1250px) and (min-width: 1051px) {
+  .conversation-workspace {
+    grid-template-columns: minmax(220px, .34fr) minmax(0, 1fr);
+  }
+
+  .conversation-workspace .prompt-panel {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 1050px) {
+  .conversation-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .campaign-list-panel {
+    min-height: 0;
+  }
+
+  .campaign-list {
+    max-height: 300px;
+  }
+
+  .conversation-panel {
+    min-height: 560px;
+  }
+}
+
+@media (max-width: 680px) {
+  .conversation-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .conversation-message {
+    width: 96%;
+  }
+
+  .conversation-log {
+    height: 420px;
+  }
+
+  .strategy-grid,
+  .compact-setting-grid {
+    grid-template-columns: 1fr;
+  }
+}

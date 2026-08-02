@@ -1,0 +1,68 @@
+# Dedicated command-carrier enclave for LLM Construction Carrier.
+# Trantor is the building carrier; Terminus is the district/zone carrier.
+# This system is spawned only by iag_carrier.1 / iag_spawn_carrier_enclave_effect.
+# usage_odds = 0 prevents normal galaxy generation from selecting it.
+
+iag_carrier_enclave_system = {
+    name = "NAME_IAG_Carrier_Enclave_System"
+    class = "sc_g"
+    usage = misc_system_init
+    usage_odds = 0
+
+    flags = { iag_carrier_enclave_system }
+
+    planet = {
+        count = 1
+        class = star
+        orbit_distance = 0
+        orbit_angle = 0
+        size = 30
+        has_ring = no
+    }
+
+    change_orbit = 45
+
+    planet = {
+        count = 1
+        name = "NAME_IAG_Carrier_Enclave"
+        class = pc_gaia
+        orbit_distance = 30
+        orbit_angle = 45
+        size = 25
+        deposit_blockers = none
+        modifiers = none
+        flags = {
+            iag_carrier_enclave_seed
+            iag_carrier_building_seed
+            iag_carrier_enclave
+        }
+
+        init_effect = {
+            prevent_anomaly = yes
+            clear_blockers = yes
+        }
+    }
+
+    change_orbit = 40
+
+    planet = {
+        count = 1
+        name = "NAME_IAG_Carrier_Zone_Enclave"
+        class = pc_gaia
+        orbit_distance = 30
+        orbit_angle = 225
+        size = 25
+        deposit_blockers = none
+        modifiers = none
+        flags = {
+            iag_carrier_enclave_seed
+            iag_carrier_zone_seed
+            iag_carrier_enclave
+        }
+
+        init_effect = {
+            prevent_anomaly = yes
+            clear_blockers = yes
+        }
+    }
+}

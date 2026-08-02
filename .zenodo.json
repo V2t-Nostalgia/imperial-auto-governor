@@ -1,0 +1,22 @@
+{
+  "title": "Imperial Auto Governor",
+  "description": "A save-driven, tool-using Stellaris co-op construction agent with constrained execution and explicit confirmation.",
+  "upload_type": "software",
+  "license": "GPL-3.0-only",
+  "creators": [
+    {
+      "name": "Nostalgia"
+    },
+    {
+      "name": "Imperial Auto Governor contributors"
+    }
+  ],
+  "keywords": [
+    "Stellaris",
+    "LLM agent",
+    "game AI",
+    "modding",
+    "co-op automation"
+  ],
+  "related_identifiers": []
+}

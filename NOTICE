@@ -1,0 +1,28 @@
+Imperial Auto Governor
+Copyright (C) 2026 Nostalgia
+and Imperial Auto Governor contributors
+
+Original concept, architecture, and first implementation by
+Nostalgia, 2026.
+
+This distribution contains two principal classes of original work:
+
+1. Program code, Stellaris mod scripts, schemas, and automation tooling are
+   licensed under GPL-3.0-only unless a file says otherwise.
+2. Project documentation is licensed under CC-BY-SA-4.0 unless a file says
+   otherwise.
+
+The copyright notice above, this NOTICE file, the applicable SPDX license
+identifier, ORIGIN.md, and attribution for modified documentation must be
+preserved in source redistributions. Binary distributions must reproduce this
+NOTICE and the applicable license texts in their accompanying materials.
+
+Stellaris, Paradox Interactive, Clausewitz, Steam, DeepSeek, OpenAI, SearXNG,
+Crawl4AI, and other third-party names and marks belong to their respective
+owners. This project is an independent fan-made interoperability project and
+is not endorsed by those owners.
+
+Third-party programs and libraries are not relicensed by this notice. Their
+own copyright and license terms continue to apply. Captured network traffic,
+game saves, user prompts, API credentials, calibration images, and generated
+runtime state are not part of the distributable source package.

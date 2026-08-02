@@ -1,0 +1,35 @@
+# One-shot country edict for the LLM Construction Carrier infrastructure.
+# It creates a dedicated carrier enclave linked directly to the capital, used
+# as a stable source of legitimate co-op construction commands for the external
+# packet executor.
+# If the enclave already exists, the same edict opens a repair/maintenance event
+# instead of spawning a second system.
+
+iag_create_carrier_enclave = {
+    length = 1
+    icon = "GFX_edict_type_policy"
+
+    resources = {
+        category = edicts
+        cost = {
+            unity = 0
+        }
+    }
+
+    potential = {
+        is_ai = no
+        exists = capital_scope
+    }
+
+    allow = {
+        exists = capital_scope
+    }
+
+    effect = {
+        country_event = { id = iag_carrier.1 days = 0 }
+    }
+
+    ai_weight = {
+        weight = 0
+    }
+}

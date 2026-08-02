@@ -1,0 +1,543 @@
+{
+  "schema": "iag.capabilities.v1",
+  "carriers": {
+    "build_building": {
+      "command": "building_upc_construction_command_relay",
+      "legacy_commands": [
+        "building_research_lab_1"
+      ],
+      "maximum_equal_length_id_bytes": 39,
+      "planet_name_zh": "川陀",
+      "source_label_zh": "建设指令中继",
+      "source_position_zh": "唯一候选（第 1 项）",
+      "navigation_step_count": 2
+    },
+    "build_district": {
+      "command": "district_generator",
+      "maximum_equal_length_id_bytes": 18,
+      "planet_name_zh": "川陀",
+      "source_label_zh": "发电区划",
+      "source_position_zh": "固定区划卡",
+      "navigation_step_count": 1
+    },
+    "build_zone": {
+      "command": "zone_research_engineering",
+      "maximum_equal_length_id_bytes": 25,
+      "planet_name_zh": "川陀",
+      "source_label_zh": "工程学研究特化",
+      "source_position_zh": "唯一候选（第 1 项）",
+      "navigation_step_count": 2
+    },
+    "upgrade_building": {
+      "command": "building_upc_upgrade_command_relay_target",
+      "legacy_commands": [
+        "building_research_lab_2"
+      ],
+      "maximum_equal_length_id_bytes": 41,
+      "planet_name_zh": "川陀",
+      "source_label_zh": "升级指令中继",
+      "source_position_zh": "固定升级槽",
+      "required_source_building_id": "building_upc_upgrade_command_relay_base",
+      "navigation_step_count": 2
+    }
+  },
+  "carrier": {
+    "command": "building_upc_construction_command_relay",
+    "maximum_equal_length_building_id_bytes": 39
+  },
+  "districts": {
+    "district_city": {
+      "label_zh": "城市区划",
+      "enabled": true,
+      "planner_enabled": true,
+      "role": "housing",
+      "required_technology": null,
+      "adds_jobs": false,
+      "verified_transport": "4.4.6 same-family district carrier rewrite"
+    },
+    "district_generator": {
+      "label_zh": "发电区划",
+      "enabled": true,
+      "planner_enabled": true,
+      "role": "energy",
+      "required_technology": "tech_power_plant_1",
+      "adds_jobs": true,
+      "verified_transport": "4.4.6 same-family district carrier rewrite"
+    },
+    "district_mining": {
+      "label_zh": "采矿区划",
+      "enabled": true,
+      "planner_enabled": true,
+      "role": "minerals",
+      "required_technology": "tech_mechanized_mining",
+      "adds_jobs": true,
+      "verified_transport": "4.4.6 same-family district carrier rewrite"
+    },
+    "district_farming": {
+      "label_zh": "农业区划",
+      "enabled": true,
+      "planner_enabled": true,
+      "role": "food",
+      "required_technology": "tech_industrial_farming",
+      "adds_jobs": true,
+      "verified_transport": "4.4.6 same-family district carrier rewrite"
+    }
+  },
+  "buildings": {
+    "building_research_lab_1": {
+      "label_zh": "研究实验室",
+      "enabled": true,
+      "role": "research",
+      "required_technology": "tech_basic_science_lab_1",
+      "compatible_zone_prefixes": [
+        "zone_research",
+        "zone_habitat_research"
+      ],
+      "allow_multiple": true,
+      "adds_jobs": true,
+      "verified_transport": "same-family equal-length command rewrite"
+    },
+    "building_foundry_1": {
+      "label_zh": "合金铸造厂",
+      "enabled": true,
+      "role": "alloys",
+      "required_technology": "tech_basic_industry",
+      "compatible_zone_prefixes": [
+        "zone_industrial",
+        "zone_foundry"
+      ],
+      "allow_multiple": true,
+      "adds_jobs": true,
+      "verified_transport": "live building rewrite with fixed-length boundary padding"
+    },
+    "building_factory_1": {
+      "label_zh": "民用工业",
+      "enabled": true,
+      "role": "consumer_goods",
+      "required_technology": "tech_basic_industry",
+      "compatible_zone_prefixes": [
+        "zone_industrial",
+        "zone_factory"
+      ],
+      "allow_multiple": true,
+      "adds_jobs": true,
+      "verified_transport": "verified command family; target definition reviewed locally"
+    },
+    "building_holo_theatres": {
+      "label_zh": "全息影像剧场",
+      "enabled": true,
+      "role": "amenities",
+      "required_technology": "tech_holo_entertainment",
+      "compatible_zone_prefixes": [
+        "zone_default",
+        "zone_urban"
+      ],
+      "allow_multiple": true,
+      "adds_jobs": true,
+      "verified_transport": "verified command family; target definition reviewed locally"
+    },
+    "building_precinct_house": {
+      "label_zh": "警署",
+      "enabled": true,
+      "role": "crime",
+      "required_technology": null,
+      "compatible_zone_prefixes": [
+        "zone_default",
+        "zone_urban"
+      ],
+      "allow_multiple": true,
+      "adds_jobs": true,
+      "verified_transport": "verified command family; target definition reviewed locally"
+    },
+    "building_stronghold": {
+      "label_zh": "要塞",
+      "enabled": true,
+      "role": "fortress",
+      "required_technology": "tech_ground_defense_planning",
+      "compatible_zone_prefixes": [
+        "zone_fortress"
+      ],
+      "allow_multiple": true,
+      "adds_jobs": true,
+      "verified_transport": "verified command family; target definition reviewed locally"
+    },
+    "building_bureaucratic_1": {
+      "label_zh": "行政办公楼",
+      "enabled": true,
+      "role": "unity",
+      "required_technology": null,
+      "compatible_zone_prefixes": [
+        "zone_unity",
+        "zone_research_unity"
+      ],
+      "allow_multiple": true,
+      "adds_jobs": true,
+      "verified_transport": "verified command family; target definition reviewed locally"
+    },
+    "building_generator_generic": {
+      "label_zh": "发电园区",
+      "enabled": true,
+      "role": "energy",
+      "required_technology": "tech_power_plant_1",
+      "compatible_zone_types": [
+        "zone_energy"
+      ],
+      "allow_multiple": true,
+      "adds_jobs": true,
+      "verified_transport": "same-family building command; vanilla 4.4.6 definition reviewed"
+    },
+    "building_energy_grid": {
+      "label_zh": "输电网络",
+      "enabled": true,
+      "role": "energy",
+      "required_technology": "tech_power_hub_1",
+      "compatible_zone_types": [
+        "zone_energy"
+      ],
+      "allow_multiple": false,
+      "planet_unique_types": [
+        "building_energy_grid",
+        "building_energy_nexus"
+      ],
+      "adds_jobs": false,
+      "verified_transport": "same-family building command; vanilla 4.4.6 definition reviewed"
+    },
+    "building_generator_districts_1": {
+      "label_zh": "传导工程复合体",
+      "enabled": true,
+      "role": "energy",
+      "required_technology": "tech_power_plant_1",
+      "compatible_zone_types": [
+        "zone_energy"
+      ],
+      "allow_multiple": false,
+      "planet_unique_types": [
+        "building_generator_districts_1",
+        "building_generator_districts_2",
+        "building_generator_districts_3",
+        "building_generator_districts_4"
+      ],
+      "requires_capped_district_type": "district_generator",
+      "adds_jobs": false,
+      "verified_transport": "same-family building command; vanilla 4.4.6 definition reviewed"
+    },
+    "building_mine_generic": {
+      "label_zh": "地表采石站",
+      "enabled": true,
+      "role": "minerals",
+      "required_technology": "tech_mechanized_mining",
+      "compatible_zone_types": [
+        "zone_minerals"
+      ],
+      "allow_multiple": true,
+      "adds_jobs": true,
+      "verified_transport": "same-family building command; vanilla 4.4.6 definition reviewed"
+    },
+    "building_mineral_purification_plant": {
+      "label_zh": "矿物处理站",
+      "enabled": true,
+      "role": "minerals",
+      "required_technology": "tech_mineral_purification_1",
+      "compatible_zone_types": [
+        "zone_minerals"
+      ],
+      "allow_multiple": false,
+      "planet_unique_types": [
+        "building_mineral_purification_plant",
+        "building_mineral_purification_hub"
+      ],
+      "adds_jobs": false,
+      "verified_transport": "same-family building command; vanilla 4.4.6 definition reviewed"
+    },
+    "building_mining_districts_1": {
+      "label_zh": "工业采矿站",
+      "enabled": true,
+      "role": "minerals",
+      "required_technology": "tech_mechanized_mining",
+      "compatible_zone_types": [
+        "zone_minerals"
+      ],
+      "allow_multiple": false,
+      "planet_unique_types": [
+        "building_mining_districts_1",
+        "building_mining_districts_2",
+        "building_mining_districts_3",
+        "building_mining_districts_4"
+      ],
+      "requires_capped_district_type": "district_mining",
+      "adds_jobs": false,
+      "verified_transport": "same-family building command; vanilla 4.4.6 definition reviewed"
+    },
+    "building_hydroponics_farm": {
+      "label_zh": "水培农场",
+      "enabled": true,
+      "role": "food",
+      "required_technology": "tech_hydroponics",
+      "compatible_zone_types": [
+        "zone_food"
+      ],
+      "allow_multiple": true,
+      "adds_jobs": true,
+      "verified_transport": "same-family building command; vanilla 4.4.6 definition reviewed"
+    },
+    "building_food_processing_facility": {
+      "label_zh": "食物加工厂",
+      "enabled": true,
+      "role": "food",
+      "required_technology": "tech_food_processing_1",
+      "compatible_zone_types": [
+        "zone_food"
+      ],
+      "allow_multiple": false,
+      "planet_unique_types": [
+        "building_food_processing_facility",
+        "building_food_processing_center"
+      ],
+      "adds_jobs": false,
+      "verified_transport": "same-family building command; vanilla 4.4.6 definition reviewed"
+    },
+    "building_farming_districts_1": {
+      "label_zh": "作物发育中心",
+      "enabled": true,
+      "role": "food",
+      "required_technology": "tech_industrial_farming",
+      "compatible_zone_types": [
+        "zone_food"
+      ],
+      "allow_multiple": false,
+      "planet_unique_types": [
+        "building_farming_districts_1",
+        "building_farming_districts_2",
+        "building_farming_districts_3",
+        "building_farming_districts_4"
+      ],
+      "requires_capped_district_type": "district_farming",
+      "adds_jobs": false,
+      "verified_transport": "same-family building command; vanilla 4.4.6 definition reviewed"
+    },
+    "building_resource_silo": {
+      "label_zh": "资源仓库",
+      "enabled": true,
+      "role": "storage",
+      "required_technology": null,
+      "compatible_zone_types": [
+        "zone_energy",
+        "zone_minerals",
+        "zone_food"
+      ],
+      "allow_multiple": true,
+      "adds_jobs": false,
+      "verified_transport": "same-family building command; vanilla 4.4.6 definition reviewed"
+    }
+  },
+  "building_upgrades": [
+    {
+      "from_building_id": "building_research_lab_1",
+      "to_building_id": "building_research_lab_2",
+      "label_zh": "升级研究实验室 II",
+      "enabled": true,
+      "role": "research",
+      "required_technology": "tech_basic_science_lab_2",
+      "adds_jobs": true,
+      "verified_transport": "4.4.6 live exact-slot upgrade rewrite"
+    },
+    {
+      "from_building_id": "building_research_lab_2",
+      "to_building_id": "building_research_lab_3",
+      "label_zh": "升级研究实验室 III",
+      "enabled": true,
+      "role": "research",
+      "required_technology": "tech_basic_science_lab_3",
+      "adds_jobs": true,
+      "verified_transport": "same verified upgrade command family; vanilla direct edge reviewed"
+    },
+    {
+      "from_building_id": "building_foundry_1",
+      "to_building_id": "building_foundry_2",
+      "label_zh": "升级合金铸造厂 II",
+      "enabled": true,
+      "role": "alloys",
+      "required_technology": "tech_alloys_1",
+      "adds_jobs": true,
+      "verified_transport": "same verified upgrade command family; vanilla direct edge reviewed"
+    },
+    {
+      "from_building_id": "building_foundry_2",
+      "to_building_id": "building_foundry_3",
+      "label_zh": "升级合金铸造厂 III",
+      "enabled": true,
+      "role": "alloys",
+      "required_technology": "tech_alloys_2",
+      "adds_jobs": true,
+      "verified_transport": "same verified upgrade command family; vanilla direct edge reviewed"
+    },
+    {
+      "from_building_id": "building_factory_1",
+      "to_building_id": "building_factory_2",
+      "label_zh": "升级民用工业 II",
+      "enabled": true,
+      "role": "consumer_goods",
+      "required_technology": "tech_luxuries_1",
+      "adds_jobs": true,
+      "verified_transport": "same verified upgrade command family; vanilla direct edge reviewed"
+    },
+    {
+      "from_building_id": "building_factory_2",
+      "to_building_id": "building_factory_3",
+      "label_zh": "升级民用工业 III",
+      "enabled": true,
+      "role": "consumer_goods",
+      "required_technology": "tech_luxuries_2",
+      "adds_jobs": true,
+      "verified_transport": "same verified upgrade command family; vanilla direct edge reviewed"
+    },
+    {
+      "from_building_id": "building_holo_theatres",
+      "to_building_id": "building_hyper_entertainment_forum",
+      "label_zh": "升级超级娱乐中心",
+      "enabled": true,
+      "role": "amenities",
+      "required_technology": "tech_hyper_entertainment_forum",
+      "adds_jobs": true,
+      "verified_transport": "same verified upgrade command family; vanilla direct edge reviewed"
+    },
+    {
+      "from_building_id": "building_precinct_house",
+      "to_building_id": "building_hall_judgment",
+      "label_zh": "升级审判厅",
+      "enabled": true,
+      "role": "crime",
+      "required_technology": "tech_colonial_centralization",
+      "adds_jobs": true,
+      "verified_transport": "same verified upgrade command family; vanilla direct edge reviewed"
+    },
+    {
+      "from_building_id": "building_stronghold",
+      "to_building_id": "building_fortress",
+      "label_zh": "升级堡垒",
+      "enabled": true,
+      "role": "fortress",
+      "required_technology": "tech_global_defense_grid",
+      "adds_jobs": true,
+      "verified_transport": "same verified upgrade command family; vanilla direct edge reviewed"
+    },
+    {
+      "from_building_id": "building_energy_grid",
+      "to_building_id": "building_energy_nexus",
+      "label_zh": "升级能源枢纽",
+      "enabled": true,
+      "role": "energy",
+      "required_technology": "tech_power_hub_2",
+      "adds_jobs": false,
+      "verified_transport": "same verified upgrade command family; vanilla direct edge reviewed"
+    },
+    {
+      "from_building_id": "building_mineral_purification_plant",
+      "to_building_id": "building_mineral_purification_hub",
+      "label_zh": "升级矿物处理中心",
+      "enabled": true,
+      "role": "minerals",
+      "required_technology": "tech_mineral_purification_2",
+      "adds_jobs": false,
+      "verified_transport": "same verified upgrade command family; vanilla direct edge reviewed"
+    },
+    {
+      "from_building_id": "building_food_processing_facility",
+      "to_building_id": "building_food_processing_center",
+      "label_zh": "升级食物加工中心",
+      "enabled": true,
+      "role": "food",
+      "required_technology": "tech_food_processing_2",
+      "adds_jobs": false,
+      "verified_transport": "same verified upgrade command family; vanilla direct edge reviewed"
+    }
+  ],
+  "zones": {
+    "zone_foundry": {
+      "label_zh": "重工业",
+      "enabled": true,
+      "role": "alloys",
+      "district_type": "district_city",
+      "verified_transport": "paired 4.4.6 request and authoritative host capture"
+    },
+    "zone_factory": {
+      "label_zh": "民用工业",
+      "enabled": true,
+      "role": "consumer_goods",
+      "district_type": "district_city",
+      "verified_transport": "paired 4.4.6 request and authoritative host capture"
+    },
+    "zone_research": {
+      "label_zh": "科研聚落",
+      "enabled": true,
+      "role": "research",
+      "district_type": "district_city",
+      "verified_transport": "paired 4.4.6 request and authoritative host capture"
+    },
+    "zone_research_physics": {
+      "label_zh": "物理学研究特化",
+      "enabled": true,
+      "role": "research",
+      "district_type": "district_city",
+      "research_focus": "physics",
+      "verified_transport": "paired 4.4.6 request and authoritative host capture"
+    },
+    "zone_research_society": {
+      "label_zh": "社会学研究特化",
+      "enabled": true,
+      "role": "research",
+      "district_type": "district_city",
+      "research_focus": "society",
+      "verified_transport": "paired 4.4.6 request and authoritative host capture"
+    },
+    "zone_research_engineering": {
+      "label_zh": "工程学研究特化",
+      "enabled": true,
+      "role": "research",
+      "district_type": "district_city",
+      "research_focus": "engineering",
+      "verified_transport": "paired 4.4.6 request and authoritative host capture; longest selected carrier"
+    },
+    "zone_unity": {
+      "label_zh": "行政中心",
+      "enabled": true,
+      "role": "unity",
+      "district_type": "district_city",
+      "verified_transport": "paired 4.4.6 request and authoritative host capture"
+    },
+    "zone_trade": {
+      "label_zh": "贸易枢纽",
+      "enabled": true,
+      "role": "trade",
+      "district_type": "district_city",
+      "verified_transport": "paired 4.4.6 request and authoritative host capture"
+    },
+    "zone_energy": {
+      "label_zh": "能源发电",
+      "enabled": true,
+      "role": "energy",
+      "district_type": "district_generator",
+      "slot_id": "slot_energy",
+      "required_technology": "tech_power_hub_1",
+      "verified_transport": "two matching 4.4.6 client requests captured; same-family zone command"
+    },
+    "zone_minerals": {
+      "label_zh": "矿物提纯",
+      "enabled": true,
+      "role": "minerals",
+      "district_type": "district_mining",
+      "slot_id": "slot_minerals",
+      "required_technology": "tech_mineral_purification_1",
+      "verified_transport": "same-family zone command verified by 4.4.6 resource-zone capture; vanilla target definition reviewed; no direct target sample"
+    },
+    "zone_food": {
+      "label_zh": "食品加工",
+      "enabled": true,
+      "role": "food",
+      "district_type": "district_farming",
+      "slot_id": "slot_food",
+      "required_technology": "tech_food_processing_1",
+      "verified_transport": "same-family zone command verified by 4.4.6 resource-zone capture; vanilla target definition reviewed; no direct target sample"
+    }
+  }
+}

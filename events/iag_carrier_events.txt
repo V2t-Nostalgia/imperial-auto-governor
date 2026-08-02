@@ -1,0 +1,132 @@
+namespace = iag_carrier
+
+country_event = {
+    id = iag_carrier.1
+    title = iag_carrier.1.name
+    desc = iag_carrier.1.desc
+    picture = GFX_evt_unknown_ships
+    is_triggered_only = yes
+
+    option = {
+        name = iag_carrier.create
+        trigger = {
+            NOT = {
+                any_owned_planet = {
+                    OR = {
+                        has_carrier_flag = iag_carrier_enclave
+                        solar_system = { has_star_flag = iag_carrier_enclave_system }
+                    }
+                }
+            }
+        }
+        custom_tooltip = iag_carrier.create.tt
+        hidden_effect = {
+            iag_spawn_carrier_enclave_effect = yes
+            country_event = { id = iag_carrier.2 days = 1 }
+        }
+    }
+
+    option = {
+        name = iag_carrier.repair
+        trigger = {
+            any_owned_planet = {
+                OR = {
+                    has_carrier_flag = iag_carrier_enclave
+                    solar_system = { has_star_flag = iag_carrier_enclave_system }
+                }
+            }
+        }
+        custom_tooltip = iag_carrier.repair.tt
+        hidden_effect = {
+            iag_repair_carrier_enclave_effect = yes
+        }
+    }
+
+    option = {
+        name = iag_carrier.cancel
+    }
+}
+
+country_event = {
+    id = iag_carrier.2
+    title = iag_carrier.2.name
+    desc = iag_carrier.2.desc
+    picture = GFX_evt_unknown_ships
+    is_triggered_only = yes
+
+    option = {
+        name = iag_carrier.ok
+    }
+}
+
+# Hidden old-save repair. Grey Wind systems created before 0.5.5 had no
+# hyperlane; connect them directly to the current capital when the save loads.
+country_event = {
+    id = iag_carrier.20
+    hide_window = yes
+    is_triggered_only = yes
+
+    trigger = {
+        is_ai = no
+        exists = capital_scope
+        any_owned_planet = {
+            solar_system = {
+                has_star_flag = iag_carrier_enclave_system
+            }
+        }
+        capital_scope = {
+            solar_system = {
+                NOT = {
+                    any_neighbor_system = {
+                        has_star_flag = iag_carrier_enclave_system
+                    }
+                }
+            }
+        }
+    }
+
+    immediate = {
+        iag_connect_carrier_to_capital_effect = yes
+    }
+}
+
+# Reactive boundary guard for Grey Wind. This is not a pre-entry lock: the
+# fleet has already entered the system when on_entering_system_fleet fires.
+# It uses vanilla documented effects: set_mia and set_mia_return_delay.
+fleet_event = {
+    id = iag_carrier.10
+    title = iag_carrier.10.name
+    desc = iag_carrier.10.desc
+    picture = GFX_evt_unknown_ships
+    location = from
+    show_sound = event_yellow_alert
+    is_triggered_only = yes
+
+    trigger = {
+        exists = controller
+        from = {
+            has_star_flag = iag_carrier_enclave_system
+            has_owner = yes
+            owner = {
+                NOT = { is_same_value = root.controller }
+            }
+        }
+    }
+
+    immediate = {
+        log = "[LLM Carrier] Fourth Wall rejected non-owner fleet [This.GetName] in [From.GetName]."
+        clear_orders = yes
+        if = {
+            limit = { can_go_mia = yes }
+            set_mia = mia_return_home
+            set_mia_return_delay = 42
+        }
+        else = {
+            log = "[LLM Carrier] Fourth Wall could not send [This.GetName] MIA; can_go_mia was false. Orders were cleared only."
+        }
+    }
+
+    option = {
+        name = iag_carrier.10.a
+    }
+}

@@ -1,0 +1,16 @@
+version = 1
+SPDX-PackageName = "Imperial Auto Governor"
+SPDX-PackageSupplier = "Imperial Auto Governor contributors"
+SPDX-PackageDownloadLocation = "NOASSERTION"
+
+[[annotations]]
+path = ["**/*.json", "**/*.yml", "**/*.yaml", "**/*.mod", "common/**", "events/**", "localisation/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Imperial Auto Governor contributors"
+SPDX-License-Identifier = "GPL-3.0-only"
+
+[[annotations]]
+path = ["**/*.md", "NOTICE", "ORIGIN.md", "TRADEMARKS.md", "SECURITY.md", "CONTRIBUTING.md"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Imperial Auto Governor contributors"
+SPDX-License-Identifier = "CC-BY-SA-4.0"

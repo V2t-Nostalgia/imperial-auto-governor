@@ -1,0 +1,16 @@
+# Planet modifier used only by the dedicated LLM carrier enclave.
+# The enclave is not an economic colony; it exists to provide a stable UI target
+# for legitimate co-op client carrier clicks that the external executor can
+# rewrite into real construction commands before they reach the host.
+
+iag_carrier_enclave_planet = {
+    planet_housing_add = 10000
+    planet_amenities_add = 10000
+    planet_stability_add = 100
+    planet_crime_add = -10000
+    pop_housing_usage_mult = -1
+    planet_jobs_produces_mult = -1
+    planet_jobs_upkeep_mult = -1
+    planet_buildings_upkeep_mult = -1
+    planet_districts_upkeep_mult = -1
+}

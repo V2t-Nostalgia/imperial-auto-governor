@@ -1,0 +1,157 @@
+.construction-catalog-panel {
+  margin-top: 14px;
+}
+
+.catalog-overview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  margin: 13px 0 12px;
+}
+
+.catalog-overview > div {
+  min-width: 0;
+  border: 1px solid rgba(95, 196, 181, .18);
+  background: rgba(4, 22, 26, .72);
+  padding: 11px 13px;
+  box-shadow: inset 2px 0 rgba(100, 227, 208, .34);
+}
+
+.catalog-overview small,
+.catalog-overview span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.catalog-overview strong {
+  display: block;
+  margin: 5px 0 4px;
+  color: var(--teal);
+  font: 600 14px Consolas, "Microsoft YaHei UI", monospace;
+  overflow-wrap: anywhere;
+}
+
+.catalog-tabs {
+  display: flex;
+  gap: 7px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 10px;
+}
+
+.catalog-tab {
+  border-color: rgba(95, 196, 181, .2);
+  border-bottom: 0;
+  background: rgba(5, 22, 26, .68);
+  color: var(--muted);
+  padding: 8px 13px;
+}
+
+.catalog-tab b {
+  margin-left: 5px;
+  color: var(--gold);
+  font: 600 11px Consolas, monospace;
+}
+
+.catalog-tab.active {
+  color: var(--text);
+  border-color: var(--line-hot);
+  background: rgba(19, 70, 70, .66);
+  box-shadow: inset 0 -2px var(--teal);
+}
+
+.construction-catalog-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 8px;
+  min-height: 92px;
+}
+
+.construction-catalog-item {
+  min-width: 0;
+  border: 1px solid rgba(95, 196, 181, .16);
+  background: rgba(5, 20, 24, .72);
+  padding: 10px 11px;
+}
+
+.construction-catalog-item.selected {
+  order: -10;
+  border-color: rgba(216, 184, 107, .78);
+  background: rgba(61, 48, 21, .48);
+  box-shadow: inset 3px 0 var(--gold);
+}
+
+.construction-catalog-item.ready {
+  border-color: rgba(112, 215, 155, .34);
+}
+
+.construction-catalog-item.pending {
+  opacity: .58;
+}
+
+.construction-catalog-item-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 9px;
+}
+
+.construction-catalog-item-heading strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.construction-catalog-item-heading span {
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.construction-catalog-item.selected .construction-catalog-item-heading span {
+  color: var(--gold);
+}
+
+.construction-catalog-item.ready .construction-catalog-item-heading span {
+  color: var(--green);
+}
+
+.construction-catalog-item code {
+  display: block;
+  margin-top: 7px;
+  color: var(--teal);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.construction-catalog-item p {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+  margin: 5px 0 0;
+}
+
+.catalog-empty {
+  grid-column: 1 / -1;
+  align-self: center;
+  color: var(--muted);
+  text-align: center;
+}
+
+#calibration-stage-label.single-step {
+  opacity: .72;
+}
+
+@media (max-width: 720px) {
+  .catalog-overview {
+    grid-template-columns: 1fr;
+  }
+
+  .catalog-tabs {
+    overflow-x: auto;
+  }
+
+  .catalog-tab {
+    flex: 1 0 auto;
+  }
+}

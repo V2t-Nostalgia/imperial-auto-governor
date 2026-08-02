@@ -1,0 +1,22 @@
+# Capital link repair. The hidden event exits unless Grey Wind exists and lacks
+# a direct link to the current capital.
+on_game_start_country = {
+    events = {
+        iag_carrier.20
+    }
+}
+
+on_monthly_pulse_country = {
+    events = {
+        iag_carrier.20
+    }
+}
+
+# Reactive carrier enclave boundary.
+# Scope = Fleet, From = System. Vanilla 4.4 documents this on_action in
+# common/on_actions/00_on_actions.txt.
+on_entering_system_fleet = {
+    events = {
+        iag_carrier.10
+    }
+}
