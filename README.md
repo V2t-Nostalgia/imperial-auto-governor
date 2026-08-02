@@ -1,111 +1,230 @@
-# LLM Construction Carrier / LLM 建设载体
+<!-- SPDX-FileCopyrightText: 2026 Nostalgia and Imperial Auto Governor contributors -->
+<!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
 
-这个 Stellaris mod 现在只做一件事：在游戏内创建一个专用、低干扰的建设命令载体飞地。
+# Imperial Auto Governor / 帝国内政总管
 
-它不再承担帝国内政总管、月度扫描、季度报告、殖民地自动化候选或游戏内 LLM 配置。真正的规划与执行链路交给外部工具完成：读取游戏状态，生成建设计划，使用合作玩家客户端发出合法载体点击，再在命令进入房主前改写为真实目标建设。
+Imperial Auto Governor 是一个面向 Stellaris 多人合作模式的实验性 LLM 内政执行系统。它读取房主同步存档中的帝国完整状态，由规则引擎生成合法建设候选，让 LLM 结合长期战略和玩家要求选择动作，再通过合作玩家的真实游戏命令完成受约束的网络改写。
 
-## 当前功能
-
-- 通过政府法令 `创建 LLM 建设载体飞地` 创建一个名为 `灰风`、与当前首都星系直接相连的专用星系。
-- 在该星系内生成两颗 25 格盖亚载体殖民地：`川陀`固定承载建筑选择面板，`端点星`固定承载主区划与区划特化面板。
-- 为飞地创建玩家哨站并把殖民地归属当前玩家。
-- 给载体星球添加保护修正，避免住房、舒适度、稳定度、犯罪、岗位/建筑/区划维护费干扰。
-- 对进入 `灰风` 的非星系拥有者舰队触发反应式防护事件 `第四面墙`，随后让舰队进入 MIA 并在 42 天后返回。
-- 如果飞地已存在，再次使用法令会执行维护：恢复两颗载体星球的名称和保护、补建旧档缺失的 `端点星`，并确保灰风与当前首都直接相连。
-- 不扫描殖民地，不弹季度报告，不自动建设，不触发 LLM 决策。
-
-## 舰队进入边界
-
-`spawn_system` 使用 `hyperlane = yes`，从当前首都星系创建一条直达灰风的超空间航道；脚本还使用原版 `add_hyperlane` 作为显式兜底，并为旧存档自动补建同一条航道。initializer 不创建虫洞、网关或 L-Gate，灰风仍由玩家哨站控制。
-
-Stellaris 当前 vanilla 脚本里没有确认到“按星系在进入前完全拒绝非我方舰队”的稳定 effect/trigger。原版有 `on_entering_system_fleet`，但那是舰队已经进入系统后的反应式事件，不是进入前门禁。
-
-因此现在采用“首都直连 + 反应式门禁”：我方舰队可以通过首都航道正常往返；任何非星系拥有者控制的舰队进入 `灰风` 后，会看到 `第四面墙` 事件，清空当前命令，执行 `set_mia = mia_return_home`，并通过 `set_mia_return_delay = 42` 设置 42 天后返回。
-
-## 失落帝国安全性
-
-该飞地不调用失落帝国初始化器，不设置 `holy_planet` 修正，也不设置 `holy_world_1` 到 `holy_world_4` 标记。当前脚本还会在生成和维护时显式移除这些标记。
-
-名字像“隐居地”不等于圣地。原版失落帝国惩罚检查的是 `holy_planet` 修正；辅助圣地判定还会看 `holy_world_1` 到 `holy_world_4` carrier flags。
-
-旧存档只有川陀时，重新使用政府法令并选择维护现有飞地，即可在原灰风星系中补建端点星并修复两颗载体星球的角色标记。
-
-## 游戏内使用
-
-1. 进入正常玩家帝国。
-2. 打开政府/法令界面。
-3. 使用 `创建 LLM 建设载体飞地`。
-4. 如果飞地不存在，选择创建；如果飞地已存在，选择维护现有载体飞地。
-5. 合作玩家客户端让 `川陀`保持建筑选择面板。
-6. 让 `端点星`保持主区划或区划特化选择面板。
-7. 外部执行器按动作类型使用对应星球上的固定点击作为合法命令载体。
-
-## 保留的游戏脚本文件
+这不是一个只靠 Clausewitz 脚本运行的传统自动建设 mod。项目核心是以下闭环：
 
 ```text
-common/edicts/iag_edicts.txt
-common/on_actions/iag_on_actions.txt
-common/scripted_effects/iag_carrier_effects.txt
-common/solar_system_initializers/iag_carrier_initializers.txt
-common/static_modifiers/iag_static_modifiers.txt
-events/iag_carrier_events.txt
-localisation/english/iag_l_english.yml
-localisation/simp_chinese/iag_l_simp_chinese.yml
+房主 autosave
+  -> 存档上传与完整性验证
+  -> 帝国状态提取和合法候选生成
+  -> LLM 规划
+  -> 合作端执行真实载体点击
+  -> Windows 房主端 WinDivert 入站抓包和命令改写
+  -> 房主处理并广播权威结果
+  -> 权威回包或下一份存档确认
 ```
 
-## 不再包含
+游戏内 mod 只是执行链的一部分。它提供稳定、可重复的合法载体命令，不负责读取 API、调用模型或独立完成自动建设。
 
-- 殖民地内政月度扫描。
-- 季度报告事件。
-- 总管模式配置面板。
-- 行星托管策略决议。
-- 原生殖民地自动化类别。
-- 游戏内 LLM 建议弹窗或 runtime bridge 事件。
+## 核心架构
 
-## 日志
+```mermaid
+flowchart LR
+    subgraph H[Windows 房主电脑]
+        HS[Stellaris 房主]
+        AS[autosave]
+        HB[IAG Host Bridge]
+        WD[WinDivert 入站拦截器]
+        AS --> HB
+        WD --> HS
+    end
 
-创建飞地、维护飞地和第四面墙防护触发时，`game.log` 中会出现 `[LLM Carrier]` 前缀的调试行。Stellaris 日志目录通常为：
+    subgraph A[非房主合作玩家电脑]
+        AG[IAG Agent]
+        CS[存档解析与候选引擎]
+        UI[固定坐标载体点击]
+        CP[Stellaris 合作玩家]
+        AG --> CS
+        AG --> UI --> CP
+    end
+
+    LLM[LLM 与持久战役会话]
+    HB -->|HTTPS 存档同步| AG
+    CS --> LLM --> AG
+    AG -->|一次性执行清单| HB
+    HB --> WD
+    CP -->|真实建设载体命令| WD
+    HS -->|权威广播| HB
+    HB -->|确认结果| AG
+```
+
+一次建设按以下顺序执行：
+
+1. 房主端 `IAGHostBridgeGUI` 等待 autosave 写入稳定，验证 Stellaris ZIP 结构并通过 HTTPS 上传。
+2. Agent 校验 SHA-256、战役身份和会话绑定，从存档提取资源、收支、殖民地、岗位、住房、舒适度、稳定度、犯罪、区划、zone、建筑和建设队列。
+3. 本地规则引擎只生成当前存档和本地 4.4.6 定义能够证明合法的建设候选。
+4. LLM 读取当前战役会话、十年计划、紧急状态和合法候选，选择零项或多项串行建设。
+5. 每个动作先生成绑定存档哈希的一次性执行清单。房主桥以管理员权限打开只匹配当前合作端的 WinDivert 入站句柄并回报 `READY`。
+6. Agent 在合作端 Stellaris 中执行已经校准的固定坐标序列，产生真实、合法、与目标同命令族的载体点击。
+7. 房主桥在命令进入房主前改写已经验证的业务字段，同时保持 UDP payload 长度、命令记录长度、命令数量和 serial 不变。
+8. 只有捕获到房主权威广播，或后续新存档精确证明目标已进入队列或建成，动作才会写入事实账本。
+
+## 为什么需要合作玩家和载体 mod
+
+Stellaris 的游戏脚本不能读取任意本地文件、调用外部模型 API，也不能把外部规划实时变成原生玩家命令。直接伪造新数据包、跨会话重放旧包或向可靠流插入额外命令，都在实测中导致过不同步、时间停滞或命令被拒绝。
+
+当前可行路线依赖一个非房主合作玩家：
+
+- 合作端通过正常 UI 产生本局、本连接下的合法命令及客户端预测。
+- 房主端只改写这条正在流入的命令，不凭空构造 transport header、ACK、offset 或 command serial。
+- 房主仍是最终权威，目标建设必须由房主执行并广播。
+- 每个动作使用一次性拦截器；端口在重连、重启或新房间后重新发现，不复用旧会话数据。
+
+载体 mod 的意义不是代替抓包，而是给自动执行器提供低干扰、位置固定、命令族正确且长度足够的源动作。
+
+## 当前支持范围
+
+当前生产能力以 Stellaris 4.4.6 的本地规则和实机配对样本为基线：
+
+| 动作族 | 合法载体 | 当前能力 |
+| --- | --- | --- |
+| 建筑建设 | `building_upc_construction_command_relay` | 重定向到合法殖民地、zone 和建筑槽 |
+| 主区划建设 | `district_generator` | 城市、发电、采矿和农业区划 |
+| 区划特化 | `zone_research_engineering` | 已验证的工业、科研、行政、贸易等特化 |
+| 建筑升级 | `building_upc_upgrade_command_relay_target` | 按目标建筑对象和精确槽位升级 |
+
+同一轮可以执行多项建设，但始终按 `prepare A -> execute A -> 确认 A -> prepare B` 串行运行。默认每轮最多三项；任一动作失败、等待确认或存档过期时，后续动作都会停止。
+
+以下对象默认转人工处理：
+
+- 度假星球、事件星球和结构无法可靠解析的特殊殖民地。
+- 尚未取得真实命令样本或未完成本地规则建模的命令族。
+- 会导致命令族变化、记录增长或客户端预测分叉的替换。
+- 舰队、外交、战争、人口迁移、政策和市场操作。
+
+## 抓包与改写边界
+
+生产路线运行在 Windows 房主电脑上，使用 WinDivert 捕获非房主合作玩家发往房主的入站 UDP 流量。它不是通用数据包注入器，也不会让 LLM 自由编写十六进制命令。
+
+执行器遵守以下约束：
+
+- 必须使用本局实时出现的真实载体命令。
+- 只处理一次性执行清单指定的合作端、动作族和目标。
+- 保留可靠传输头、未知字段、命令数量、serial 和 UDP payload 总长度。
+- 不插入新命令，不重放旧 payload，不跨会话复用端口或传输状态。
+- 新命令族必须先被动抓包、采集成对样本、做 byte diff、增加测试，再允许实机改写。
+- 明文回包没有命中时不能宣称成功，只能进入 `provisional_pending_save` 并等待新存档核验。
+
+该功能只应在参与者知情并授权的私人合作对局中使用。Stellaris 更新可能改变命令结构；升级游戏版本后应重新验证载体样本和本地定义。
+
+## 项目组件
+
+| 路径 | 作用 |
+| --- | --- |
+| `tools/agent_runtime/` | Agent、网页前端、模型会话、十年计划、候选引擎、固定点击与执行编排 |
+| `tools/windows_save_uploader/` | Windows 房主 GUI、autosave 上传、心跳、一次性 WinDivert 入站改写与权威确认 |
+| `tools/packet_interceptor/` | 抓包分析、精确替换器、命令族研究工具和回归测试 |
+| `tools/save_state/` | Stellaris 4.x 存档解析与结构化行星资料提取 |
+| `common/`、`events/`、`localisation/` | 游戏内 LLM 建设载体飞地 mod |
+| `docs/` | 安装、技术架构、研究服务和发布流程 |
+
+完整会话、API Key、上传令牌、存档、抓包、运行日志和数据库属于本地运行数据，不进入源码仓库或公开发布包。
+
+## 游戏内载体组件
+
+`LLM Construction Carrier / LLM 建设载体` mod 通过政府法令创建首都直连的 `灰风` 星系，以及 `川陀` 和 `端点星` 两颗受保护的 25 格盖亚载体殖民地。它还负责：
+
+- 创建玩家哨站并将载体殖民地交给当前玩家。
+- 消除住房、舒适度、稳定度、犯罪和维护费对载体操作的干扰。
+- 在维护时修复旧档角色标记、名称、端点星和首都航道。
+- 对进入灰风的非星系拥有者舰队触发 `第四面墙`，使其 MIA 42 天后返回。
+- 显式移除失落帝国圣地标记和 `holy_planet` 修正。
+
+当前固定载体目录由独立的 `Carrier Construction Console / 载体统一建设控制台` 0.4.1 提供。它只改造带 `iag_carrier_building_world` 标记的川陀，不影响普通殖民地。当前创意工坊文件 ID 为 `3774390530`。
+
+两个游戏端模组必须由房主和合作玩家使用一致版本加载。模组本身不会抓包、点击、调用 LLM 或直接在目标星球瞬间添加建筑。
+
+## 部署方式
+
+生产路线要求房主使用 Windows，因为受验证的改写位置是房主端入站 WinDivert。Agent 可以运行在另一台 Windows 或 Ubuntu 电脑上，同时承载非房主合作玩家的 Stellaris 客户端。
+
+### 两台 Windows
 
 ```text
-Documents\Paradox Interactive\Stellaris\logs\
+房主电脑: Stellaris + IAGHostBridgeGUI
+合作端电脑: Stellaris + IAGWindowsAgent + LLM 配置
 ```
 
-重点查看：
+Windows Agent 快速开始见 [docs/WINDOWS_AGENT_README.md](docs/WINDOWS_AGENT_README.md)。
+
+### Windows 房主和 Ubuntu 合作端
 
 ```text
-game.log
-error.log
-setup.log
+房主电脑: Windows Stellaris + IAGHostBridgeGUI
+合作端电脑: Ubuntu Stellaris + IAGUbuntuAgent + X11 固定点击
 ```
 
-## 外部代理控制台
+Ubuntu 独立安装见 [docs/UBUNTU_AGENT_README.md](docs/UBUNTU_AGENT_README.md)。
 
-外部规划、三类固定坐标校准、Stellaris 端口发现、Windows 房主入站一发式改写、房主权威确认，以及可编辑 Prompt / Base URL / API Key 的本地前端位于：
+## 首次实局流程
+
+1. 在房主和合作端启用相同版本的两个游戏端模组，并让合作玩家以同一帝国的合作角色加入。
+2. 在游戏内使用政府法令创建或维护灰风载体飞地；让时间推进到统一建设控制台完成初始化。
+3. 在房主电脑以管理员权限启动 `IAGHostBridgeGUI`，填写 Agent 地址、证书指纹和桥接令牌，确认存档目录后点击“开始上传”。
+4. 在合作端启动 Agent，配置 Stellaris 路径、模型 Base URL、模型名、API Key 和上下文参数。
+5. 新建战役会话，并由玩家把当前上传存档明确绑定到该会话。
+6. 按前端提示校准四个动作族的七个窗口相对坐标步骤，并先使用“仅移动鼠标”检查位置。
+7. 先使用“自主分析，只准备规划”，检查存档状态、合法候选、端口和模型判断。
+8. 验收无误后切换到“自主分析并执行建设”。每份达到复查月份的新存档会触发下一轮审计。
+
+完整操作手册见 [tools/agent_runtime/README.md](tools/agent_runtime/README.md)，房主桥说明见 [tools/windows_save_uploader/README.md](tools/windows_save_uploader/README.md)。
+
+## LLM 与前端
+
+Agent 支持 OpenAI Responses 兼容接口和 Chat Completions 兼容接口，可配置 Base URL、模型、API Key、`temperature`、超时、最大上下文、输出预留和受保护的 Raw JSON 参数。
+
+每局游戏拥有独立的持久会话、玩家消息、灰风回复、工具审计、十年计划、紧急状态和建设事实账本。上下文达到设定比例后会生成滚动概况，但 SQLite 中的完整原始历史不会被删除。
+
+可选联网工具包括 SearXNG、Crawl4AI 和 MediaWiki API。网页内容始终作为不可信参考，只能影响 LLM 分析，不能创建本地不存在的候选或绕过执行器校验。部署说明见 [docs/RESEARCH_SERVICES.md](docs/RESEARCH_SERVICES.md)。
+
+## 安全确认状态
+
+| 状态 | 含义 |
+| --- | --- |
+| `confirmed_by_packet` | 房主权威回包明确包含目标命令 |
+| `confirmed_by_save` | 更新后的房主存档精确证明动作落地 |
+| `provisional_pending_save` | 已安全改写，但回包不足以确认；等待新存档 |
+| `rejected_by_save` | 新存档没有出现预期变化，动作被事实账本否决 |
+
+默认严格模式会在 `provisional_pending_save` 时停止后续点击。玩家可以显式启用宽松串行策略，但该状态仍不会被描述为“已经建成”。
+
+## 测试
+
+```powershell
+python -m compileall -q tools
+python -m unittest discover -s tools/agent_runtime/tests
+python -m unittest discover -s tools/packet_interceptor -p "test_*.py"
+python -m unittest discover -s tools/windows_save_uploader/tests
+python -m unittest discover -s tools/save_state -p "test_*.py"
+python tools/release/verify_release.py --directory public_release
+```
+
+测试源码应保留在公开仓库中；`.test_work`、缓存、抓包、日志、数据库、存档和真实配置必须排除。
+
+## 发行附件
+
+v0.5.5 使用五个正式附件：
 
 ```text
-tools/agent_runtime/
+ImperialAutoGovernor-0.5.5-source.zip
+IAGWindowsAgent-0.5.5-windows-x64.zip
+IAGHostBridge-0.5.5-windows-x64.zip
+IAGUbuntuAgent-0.5.5-linux-x86_64.tar.gz
+SHA256SUMS-0.5.5.txt
 ```
 
-中文安装、启动、校准、端口状态与实局测试说明见 [tools/agent_runtime/README.md](tools/agent_runtime/README.md)。Ubuntu 独立发行包的全新环境安装步骤见 [docs/UBUNTU_AGENT_README.md](docs/UBUNTU_AGENT_README.md)；Windows 可以直接运行带 GUI 的 `IAGWindowsAgent.exe`。局域网监听必须使用 HTTPS 和前端鉴权。
+源码、构建、隐私扫描、签名 Tag、GitHub Release、Zenodo 和 Software Heritage 流程见 [docs/PUBLICATION.md](docs/PUBLICATION.md)。技术架构见 [docs/TECHNICAL_OVERVIEW.md](docs/TECHNICAL_OVERVIEW.md)。
 
-代理前端现在支持每局独立会话、十年计划、玩家手动启停的紧急状态、DeepSeek 思考模式模板、模型 `temperature` 与 Raw JSON 参数、最大上下文及按比例自动压缩，以及受约束的 SearXNG、Crawl4AI、MediaWiki 只读检索工具。
-
-## 许可与公开发布
+## 许可证与归属
 
 - 程序代码：`GPL-3.0-only`。
 - 文档：`CC BY-SA 4.0`。
-- 原创者、项目起源与保留声明： [AUTHORS.md](AUTHORS.md)、[ORIGIN.md](ORIGIN.md) 与 [NOTICE](NOTICE)。
-- 引用、贡献、DCO 与商标边界： [CITATION.cff](CITATION.cff)、[CONTRIBUTING.md](CONTRIBUTING.md)、[DCO](DCO)、[TRADEMARKS.md](TRADEMARKS.md)。
-- 首发签名、GitHub Release、Zenodo DOI 与 Software Heritage 归档流程： [docs/PUBLICATION.md](docs/PUBLICATION.md)。尚未由外部服务实际签发的 DOI 与 SWHID 不会被预填。
+- 原始构想、架构和首次实现：Nostalgia，2026。
+- 项目起源与保留声明：[ORIGIN.md](ORIGIN.md)、[NOTICE](NOTICE)、[AUTHORS.md](AUTHORS.md)。
+- 引用、贡献、DCO 与商标边界：[CITATION.cff](CITATION.cff)、[CONTRIBUTING.md](CONTRIBUTING.md)、[DCO](DCO)、[TRADEMARKS.md](TRADEMARKS.md)。
 
-v0.5.5 正式发布目录只包含源码包、Windows Agent、Windows Host Bridge、Ubuntu Agent 和顶层 SHA-256 清单。`public_release.zip`、展开目录与旧临时包不属于 GitHub Release 附件。
-## 重要边界
-
-这个 mod 本身不负责抓包、改包、点击、发包或调用 API。它只是为外部 LLM 执行链准备一个可重复、可观察、低干扰的游戏内 carrier 目标。
-
-完整工作仓库仍保留抓包和命令改写研究记录；公开源码包只包含可审计、可测试、无运行数据的工具源码：
-
-```text
-tools/packet_interceptor/
-tools/save_state/
-```
+本项目仍处于实验阶段。请先在可丢弃存档和私人合作对局中验证，并始终保留可回滚的房主存档。
