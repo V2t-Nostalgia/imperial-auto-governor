@@ -155,9 +155,20 @@ class SupervisorTests(unittest.TestCase):
         )
         sleep.assert_called_once_with(0.25)
         for call in execute_click.call_args_list:
+            self.assertTrue(call.kwargs["guard_enabled"])
             self.assertEqual(call.kwargs["pointer_settle_seconds"], 0.30)
             self.assertEqual(call.kwargs["click_hold_seconds"], 0.10)
             self.assertEqual(call.kwargs["post_click_settle_seconds"], 0.40)
+
+    @patch("iag_supervisor.execute_fixed_click")
+    def test_fixed_click_guard_can_be_disabled_from_config(self, execute_click) -> None:
+        execute_click.return_value = {"schema": "iag.fixed_click_result.v1"}
+        execute_carrier_click_sequence(
+            [Path("/run/command.json")],
+            config={"fixed_click_guard_enabled": False},
+            artifact_root=Path("/run"),
+        )
+        self.assertFalse(execute_click.call_args.kwargs["guard_enabled"])
 
     def test_rejects_missing_host_confirmation(self) -> None:
         value = manifest()
@@ -329,7 +340,7 @@ class SupervisorTests(unittest.TestCase):
             status_path.parent.rmdir()
             root.rmdir()
 
-    def test_newer_save_is_a_recoverable_preclick_error(self) -> None:
+    def test_newer_save_within_revision_tolerance_is_allowed(self) -> None:
         root = RUNTIME / "tests" / "runtime_test_data" / uuid4().hex
         root.mkdir(parents=True)
         source = root / "source.sav"
@@ -343,16 +354,48 @@ class SupervisorTests(unittest.TestCase):
             manifest_value = {
                 "source_save_path": str(source),
                 "source_save_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                "source_save_revision": 1,
+                "source_campaign_id": "a" * 32,
             }
+            current_manifest = root / "state" / "current_save.json"
+            current_manifest.parent.mkdir(parents=True)
+            current_manifest.write_text(
+                json.dumps(
+                    {
+                        "stored_path": str(latest),
+                        "sha256": hashlib.sha256(latest.read_bytes()).hexdigest(),
+                        "campaign_id": "a" * 32,
+                        "revision": 3,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch("iag_supervisor.resolve_current_save", return_value=latest):
+                selected = validate_source_save(
+                    manifest_value,
+                    {
+                        "runtime_root": str(root),
+                        "require_fresh_save_seconds": 900,
+                        "maximum_source_save_lag_versions": 2,
+                    },
+                )
+            self.assertEqual(selected, source)
+
             with patch("iag_supervisor.resolve_current_save", return_value=latest):
                 with self.assertRaises(StaleSourceSaveError):
                     validate_source_save(
                         manifest_value,
-                        {"require_fresh_save_seconds": 900},
+                        {
+                            "runtime_root": str(root),
+                            "require_fresh_save_seconds": 900,
+                            "maximum_source_save_lag_versions": 1,
+                        },
                     )
         finally:
             source.unlink(missing_ok=True)
             latest.unlink(missing_ok=True)
+            (root / "state" / "current_save.json").unlink(missing_ok=True)
+            (root / "state").rmdir()
             root.rmdir()
 
 

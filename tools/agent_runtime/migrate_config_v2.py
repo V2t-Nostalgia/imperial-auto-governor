@@ -26,6 +26,7 @@ DEFAULTS: dict[str, Any] = {
     "chat_message_max_chars": 12_000,
     "tool_loop_max_rounds": 12,
     "maximum_constructions_per_turn": 3,
+    "maximum_source_save_lag_versions": 2,
     "inconclusive_rewrite_policy": "block_until_save",
     "autonomy_mode": "paused",
     "autonomy_poll_seconds": 15,
@@ -70,6 +71,7 @@ DEFAULTS: dict[str, Any] = {
     "carrier_pointer_settle_seconds": 0.20,
     "carrier_click_hold_seconds": 0.08,
     "carrier_post_click_settle_seconds": 0.25,
+    "fixed_click_guard_enabled": True,
 }
 
 

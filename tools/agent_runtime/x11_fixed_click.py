@@ -403,6 +403,7 @@ def execute_fixed_click(
     xauthority: str | None,
     artifact_root: Path,
     move_only: bool = False,
+    guard_enabled: bool = True,
     xdotool: str = "xdotool",
     ffmpeg: str = "ffmpeg",
     **_ignored: Any,
@@ -437,9 +438,19 @@ def execute_fixed_click(
     )
     time.sleep(0.12)
     capture_geometry(geometry, before_path, environment=environment, ffmpeg=ffmpeg)
-    score = guard_score(profile, before_path)
+    effective_guard_enabled = bool(guard_enabled) and bool(
+        profile["guard"].get("enabled", True)
+    )
+    guard_error: str | None = None
+    try:
+        score: float | None = guard_score(profile, before_path)
+    except Exception as error:
+        if effective_guard_enabled:
+            raise
+        score = None
+        guard_error = str(error)
     threshold = float(profile["guard"].get("threshold", 0.0))
-    if score < threshold:
+    if effective_guard_enabled and score is not None and score < threshold:
         raise X11ControlError(
             f"Fixed click guard rejected the current UI ({score:.3f} < {threshold:.3f})."
         )
@@ -462,8 +473,12 @@ def execute_fixed_click(
         "move_only": move_only,
         "window": asdict(geometry),
         "target": {"x": x, "y": y},
-        "guard_score": round(score, 6),
+        "guard_enabled": effective_guard_enabled,
+        "guard_bypassed": not effective_guard_enabled,
+        "guard_score": round(score, 6) if score is not None else None,
         "guard_threshold": threshold,
+        "guard_passed": score is not None and score >= threshold,
+        "guard_error": guard_error,
         "before_screenshot": str(before_path.resolve()),
     }
     return result

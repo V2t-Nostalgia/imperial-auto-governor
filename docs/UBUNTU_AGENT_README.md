@@ -10,16 +10,16 @@
 从同一 GitHub Release 下载：
 
 ```text
-IAGUbuntuAgent-0.5.5-linux-x86_64.tar.gz
-SHA256SUMS-0.5.5.txt
+IAGUbuntuAgent-0.5.6-linux-x86_64.tar.gz
+SHA256SUMS-0.5.6.txt
 ```
 
 先核对顶层清单，再解压：
 
 ```bash
-sha256sum --check --ignore-missing SHA256SUMS-0.5.5.txt
-tar -xzf IAGUbuntuAgent-0.5.5-linux-x86_64.tar.gz
-cd IAGUbuntuAgent-0.5.5
+sha256sum --check --ignore-missing SHA256SUMS-0.5.6.txt
+tar -xzf IAGUbuntuAgent-0.5.6-linux-x86_64.tar.gz
+cd IAGUbuntuAgent-0.5.6
 sha256sum --check SHA256SUMS.txt
 ```
 

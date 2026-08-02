@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlparse
 
-from autonomy import autonomy_probe
+from autonomy import autonomy_probe, coalesce_next_review_after_turn
 from campaign_strategy import (
     activate_emergency,
     end_emergency,
@@ -66,6 +66,7 @@ from fixed_click import (
 from save_ingest import (
     SaveIngestError,
     bearer_token_matches as upload_bearer_token_matches,
+    maximum_source_save_lag_versions,
     read_campaign_manifest,
     read_manifest,
     receive_uploaded_save,
@@ -1216,8 +1217,14 @@ class ConsoleService:
         else:
             pending_count = 0
         return {
+            "fixed_click_guard_enabled": bool(
+                self.config.get("fixed_click_guard_enabled", True)
+            ),
             "require_fresh_save_seconds": int(
                 self.config.get("require_fresh_save_seconds", 900)
+            ),
+            "maximum_source_save_lag_versions": maximum_source_save_lag_versions(
+                self.config
             ),
             "autonomy_require_fresh_save_seconds": int(
                 self.config.get("autonomy_require_fresh_save_seconds", 900)
@@ -1236,6 +1243,7 @@ class ConsoleService:
                 value.get("autonomy_require_fresh_save_seconds", 900)
             )
             maximum = int(value.get("maximum_constructions_per_turn", 3))
+            maximum_lag = int(value.get("maximum_source_save_lag_versions", 2))
         except (TypeError, ValueError) as error:
             raise ConsoleError("执行门限必须是有效整数。") from error
         if not 0 <= manual_age <= 86_400:
@@ -1244,6 +1252,12 @@ class ConsoleService:
             raise ConsoleError("自主巡检存档时效必须在 0 到 86400 秒之间。")
         if not 1 <= maximum <= 5:
             raise ConsoleError("单轮串行建设上限必须在 1 到 5 之间。")
+        try:
+            maximum_source_save_lag_versions(
+                {"maximum_source_save_lag_versions": maximum_lag}
+            )
+        except SaveIngestError as error:
+            raise ConsoleError(str(error)) from error
         policy = str(value.get("inconclusive_rewrite_policy", ""))
         if policy not in {
             "block_until_save",
@@ -1252,7 +1266,11 @@ class ConsoleService:
             raise ConsoleError("不支持的模糊回包处理策略。")
         self.config.update(
             {
+                "fixed_click_guard_enabled": bool(
+                    value.get("fixed_click_guard_enabled", True)
+                ),
                 "require_fresh_save_seconds": manual_age,
+                "maximum_source_save_lag_versions": maximum_lag,
                 "autonomy_require_fresh_save_seconds": autonomy_age,
                 "maximum_constructions_per_turn": maximum,
                 "inconclusive_rewrite_policy": policy,
@@ -1755,6 +1773,7 @@ class ConsoleService:
         mode: str,
         source_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        previous_next_review = store.get_state("next_review", None)
         try:
             return agent.run_turn(
                 trigger=trigger,
@@ -1776,6 +1795,18 @@ class ConsoleService:
                     "last_autonomy_source",
                     source_identity,
                 )
+            try:
+                coalescing = coalesce_next_review_after_turn(
+                    self.config,
+                    store,
+                    previous_next_review,
+                )
+            except Exception as error:
+                coalescing = {
+                    "changed": False,
+                    "reason": f"coalescing_error:{type(error).__name__}",
+                }
+            store.set_state("last_review_coalescing", coalescing)
 
     def start_chat(self, text: str) -> dict[str, Any]:
         with self._conversation_lock:

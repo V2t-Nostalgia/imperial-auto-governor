@@ -24,7 +24,12 @@ from planner import (
     write_json,
 )
 from research_tools import ResearchClient
-from save_ingest import resolve_current_save, review_interval_months
+from save_ingest import (
+    read_manifest,
+    resolve_current_save,
+    review_interval_months,
+    save_manifest_revision,
+)
 
 
 RISK_LEVELS = {"low", "medium", "high", "critical"}
@@ -665,6 +670,19 @@ class AgentToolbox:
             load_gamestate(save_path),
             save_path=save_path,
         )
+        upload_manifest = read_manifest(self.config) or {}
+        source_save = self.snapshot.get("source_save", {})
+        if (
+            isinstance(source_save, dict)
+            and str(upload_manifest.get("sha256") or "")
+            == str(source_save.get("sha256") or "")
+        ):
+            source_save["campaign_id"] = upload_manifest.get("campaign_id")
+            source_save["revision"] = save_manifest_revision(
+                self.config,
+                upload_manifest,
+            )
+            source_save["received_at"] = upload_manifest.get("received_at")
         enrich_snapshot_layout(
             self.config,
             self.capabilities,

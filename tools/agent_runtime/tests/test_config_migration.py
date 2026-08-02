@@ -68,6 +68,8 @@ class ConfigMigrationTests(unittest.TestCase):
             self.assertEqual(value["carrier_pointer_settle_seconds"], 0.20)
             self.assertEqual(value["carrier_click_hold_seconds"], 0.08)
             self.assertEqual(value["carrier_post_click_settle_seconds"], 0.25)
+            self.assertTrue(value["fixed_click_guard_enabled"])
+            self.assertEqual(value["maximum_source_save_lag_versions"], 2)
             self.assertNotIn("autonomy_mode", result["added"])
         finally:
             path.unlink(missing_ok=True)

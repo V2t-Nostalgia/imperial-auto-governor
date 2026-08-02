@@ -20,6 +20,14 @@ let catalogSelectionKey = null;
 let renderedStrategyConversationId = null;
 let executionSettingsInitialized = false;
 
+function gameDateFromMonthIndex(value) {
+  const index = Number(value);
+  if (!Number.isInteger(index) || index < 0) return null;
+  const year = Math.floor(index / 12);
+  const month = (index % 12) + 1;
+  return year + "." + String(month).padStart(2, "0") + ".01";
+}
+
 const calibrationCopy = {
   "build_building:open": {
     label: "川陀建筑入口",
@@ -335,6 +343,10 @@ function renderStrategy(strategy, conversationId, running = false) {
 
 function renderExecutionSettings(settings, running = false) {
   if (!executionSettingsInitialized) {
+    $("fixed-click-guard-enabled").checked =
+      settings.fixed_click_guard_enabled !== false;
+    $("maximum-source-save-lag-versions").value =
+      settings.maximum_source_save_lag_versions ?? 2;
     $("fresh-save-seconds").value =
       settings.require_fresh_save_seconds ?? 900;
     $("autonomy-fresh-save-seconds").value =
@@ -891,8 +903,10 @@ function renderStatus(status) {
   const conversation = status.conversation || {};
   $("conversation-count").textContent = conversation.stored_messages ?? 0;
   const nextReview = conversation.next_review || {};
-  $("next-review").textContent = nextReview.source_game_date
-    ? nextReview.source_game_date + " 起 " + nextReview.next_review_months + " 个月后复查"
+  const dueGameDate = gameDateFromMonthIndex(nextReview.due_month_index);
+  const coalesced = Number(nextReview.coalesced_missed_intervals || 0);
+  $("next-review").textContent = dueGameDate
+    ? "下次复查：" + dueGameDate + (coalesced ? "（已合并 " + coalesced + " 个过期触发点）" : "")
     : "尚未安排复查";
   renderCampaignCatalog(status.conversations, running);
   renderAutonomy(status);
@@ -1163,6 +1177,10 @@ $("save-model").addEventListener("click", async () => {
 $("save-execution-settings").addEventListener("click", async () => {
   try {
     await post("/api/execution-settings", {
+      fixed_click_guard_enabled: $("fixed-click-guard-enabled").checked,
+      maximum_source_save_lag_versions: Number(
+        $("maximum-source-save-lag-versions").value,
+      ),
       require_fresh_save_seconds: Number($("fresh-save-seconds").value),
       autonomy_require_fresh_save_seconds: Number($("autonomy-fresh-save-seconds").value),
       maximum_constructions_per_turn: Number($("maximum-constructions").value),

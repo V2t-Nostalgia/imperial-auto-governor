@@ -22,6 +22,7 @@ CAMPAIGN_ID_RE = re.compile(r"^[a-f0-9]{16,64}$")
 SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
 GAME_DATE_RE = re.compile(r"^\d{1,6}\.\d{1,2}\.\d{1,2}$")
 VALID_REVIEW_INTERVALS = {1, 3, 6, 12}
+MAX_SOURCE_SAVE_LAG_VERSIONS = 24
 
 
 class SaveIngestError(RuntimeError):
@@ -90,6 +91,20 @@ def review_interval_months(config: Mapping[str, Any]) -> int:
     return value
 
 
+def maximum_source_save_lag_versions(config: Mapping[str, Any]) -> int:
+    """Return the player-selected number of newer uploads a plan may tolerate."""
+    try:
+        value = int(config.get("maximum_source_save_lag_versions", 2))
+    except (TypeError, ValueError) as error:
+        raise SaveIngestError("存档版本容差必须是整数。") from error
+    if not 0 <= value <= MAX_SOURCE_SAVE_LAG_VERSIONS:
+        raise SaveIngestError(
+            "存档版本容差必须在 0 到 "
+            f"{MAX_SOURCE_SAVE_LAG_VERSIONS} 之间。"
+        )
+    return value
+
+
 def bearer_token_matches(authorization: str | None, token: str) -> bool:
     if not authorization or not token:
         return False
@@ -121,6 +136,33 @@ def read_campaign_manifest(
     except (FileNotFoundError, PermissionError, json.JSONDecodeError):
         return None
     return value if isinstance(value, dict) else None
+
+
+def save_manifest_revision(
+    config: Mapping[str, Any],
+    manifest: Mapping[str, Any] | None = None,
+) -> int | None:
+    """Return a campaign-local upload revision, including pre-revision manifests."""
+    selected = manifest if manifest is not None else read_manifest(config)
+    if not isinstance(selected, Mapping):
+        return None
+    try:
+        revision = int(selected.get("revision", 0))
+    except (TypeError, ValueError):
+        revision = 0
+    if revision > 0:
+        return revision
+
+    stored_value = selected.get("stored_path")
+    if not stored_value:
+        return None
+    stored = Path(str(stored_value)).expanduser().resolve()
+    root = upload_root(config).resolve()
+    if not stored.is_relative_to(root) or stored.parent.parent != root:
+        return None
+    # Old manifests did not carry a monotonic revision. The number of retained
+    # campaign saves is a conservative migration baseline for the next upload.
+    return max(sum(1 for path in stored.parent.glob("*.sav") if path.is_file()), 1)
 
 
 def _verified_manifest_path(
@@ -285,17 +327,35 @@ def receive_uploaded_save(
 
         destination_dir = root / campaign_id
         destination_dir.mkdir(parents=True, exist_ok=True)
+        previous_manifest = read_campaign_manifest(config, campaign_id)
+        previous_revision = save_manifest_revision(config, previous_manifest) or 0
         date_stem = game_date.replace(".", "-")
         destination = destination_dir / f"{date_stem}_{actual_sha256[:16]}.sav"
         duplicate = destination.exists()
         if duplicate:
             temporary.unlink()
+            if not previous_manifest or str(
+                previous_manifest.get("sha256") or ""
+            ) != actual_sha256:
+                # A deliberate rollback to retained content is a new current
+                # revision and must not inherit an old wall-clock timestamp.
+                os.utime(destination, None)
         else:
             temporary.replace(destination)
 
+        same_as_previous = bool(
+            previous_manifest
+            and str(previous_manifest.get("sha256") or "") == actual_sha256
+        )
+        revision = (
+            max(previous_revision, 1)
+            if same_as_previous
+            else previous_revision + 1
+        )
         received_at = now_iso()
         manifest = {
             "schema": "iag.host_save.v1",
+            "revision": revision,
             "received_at": received_at,
             "source_id": source_id,
             "campaign_id": campaign_id,

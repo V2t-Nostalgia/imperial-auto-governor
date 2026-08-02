@@ -910,6 +910,8 @@ def execution_manifest(
         "source_game_date": snapshot["game_date"],
         "source_save_path": snapshot.get("source_save", {}).get("path"),
         "source_save_sha256": snapshot.get("source_save", {}).get("sha256"),
+        "source_save_revision": snapshot.get("source_save", {}).get("revision"),
+        "source_campaign_id": snapshot.get("source_save", {}).get("campaign_id"),
         "candidate_id": selected["candidate_id"] if selected else None,
         "plan_confidence": plan["confidence"],
         "reasoning_zh": plan["reasoning_zh"],

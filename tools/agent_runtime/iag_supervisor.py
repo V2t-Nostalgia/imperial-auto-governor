@@ -28,7 +28,13 @@ from host_executor_protocol import (
 )
 from fixed_click import execute_fixed_click
 from port_discovery import discover_session
-from save_ingest import resolve_current_save
+from save_ingest import (
+    SaveIngestError,
+    maximum_source_save_lag_versions,
+    read_manifest,
+    resolve_current_save,
+    save_manifest_revision,
+)
 
 
 ROOT = Path(__file__).resolve().parent
@@ -172,6 +178,7 @@ def execute_carrier_click_sequence(
     results: list[dict[str, Any]] = []
     delay = max(float(config.get("carrier_click_step_delay_seconds", 0.45)), 0.0)
     click_timing = {
+        "guard_enabled": bool(config.get("fixed_click_guard_enabled", True)),
         "pointer_settle_seconds": max(
             float(config.get("carrier_pointer_settle_seconds", 0.20)), 0.0
         ),
@@ -244,10 +251,41 @@ def validate_source_save(manifest: dict[str, Any], config: dict[str, Any]) -> Pa
             f"The source save is {age:.0f}s old; the limit is {maximum_age}s."
         )
     latest = resolve_current_save(config)
-    if latest.resolve() != source.resolve() and latest.stat().st_mtime > source.stat().st_mtime:
-        raise StaleSourceSaveError(
-            "A newer synchronized save exists. Re-plan from the latest state."
-        )
+    if latest.resolve() != source.resolve():
+        current_manifest = read_manifest(config) or {}
+        source_campaign = str(manifest.get("source_campaign_id") or "")
+        current_campaign = str(current_manifest.get("campaign_id") or "")
+        try:
+            source_revision = int(manifest.get("source_save_revision") or 0)
+        except (TypeError, ValueError):
+            source_revision = 0
+        current_revision = save_manifest_revision(config, current_manifest) or 0
+        if source_campaign and current_campaign and source_campaign != current_campaign:
+            raise StaleSourceSaveError(
+                "The synchronized save belongs to a different campaign."
+            )
+        if source_revision > 0 and current_revision > 0:
+            lag = current_revision - source_revision
+            if lag < 0:
+                raise StaleSourceSaveError(
+                    "The source save revision is newer than the synchronized campaign state."
+                )
+            try:
+                maximum_lag = maximum_source_save_lag_versions(config)
+            except SaveIngestError as error:
+                raise SupervisorError(str(error)) from error
+            if lag > maximum_lag:
+                raise StaleSourceSaveError(
+                    "The plan source is "
+                    f"{lag} synchronized save version(s) behind; "
+                    f"the configured limit is {maximum_lag}."
+                )
+        elif latest.stat().st_mtime > source.stat().st_mtime:
+            # Pre-revision plans retain the original strict-latest behavior.
+            raise StaleSourceSaveError(
+                "A newer synchronized save exists and the plan has no upload revision. "
+                "Re-plan from the latest state."
+            )
     return source
 
 

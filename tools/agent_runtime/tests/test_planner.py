@@ -1011,6 +1011,9 @@ class PlannerTests(unittest.TestCase):
 
     def test_manifest_keeps_source_save_identity(self) -> None:
         value = snapshot()
+        value["source_save"].update(
+            {"revision": 7, "campaign_id": "a" * 32}
+        )
         candidates = build_candidates(value, self.capabilities, config())
         selected = candidates[0]
         plan = {
@@ -1025,6 +1028,8 @@ class PlannerTests(unittest.TestCase):
         )
         self.assertEqual(manifest["source_save_path"], "/save/test.sav")
         self.assertEqual(manifest["source_save_sha256"], "abc")
+        self.assertEqual(manifest["source_save_revision"], 7)
+        self.assertEqual(manifest["source_campaign_id"], "a" * 32)
 
 
 if __name__ == "__main__":

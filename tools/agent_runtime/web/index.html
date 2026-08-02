@@ -315,17 +315,19 @@
           <div><span class="kicker">EXECUTION LEDGER</span><h2>执行与确认</h2></div>
           <span id="pending-confirmation-state" class="status-tag">无待核验动作</span>
         </div>
+        <label class="check-line"><input id="fixed-click-guard-enabled" type="checkbox">启用固定点击界面校验</label>
+        <label>规划存档最多落后（上传版本数）<input id="maximum-source-save-lag-versions" type="number" min="0" max="24" step="1"></label>
         <label>规划到点击的存档时效（秒）<input id="fresh-save-seconds" type="number" min="0" max="86400" step="30"></label>
         <label>自主巡检存档时效（秒）<input id="autonomy-fresh-save-seconds" type="number" min="0" max="86400" step="30"></label>
         <label>单轮串行建设上限<select id="maximum-constructions"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option></select></label>
         <label>回包没有可识别明文时<select id="inconclusive-rewrite-policy"><option value="block_until_save">严格：等待新存档后再继续</option><option value="allow_serial_provisional">宽松：记为暂定并允许继续串行</option></select></label>
-        <p class="hint">时效填 0 只关闭墙钟年龄限制；存档哈希、战役绑定和“不得使用更旧存档”仍然有效。宽松模式不会伪造成功，每项动作都在新存档确认前保持“暂定”。</p>
+        <p class="hint">存档版本容差填 0 表示只接受最新上传版本；默认 2 表示一轮分析期间即使又上传两份新档，原批次仍可继续。关闭界面校验会保留截图和匹配分数，但不再因分数不足阻止点击，需自行承担误点风险。时效填 0 只关闭墙钟年龄限制；存档哈希和战役绑定仍然有效。</p>
         <div class="button-row"><button id="save-execution-settings">保存执行设置</button></div>
       </article>
     </section>
 
     <footer><span id="footer-message">控制台已就绪</span><span id="last-refresh">--</span></footer>
   </main>
-  <script src="app_v2.js?v=17"></script>
+  <script src="app_v2.js?v=18"></script>
 </body>
 </html>

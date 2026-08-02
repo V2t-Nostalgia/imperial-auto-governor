@@ -87,7 +87,11 @@ Stellaris 的游戏脚本不能读取任意本地文件、调用外部模型 API
 | 区划特化 | `zone_research_engineering` | 已验证的工业、科研、行政、贸易等特化 |
 | 建筑升级 | `building_upc_upgrade_command_relay_target` | 按目标建筑对象和精确槽位升级 |
 
-同一轮可以执行多项建设，但始终按 `prepare A -> execute A -> 确认 A -> prepare B` 串行运行。默认每轮最多三项；任一动作失败、等待确认或存档过期时，后续动作都会停止。
+同一轮可以执行多项建设，但始终按 `prepare A -> execute A -> 确认 A -> prepare B` 串行运行。默认每轮最多三项；任一动作失败、等待确认或规划存档超过玩家设置的版本容差时，后续动作都会停止。
+
+每次接受新的房主存档时，Agent 会为当前战役记录单调递增的上传 revision。网页“执行与确认”区可以设置规划存档最多落后几个上传版本，默认值为 2，设为 0 即恢复“只能使用最新存档”的严格模式。容差只允许已经开始的串行批次继续，不会改变源存档哈希、战役绑定或墙钟时效校验。自主巡检仍保证同一时刻只有一个模型任务；如果一轮分析跨过了原定复查月份，过期触发点会被合并，下一轮从之后的周期边界开始。
+
+固定坐标点击仍会保存点击前截图和模板匹配分数。玩家可以在同一设置区关闭“固定点击界面校验”；关闭后低分不再阻止点击，但窗口数量、窗口尺寸和目标坐标边界仍会检查。该开关用于已人工确认界面正确但模板分数轻微波动的场景，关闭时应自行承担误点风险。
 
 以下对象默认转人工处理：
 
@@ -211,14 +215,14 @@ python tools/release/verify_release.py --directory public_release
 
 ## 发行附件
 
-v0.5.5 使用五个正式附件：
+v0.5.6 使用五个正式附件：
 
 ```text
-ImperialAutoGovernor-0.5.5-source.zip
-IAGWindowsAgent-0.5.5-windows-x64.zip
-IAGHostBridge-0.5.5-windows-x64.zip
-IAGUbuntuAgent-0.5.5-linux-x86_64.tar.gz
-SHA256SUMS-0.5.5.txt
+ImperialAutoGovernor-0.5.6-source.zip
+IAGWindowsAgent-0.5.6-windows-x64.zip
+IAGHostBridge-0.5.6-windows-x64.zip
+IAGUbuntuAgent-0.5.6-linux-x86_64.tar.gz
+SHA256SUMS-0.5.6.txt
 ```
 
 源码、构建、隐私扫描、签名 Tag、GitHub Release、Zenodo 和 Software Heritage 流程见 [docs/PUBLICATION.md](docs/PUBLICATION.md)。技术架构见 [docs/TECHNICAL_OVERVIEW.md](docs/TECHNICAL_OVERVIEW.md)。

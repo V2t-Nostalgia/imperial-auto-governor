@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,69 @@ def save_identity(path: Path) -> dict[str, Any]:
         "path": str(path.resolve()),
         "modified_ns": stat.st_mtime_ns,
         "size": stat.st_size,
+    }
+
+
+def coalesce_next_review_after_turn(
+    config: dict[str, Any],
+    store: ConversationStore,
+    previous_next_review: Any,
+) -> dict[str, Any]:
+    """Skip review boundaries crossed while the preceding model turn was active."""
+    next_review = store.get_state("next_review", None)
+    if not isinstance(next_review, dict) or next_review == previous_next_review:
+        return {"changed": False, "reason": "review_schedule_unchanged"}
+    campaign_id = store.conversation_metadata().get("campaign_id")
+    if not campaign_id:
+        return {"changed": False, "reason": "campaign_unbound"}
+    try:
+        path = resolve_current_save(
+            config,
+            expected_campaign_id=str(campaign_id),
+        )
+        game_date = load_save_metadata(path).get("date")
+    except (FileNotFoundError, PermissionError, SaveIngestError):
+        return {"changed": False, "reason": "save_unavailable"}
+
+    current_index = game_month_index(game_date)
+    try:
+        due_index = int(next_review.get("due_month_index"))
+        interval = int(next_review.get("next_review_months"))
+    except (TypeError, ValueError):
+        return {"changed": False, "reason": "schedule_incomplete"}
+    if current_index is None or interval <= 0 or due_index > current_index:
+        return {
+            "changed": False,
+            "reason": "next_boundary_still_future",
+            "current_month_index": current_index,
+            "due_month_index": due_index,
+        }
+
+    original_due = due_index
+    skipped = 0
+    while due_index <= current_index:
+        due_index += interval
+        skipped += 1
+    next_review.update(
+        {
+            "due_month_index": due_index,
+            "coalesced_at": datetime.now(timezone.utc)
+            .astimezone()
+            .isoformat(timespec="milliseconds"),
+            "coalesced_through_game_date": game_date,
+            "coalesced_from_due_month_index": original_due,
+            "coalesced_missed_intervals": skipped,
+        }
+    )
+    store.set_state("next_review", next_review)
+    return {
+        "changed": True,
+        "reason": "missed_boundaries_coalesced",
+        "game_date": game_date,
+        "current_month_index": current_index,
+        "previous_due_month_index": original_due,
+        "due_month_index": due_index,
+        "skipped_intervals": skipped,
     }
 
 

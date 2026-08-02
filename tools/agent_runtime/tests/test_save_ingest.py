@@ -20,6 +20,7 @@ if str(RUNTIME) not in sys.path:
 from save_ingest import (  # noqa: E402
     SaveIngestError,
     bearer_token_matches,
+    maximum_source_save_lag_versions,
     read_campaign_manifest,
     receive_uploaded_save,
     resolve_current_save,
@@ -92,6 +93,7 @@ class SaveIngestTests(unittest.TestCase):
             )
 
             self.assertEqual(manifest["metadata"]["date"], "2201.04.01")
+            self.assertEqual(manifest["revision"], 1)
             self.assertEqual(manifest["campaign_id"], "a" * 32)
             selected = resolve_current_save(config)
             self.assertTrue(selected.is_file())
@@ -162,6 +164,53 @@ class SaveIngestTests(unittest.TestCase):
         )
         with self.assertRaises(SaveIngestError):
             review_interval_months({"save_review_interval_months": 2})
+        self.assertEqual(maximum_source_save_lag_versions({}), 2)
+        self.assertEqual(
+            maximum_source_save_lag_versions(
+                {"maximum_source_save_lag_versions": 0}
+            ),
+            0,
+        )
+        with self.assertRaises(SaveIngestError):
+            maximum_source_save_lag_versions(
+                {"maximum_source_save_lag_versions": 25}
+            )
+
+    def test_campaign_revision_advances_only_when_current_content_changes(self) -> None:
+        with writable_test_directory() as root:
+            config = self.config(root)
+            first = stellaris_save("2201.04.01")
+            second = stellaris_save("2201.07.01")
+
+            first_manifest = receive_uploaded_save(
+                config,
+                io.BytesIO(first),
+                content_length=len(first),
+                headers=self.headers(first),
+            )
+            second_manifest = receive_uploaded_save(
+                config,
+                io.BytesIO(second),
+                content_length=len(second),
+                headers=self.headers(second),
+            )
+            duplicate_manifest = receive_uploaded_save(
+                config,
+                io.BytesIO(second),
+                content_length=len(second),
+                headers=self.headers(second),
+            )
+            rollback_manifest = receive_uploaded_save(
+                config,
+                io.BytesIO(first),
+                content_length=len(first),
+                headers=self.headers(first),
+            )
+
+            self.assertEqual(first_manifest["revision"], 1)
+            self.assertEqual(second_manifest["revision"], 2)
+            self.assertEqual(duplicate_manifest["revision"], 2)
+            self.assertEqual(rollback_manifest["revision"], 3)
 
 
 if __name__ == "__main__":

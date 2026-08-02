@@ -462,6 +462,29 @@ class WebConsoleSecurityTests(unittest.TestCase):
             saved = json.loads(config_path.read_text(encoding="utf-8"))
             self.assertEqual(saved["request_body_overrides"]["top_p"], 0.82)
 
+            execution = service.save_execution_settings(
+                {
+                    "fixed_click_guard_enabled": False,
+                    "maximum_source_save_lag_versions": 2,
+                    "require_fresh_save_seconds": 1200,
+                    "autonomy_require_fresh_save_seconds": 900,
+                    "maximum_constructions_per_turn": 4,
+                    "inconclusive_rewrite_policy": "block_until_save",
+                }
+            )
+            self.assertFalse(execution["fixed_click_guard_enabled"])
+            self.assertEqual(execution["maximum_source_save_lag_versions"], 2)
+            with self.assertRaises(ConsoleError):
+                service.save_execution_settings(
+                    {
+                        "maximum_source_save_lag_versions": 25,
+                        "require_fresh_save_seconds": 1200,
+                        "autonomy_require_fresh_save_seconds": 900,
+                        "maximum_constructions_per_turn": 4,
+                        "inconclusive_rewrite_policy": "block_until_save",
+                    }
+                )
+
             invalid = {**payload, "request_body_overrides": '{"messages":[]}'}
             with self.assertRaises(ConsoleError):
                 service.save_model_config(invalid)
