@@ -729,7 +729,21 @@ function renderAutonomy(status) {
 
 function renderStatus(status) {
   const network = status.network || {};
-  const level = confidence[network.confidence] || confidence.offline;
+  const bridgeClient = status.save_ingest?.client || {};
+  const bridgeReady = Boolean(
+    bridgeClient.connected &&
+    bridgeClient.host_executor_ready &&
+    bridgeClient.source_ip
+  );
+  const networkConfirmed = [
+    "bidirectional_flow_observed",
+    "carrier_command_verified",
+    "authoritative_confirmed",
+  ].includes(network.confidence);
+  const bridgeWaitingForCarrier = bridgeReady && !networkConfirmed;
+  const level = bridgeWaitingForCarrier
+    ? ["房主执行桥已连接", "warn", "BRIDGE READY"]
+    : (confidence[network.confidence] || confidence.offline);
   $("connection-label").textContent = level[0];
   $("connection-pill").dataset.state = level[1];
   $("network-confidence").textContent = level[2];
@@ -743,19 +757,27 @@ function renderStatus(status) {
   $("process-state").textContent = network.processes?.length
     ? "已发现 PID " + network.processes.map((item) => item.pid).join(", ")
     : "未发现";
-  $("port-verdict").textContent = verification.summary_zh || "尚未确认本局端口";
+  $("port-verdict").textContent = bridgeWaitingForCarrier
+    ? "房主执行桥已认证；UDP 端口将在载体命令到达时锁定"
+    : (verification.summary_zh || "尚未确认本局端口");
   $("port-verdict").className =
     "port-verdict " + (verification.severity || "offline");
   $("host-ip").textContent =
-    telemetry.host_ip || network.configured_host_ip || endpoint.remote_ip || "--";
-  $("local-port").textContent = ports.local_udp_port || endpoint.local_port || "--";
+    telemetry.host_ip || network.configured_host_ip || endpoint.remote_ip ||
+    bridgeClient.source_ip || "--";
+  $("local-port").textContent =
+    ports.local_udp_port || endpoint.local_port ||
+    (bridgeWaitingForCarrier ? "待载体" : "--");
   $("host-out-port").textContent =
-    ports.host_destination_port || endpoint.remote_port || "--";
-  $("host-in-port").textContent = ports.host_source_port || "--";
+    ports.host_destination_port || endpoint.remote_port ||
+    (bridgeWaitingForCarrier ? "待载体" : "--");
+  $("host-in-port").textContent =
+    ports.host_source_port || (bridgeWaitingForCarrier ? "待载体" : "--");
   $("packet-count").textContent =
     (telemetry.outbound_packets || 0) + " → / ← " +
     (telemetry.inbound_packets || 0);
-  $("interceptor-phase").textContent = telemetry.phase || "未武装";
+  $("interceptor-phase").textContent = telemetry.phase ||
+    (bridgeWaitingForCarrier ? "房主桥待命" : "未武装");
   $("telemetry-time").textContent = telemetry.updated_at || "--";
   if (telemetry.phase === "passive_read_only") {
     $("interceptor-phase").textContent = "只读监听（不改包）";

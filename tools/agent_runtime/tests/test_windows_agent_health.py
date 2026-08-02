@@ -35,6 +35,13 @@ class WindowsAgentHealthTests(unittest.TestCase):
             script,
         )
 
+    def test_windows_bridge_is_presented_as_ready_before_port_lock(self) -> None:
+        script = (RUNTIME / "web" / "app_v2.js").read_text(encoding="utf-8")
+        self.assertIn("bridgeClient.host_executor_ready", script)
+        self.assertIn("房主执行桥已连接", script)
+        self.assertIn("UDP 端口将在载体命令到达时锁定", script)
+        self.assertIn('bridgeWaitingForCarrier ? "待载体"', script)
+
 
 if __name__ == "__main__":
     unittest.main()
