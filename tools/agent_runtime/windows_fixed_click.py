@@ -60,6 +60,27 @@ MOUSEEVENTF_RIGHTDOWN = 0x0008
 MOUSEEVENTF_RIGHTUP = 0x0010
 MOUSEEVENTF_MIDDLEDOWN = 0x0020
 MOUSEEVENTF_MIDDLEUP = 0x0040
+INPUT_MOUSE = 0
+
+
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", wintypes.WPARAM),
+    ]
+
+
+class INPUTUNION(ctypes.Union):
+    _fields_ = [("mi", MOUSEINPUT)]
+
+
+class INPUT(ctypes.Structure):
+    _anonymous_ = ("data",)
+    _fields_ = [("type", wintypes.DWORD), ("data", INPUTUNION)]
 
 
 class BITMAPINFOHEADER(ctypes.Structure):
@@ -139,6 +160,12 @@ def _configure_win32() -> None:
     user32.SetFocus.restype = wintypes.HWND
     user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
     user32.SetCursorPos.restype = wintypes.BOOL
+    user32.SendInput.argtypes = [
+        wintypes.UINT,
+        ctypes.POINTER(INPUT),
+        ctypes.c_int,
+    ]
+    user32.SendInput.restype = wintypes.UINT
     user32.GetDC.argtypes = [wintypes.HWND]
     user32.GetDC.restype = wintypes.HDC
     user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
@@ -443,6 +470,23 @@ def _click_flags(button: int) -> tuple[int, int]:
         raise WindowsControlError("Only standard mouse buttons are supported.") from error
 
 
+def _send_mouse_input(flags: int) -> None:
+    event = INPUT(type=INPUT_MOUSE)
+    event.mi = MOUSEINPUT(
+        dx=0,
+        dy=0,
+        mouseData=0,
+        dwFlags=flags,
+        time=0,
+        dwExtraInfo=0,
+    )
+    if user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(INPUT)) != 1:
+        error_code = getattr(ctypes, "get_last_error", lambda: 0)()
+        raise WindowsControlError(
+            f"SendInput failed while injecting a guarded click (WinError {error_code})."
+        )
+
+
 def execute_fixed_click(
     profile_path: Path,
     *,
@@ -450,6 +494,9 @@ def execute_fixed_click(
     xauthority: str | None = None,
     artifact_root: Path,
     move_only: bool = False,
+    pointer_settle_seconds: float = 0.20,
+    click_hold_seconds: float = 0.08,
+    post_click_settle_seconds: float = 0.25,
     **_ignored: Any,
 ) -> dict[str, Any]:
     del display, xauthority
@@ -473,6 +520,7 @@ def execute_fixed_click(
         )
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:8]
     before_path = artifact_root / f"click_before_{run_id}.png"
+    after_path = artifact_root / f"click_after_{run_id}.png"
     user32.SetCursorPos(geometry.x + 8, geometry.y + 8)
     time.sleep(0.12)
     capture_geometry(geometry, before_path)
@@ -490,11 +538,22 @@ def execute_fixed_click(
     y = int(target["y"])
     if not user32.SetCursorPos(geometry.x + x, geometry.y + y):
         raise WindowsControlError("SetCursorPos failed for the calibrated target.")
+    pointer_settle_seconds = max(float(pointer_settle_seconds), 0.0)
+    click_hold_seconds = max(float(click_hold_seconds), 0.0)
+    post_click_settle_seconds = max(float(post_click_settle_seconds), 0.0)
+    if pointer_settle_seconds:
+        # Clausewitz UI hit testing can lag behind an instantaneous cursor warp.
+        # Let the game observe the hover before injecting the button transition.
+        time.sleep(pointer_settle_seconds)
     if not move_only:
         down, up = _click_flags(int(target.get("button", 1)))
-        user32.mouse_event(down, 0, 0, 0, 0)
-        time.sleep(0.04)
-        user32.mouse_event(up, 0, 0, 0, 0)
+        _send_mouse_input(down)
+        if click_hold_seconds:
+            time.sleep(click_hold_seconds)
+        _send_mouse_input(up)
+        if post_click_settle_seconds:
+            time.sleep(post_click_settle_seconds)
+        capture_geometry(geometry, after_path)
     return {
         "schema": "iag.fixed_click_result.v1",
         "executed_at": now_iso(),
@@ -504,5 +563,12 @@ def execute_fixed_click(
         "guard_score": round(score, 6),
         "guard_threshold": threshold,
         "before_screenshot": str(before_path.resolve()),
+        "after_screenshot": (
+            str(after_path.resolve()) if not move_only else None
+        ),
+        "input_method": "SendInput",
+        "pointer_settle_seconds": pointer_settle_seconds,
+        "click_hold_seconds": click_hold_seconds,
+        "post_click_settle_seconds": post_click_settle_seconds,
         "platform": "windows",
     }

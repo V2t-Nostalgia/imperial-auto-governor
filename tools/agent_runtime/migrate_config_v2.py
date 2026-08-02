@@ -67,6 +67,9 @@ DEFAULTS: dict[str, Any] = {
         "upgrade_building": "calibration/carrier_upgrade_open.json",
     },
     "carrier_click_step_delay_seconds": 0.45,
+    "carrier_pointer_settle_seconds": 0.20,
+    "carrier_click_hold_seconds": 0.08,
+    "carrier_post_click_settle_seconds": 0.25,
 }
 
 

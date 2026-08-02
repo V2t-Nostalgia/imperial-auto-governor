@@ -142,6 +142,9 @@ class SupervisorTests(unittest.TestCase):
             config={
                 "display": ":1",
                 "carrier_click_step_delay_seconds": 0.25,
+                "carrier_pointer_settle_seconds": 0.30,
+                "carrier_click_hold_seconds": 0.10,
+                "carrier_post_click_settle_seconds": 0.40,
             },
             artifact_root=Path("/run"),
         )
@@ -151,6 +154,10 @@ class SupervisorTests(unittest.TestCase):
             profiles,
         )
         sleep.assert_called_once_with(0.25)
+        for call in execute_click.call_args_list:
+            self.assertEqual(call.kwargs["pointer_settle_seconds"], 0.30)
+            self.assertEqual(call.kwargs["click_hold_seconds"], 0.10)
+            self.assertEqual(call.kwargs["post_click_settle_seconds"], 0.40)
 
     def test_rejects_missing_host_confirmation(self) -> None:
         value = manifest()

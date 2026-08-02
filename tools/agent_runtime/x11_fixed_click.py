@@ -405,6 +405,7 @@ def execute_fixed_click(
     move_only: bool = False,
     xdotool: str = "xdotool",
     ffmpeg: str = "ffmpeg",
+    **_ignored: Any,
 ) -> dict[str, Any]:
     profile = read_json(profile_path)
     validate_profile(profile)

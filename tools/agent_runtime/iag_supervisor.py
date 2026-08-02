@@ -171,6 +171,17 @@ def execute_carrier_click_sequence(
     """Execute a guarded, fixed-coordinate carrier sequence after READY."""
     results: list[dict[str, Any]] = []
     delay = max(float(config.get("carrier_click_step_delay_seconds", 0.45)), 0.0)
+    click_timing = {
+        "pointer_settle_seconds": max(
+            float(config.get("carrier_pointer_settle_seconds", 0.20)), 0.0
+        ),
+        "click_hold_seconds": max(
+            float(config.get("carrier_click_hold_seconds", 0.08)), 0.0
+        ),
+        "post_click_settle_seconds": max(
+            float(config.get("carrier_post_click_settle_seconds", 0.25)), 0.0
+        ),
+    }
     for index, profile_path in enumerate(profile_paths):
         results.append(
             execute_fixed_click(
@@ -178,6 +189,7 @@ def execute_carrier_click_sequence(
                 display=str(config.get("display", ":1")),
                 xauthority=config.get("xauthority"),
                 artifact_root=artifact_root,
+                **click_timing,
             )
         )
         if index + 1 < len(profile_paths) and delay:
