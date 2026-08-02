@@ -16,6 +16,11 @@ class WindowsAgentHealthTests(unittest.TestCase):
     def test_source_tree_passes_bundled_import_health_check(self) -> None:
         self.assertEqual(run_health_check(), 0)
 
+    def test_download_link_uses_packaged_host_bridge_name(self) -> None:
+        html = (RUNTIME / "web" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("/downloads/IAGHostBridge-windows-x64.zip", html)
+        self.assertNotIn("hostbridge8", html.casefold())
+
 
 if __name__ == "__main__":
     unittest.main()

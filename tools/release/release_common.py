@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT = ROOT / "public_release"
 MANIFEST_NAME = "RELEASE_MANIFEST.json"
 SUMS_NAME = "SHA256SUMS.txt"
+HOST_BRIDGE_DOWNLOAD_NAME = "IAGHostBridge-windows-x64.zip"
 
 ROOT_FILES = {
     ".gitignore",
@@ -375,6 +376,12 @@ def _third_party_internal(relative: Path, package_kind: str) -> bool:
     return package_kind.startswith("windows-") and relative.parts[:1] == ("_internal",)
 
 
+def _allowed_embedded_host_bridge(relative: Path, package_kind: str) -> bool:
+    return package_kind == "ubuntu-agent" and relative.as_posix() == (
+        f"agent_runtime/web/downloads/{HOST_BRIDGE_DOWNLOAD_NAME}"
+    )
+
+
 def _scan_ipv4(data: bytes, relative: Path, errors: list[str]) -> None:
     for match in IPV4_RE.finditer(data):
         value = match.group().decode("ascii")
@@ -418,7 +425,7 @@ def scan_tree(stage: Path, package_kind: str) -> list[str]:
             ".sys",
             ".whl",
             ".zip",
-        }:
+        } and not _allowed_embedded_host_bridge(relative, package_kind):
             errors.append(f"binary or nested archive in source package: {relative.as_posix()}")
 
         data = path.read_bytes()
@@ -667,6 +674,26 @@ def verify_archive(path: Path, *, expected_root: str, package_kind: str) -> dict
         return verify_stage(root, package_kind)
 
 
+def verify_host_bridge_download(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise ReleaseValidationError(f"Host Bridge archive is missing: {path}")
+    return verify_archive(
+        path,
+        expected_root=f"IAGHostBridge-{release_version()}-windows-x64",
+        package_kind="windows-host",
+    )
+
+
+def copy_host_bridge_download(source: Path, web_root: Path) -> Path:
+    source = source.resolve()
+    verify_host_bridge_download(source)
+    downloads = web_root / "downloads"
+    downloads.mkdir(parents=True, exist_ok=True)
+    target = downloads / HOST_BRIDGE_DOWNLOAD_NAME
+    shutil.copy2(source, target)
+    return target
+
+
 def run_command(
     command: Sequence[str],
     *,
@@ -729,6 +756,9 @@ def run_windows_agent_health(stage: Path) -> None:
     executable = stage / "IAGWindowsAgent.exe"
     if not executable.is_file():
         raise ReleaseValidationError("IAGWindowsAgent.exe is missing.")
+    verify_host_bridge_download(
+        stage / "_internal" / "web" / "downloads" / HOST_BRIDGE_DOWNLOAD_NAME
+    )
     run_command([str(executable), "--health-check"], cwd=stage, timeout=90)
 
 

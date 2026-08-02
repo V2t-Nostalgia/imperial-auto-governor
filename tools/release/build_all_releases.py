@@ -105,25 +105,26 @@ def build_all(output_root: Path, source_commit: str | None) -> list[Path]:
         stages.append(source_stage)
         archives.append(source_archive)
 
-        ubuntu_stage, ubuntu_archive, _ = package_ubuntu_agent.build(
-            output_root,
-            explicit_commit=source_commit,
-        )
-        stages.append(ubuntu_stage)
-
         build_windows_binaries()
-        windows_stage, windows_archive, _ = package_windows_agent.build(
-            package_windows_agent.DEFAULT_DIST,
-            output_root,
-            explicit_commit=source_commit,
-        )
-        stages.append(windows_stage)
         host_stage, host_archive, _ = package_windows_host_bridge.build(
             package_windows_host_bridge.DEFAULT_DIST,
             output_root,
             explicit_commit=source_commit,
         )
         stages.append(host_stage)
+        windows_stage, windows_archive, _ = package_windows_agent.build(
+            package_windows_agent.DEFAULT_DIST,
+            output_root,
+            host_bridge_archive=host_archive,
+            explicit_commit=source_commit,
+        )
+        stages.append(windows_stage)
+        ubuntu_stage, ubuntu_archive, _ = package_ubuntu_agent.build(
+            output_root,
+            host_bridge_archive=host_archive,
+            explicit_commit=source_commit,
+        )
+        stages.append(ubuntu_stage)
 
         archives.extend([windows_archive, host_archive, ubuntu_archive])
         write_top_level_sums(output_root, archives)

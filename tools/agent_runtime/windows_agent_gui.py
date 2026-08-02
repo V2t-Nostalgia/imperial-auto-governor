@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 import webbrowser
+import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -220,6 +221,15 @@ def run_health_check() -> int:
     ):
         if not resource_path(name).is_file():
             raise RuntimeError(f"Missing bundled resource: {name}")
+
+    if getattr(sys, "frozen", False):
+        bridge = resource_path("web/downloads/IAGHostBridge-windows-x64.zip")
+        if not bridge.is_file():
+            raise RuntimeError(f"Missing bundled Host Bridge download: {bridge}")
+        with zipfile.ZipFile(bridge) as archive:
+            damaged = archive.testzip()
+            if damaged:
+                raise RuntimeError(f"Damaged bundled Host Bridge member: {damaged}")
 
     import extract_game_state  # noqa: F401
     import extract_planet_profiles  # noqa: F401

@@ -16,8 +16,10 @@ from pathlib import Path
 from build_public_release import copy_with_release_header
 from release_common import (
     DEFAULT_OUTPUT,
+    HOST_BRIDGE_DOWNLOAD_NAME,
     ROOT,
     ReleaseValidationError,
+    copy_host_bridge_download,
     copy_governance,
     create_tar_gz,
     extract_verified_archive,
@@ -32,11 +34,17 @@ from release_common import (
     sha256_file,
     source_identity,
     verify_archive,
+    verify_host_bridge_download,
     verify_stage,
 )
 
 
-def copy_payload(stage: Path) -> None:
+DEFAULT_HOST_BRIDGE = (
+    DEFAULT_OUTPUT / f"IAGHostBridge-{release_version()}-windows-x64.zip"
+)
+
+
+def copy_payload(stage: Path, host_bridge_archive: Path) -> None:
     for source in iter_public_source_files():
         relative = source.relative_to(ROOT)
         if relative.parts[:2] == ("tools", "agent_runtime"):
@@ -65,6 +73,7 @@ def copy_payload(stage: Path) -> None:
     docs.mkdir(parents=True, exist_ok=True)
     for name in ("UBUNTU_AGENT_README.md", "RESEARCH_SERVICES.md"):
         shutil.copy2(ROOT / "docs" / name, docs / name)
+    copy_host_bridge_download(host_bridge_archive, stage / "agent_runtime" / "web")
     copy_governance(stage)
 
 
@@ -101,6 +110,7 @@ def run_ubuntu_health(stage: Path) -> list[str]:
         "agent_runtime/install_ubuntu.sh",
         "agent_runtime/install_systemd_service.sh",
         "agent_runtime/extract_game_state.py",
+        f"agent_runtime/web/downloads/{HOST_BRIDGE_DOWNLOAD_NAME}",
         "packet_interceptor/iag_building_to_zone_replacer.py",
         "save_state/extract_planet_profiles.py",
         "docs/UBUNTU_AGENT_README.md",
@@ -108,6 +118,9 @@ def run_ubuntu_health(stage: Path) -> list[str]:
     missing = [name for name in required if not (stage / name).is_file()]
     if missing:
         raise ReleaseValidationError(f"Ubuntu package is incomplete: {missing}")
+    verify_host_bridge_download(
+        stage / "agent_runtime" / "web" / "downloads" / HOST_BRIDGE_DOWNLOAD_NAME
+    )
     run_python_compile(stage)
     environment = os.environ.copy()
     environment["PYTHONPATH"] = os.pathsep.join(
@@ -147,6 +160,7 @@ def run_ubuntu_health(stage: Path) -> list[str]:
         "save parser import: passed",
         f"agent_runtime: passed ({agent_count} tests)",
         f"save_state: passed ({save_count} tests)",
+        "embedded host bridge download: passed",
         "bash syntax: passed",
     ]
 
@@ -154,6 +168,7 @@ def run_ubuntu_health(stage: Path) -> list[str]:
 def build(
     output_root: Path,
     *,
+    host_bridge_archive: Path,
     explicit_commit: str | None = None,
 ) -> tuple[Path, Path, dict]:
     version = release_version()
@@ -166,7 +181,7 @@ def build(
     destination.unlink(missing_ok=True)
     identity = source_identity(explicit_commit)
     try:
-        copy_payload(stage)
+        copy_payload(stage, host_bridge_archive)
         checks = run_ubuntu_health(stage)
         manifest = finalize_stage(
             stage,
@@ -201,11 +216,13 @@ def build(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--host-bridge", type=Path, default=DEFAULT_HOST_BRIDGE)
     parser.add_argument("--source-commit")
     args = parser.parse_args()
     try:
         stage, destination, _manifest = build(
             args.output,
+            host_bridge_archive=args.host_bridge,
             explicit_commit=args.source_commit,
         )
     except Exception as error:
