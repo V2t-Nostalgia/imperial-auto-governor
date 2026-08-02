@@ -40,6 +40,13 @@ from host_executor_protocol import (
     record_host_result,
     request_for_host_client,
 )
+from host_bridge_pairing import (
+    PAIRED_HOST_BRIDGE_ARCHIVE,
+    PUBLIC_HOST_BRIDGE_ARCHIVE,
+    build_paired_host_bridge_archive,
+    certificate_sha256,
+    pairing_server_url,
+)
 from iag_agent import run_cycle
 from iag_supervisor import (
     carrier_click_profile_path,
@@ -399,13 +406,24 @@ def build_save_client_record(
 
 
 class ConsoleService:
-    def __init__(self, config_path: Path):
+    def __init__(
+        self,
+        config_path: Path,
+        *,
+        tls_certificate_path: Path | None = None,
+    ):
         self.config_path = config_path.resolve()
         self._config_lock = threading.RLock()
         self.config = read_json(self.config_path)
         self.runtime_root = Path(self.config["runtime_root"]).expanduser()
         self.operator_root = self.runtime_root / "operator"
         self.state_root = self.runtime_root / "state"
+        self.tls_certificate_path = (
+            tls_certificate_path.resolve()
+            if tls_certificate_path is not None
+            else None
+        )
+        self._host_bridge_pairing_lock = threading.Lock()
         self.capture_root = self.runtime_root / "calibration" / "captures"
         self.history_root = self.operator_root / "prompt_history"
         self.runs_root = runtime_path(
@@ -1539,6 +1557,45 @@ class ConsoleService:
         token = optional_text(self.save_upload_token_path).strip()
         return upload_bearer_token_matches(authorization, token)
 
+    def paired_host_bridge_archive(self, server_url: str) -> Path:
+        """Build an authenticated runtime download paired to this Agent."""
+        if self.tls_certificate_path is None:
+            raise ConsoleError("Agent 未启用 TLS，不能生成房主执行桥配对包。")
+        source = STATIC_ROOT / "downloads" / PUBLIC_HOST_BRIDGE_ARCHIVE
+        token = optional_text(self.save_upload_token_path).strip()
+        fingerprint = certificate_sha256(self.tls_certificate_path)
+        cache_root = self.state_root / "paired_downloads"
+        destination = cache_root / PAIRED_HOST_BRIDGE_ARCHIVE
+        signature_path = cache_root / "host_bridge_pairing.sha256"
+        source_stat = source.stat()
+        signature = hashlib.sha256(
+            "\0".join(
+                (
+                    str(source.resolve()),
+                    str(source_stat.st_size),
+                    str(source_stat.st_mtime_ns),
+                    server_url,
+                    fingerprint,
+                    token,
+                )
+            ).encode("utf-8")
+        ).hexdigest()
+        with self._host_bridge_pairing_lock:
+            if (
+                destination.is_file()
+                and optional_text(signature_path).strip() == signature
+            ):
+                return destination
+            build_paired_host_bridge_archive(
+                source,
+                destination,
+                server_url=server_url,
+                certificate_fingerprint=fingerprint,
+                upload_token=token,
+            )
+            atomic_write_text(signature_path, signature + "\n", mode=0o600)
+        return destination
+
     def calibration_steps_payload(self) -> dict[str, Any]:
         navigation_enabled = bool(
             self.config.get("carrier_navigation_enabled", False)
@@ -2125,6 +2182,14 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return
         try:
             path = unquote(urlparse(self.path).path)
+            if path == f"/downloads/{PAIRED_HOST_BRIDGE_ARCHIVE}":
+                self.send_file(
+                    self.service.paired_host_bridge_archive(
+                        pairing_server_url(self.headers.get("Host", ""))
+                    ),
+                    head_only=True,
+                )
+                return
             if path.startswith("/api/calibration/image/"):
                 capture_id = path.rsplit("/", 1)[-1]
                 self.send_file(
@@ -2155,6 +2220,13 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
             query = parse_qs(parsed.query)
+            if path == f"/downloads/{PAIRED_HOST_BRIDGE_ARCHIVE}":
+                self.send_file(
+                    self.service.paired_host_bridge_archive(
+                        pairing_server_url(self.headers.get("Host", ""))
+                    )
+                )
+                return
             if path == "/api/status":
                 self.send_json(self.service.status())
                 return
@@ -2406,7 +2478,10 @@ def main() -> int:
     args = parse_args()
     if bool(args.tls_cert) != bool(args.tls_key):
         raise ConsoleError("--tls-cert and --tls-key must be supplied together.")
-    service = ConsoleService(args.config)
+    service = ConsoleService(
+        args.config,
+        tls_certificate_path=args.tls_cert,
+    )
     validate_bind_security(
         args.host,
         allow_lan=args.allow_lan,

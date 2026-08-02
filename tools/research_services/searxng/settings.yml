@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2026 Nostalgia and Imperial Auto Governor contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "IAG Local SearXNG"
+
+search:
+  safe_search: 1
+  autocomplete: ""
+  formats:
+    - html
+    - json
+
+server:
+  limiter: false
+  image_proxy: false

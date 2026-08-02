@@ -9,6 +9,7 @@ tools/agent_runtime/operator/
 tools/agent_runtime/runs/
 tools/agent_runtime/secrets/
 tools/agent_runtime/state/
+tools/research_services/compose.env
 tools/windows_save_uploader/iag_save_uploader.json
 tools/windows_save_uploader/logs/
 tools/windows_save_uploader/secrets/

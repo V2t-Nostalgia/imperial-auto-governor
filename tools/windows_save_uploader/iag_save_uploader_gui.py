@@ -309,7 +309,11 @@ class UploaderGUI:
                 raise UploaderError(f"Stellaris 存档目录不存在：{save_root}")
             fingerprint = self.fingerprint_var.get().replace(":", "").strip().lower()
             if len(fingerprint) != 64 or any(char not in "0123456789abcdef" for char in fingerprint):
-                raise UploaderError("TLS 证书 SHA-256 指纹必须是 64 位十六进制。")
+                raise UploaderError(
+                    "当前房主执行桥尚未与 Agent 配对。请从 Agent 控制台下载"
+                    "“已配对 Windows 房主执行桥”；手动配置时，须在高级设置"
+                    "粘贴 Agent 显示的 64 位 TLS 证书 SHA-256 指纹。"
+                )
             self.config["server_url"] = server_url
             self.config["save_root"] = str(save_root.resolve())
             self.config["server_certificate_sha256"] = fingerprint

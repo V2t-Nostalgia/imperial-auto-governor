@@ -19,7 +19,7 @@
 
 1. 解压完整目录，不要只单独复制 EXE。`iag_save_uploader.json`、`secrets`、`logs` 和 `state` 会在首次保存设置后写入用户选择的运行目录，不会随公开包分发。
 2. 双击 `IAGHostBridgeGUI.exe`，接受一次 Windows 管理员权限提示。
-3. 在“LLM 端地址”填写 IP、主机名或完整 HTTPS URL。
+3. 推荐从正在运行的 Agent 控制台下载“已配对 Windows 房主执行桥”；该临时下载包已写入当前 Agent 地址、TLS 指纹和桥接令牌。直接使用 GitHub Release 的通用包时，才需要手工填写这些信息。
 4. 确认 Stellaris 存档目录；默认会定位当前 Windows 用户的 `Documents\Paradox Interactive\Stellaris\save games`。
 5. 点击“保存设置”。
 6. 点击“开始上传”。
@@ -65,7 +65,7 @@ secrets/save_upload_token
 
 “重新选择战役”只清除本地战役锁定，不删除游戏存档，也不修改 Ubuntu 已接收的历史文件。
 
-若配置文件被误删，GUI 会在首次启动时自动生成一份空白基础配置并正常打开；服务器地址和 TLS 指纹仍需在界面中填写。正式发布包会附带当前服务器的预置配置与局域网上传令牌。
+若配置文件被误删，GUI 会在首次启动时自动生成一份空白基础配置并正常打开；服务器地址和 TLS 指纹仍需在界面中填写。GitHub Release 的公开包永远不携带服务器地址、证书指纹或桥接令牌；只有通过已登录的 Agent 控制台生成的“已配对”临时下载包会包含当前 Agent 的配对数据。
 
 ## 源码运行
 

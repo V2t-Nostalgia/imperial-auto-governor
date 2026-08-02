@@ -35,7 +35,11 @@ flowchart LR
 
 ## 网页检索
 
-`search_web` 通过 SearXNG 获取结果，`fetch_page` 通过 Crawl4AI 提取正文，`search_stellaris_wiki` 通过 MediaWiki API 查询 Wiki。返回内容含标题、URL、来源类型和限长正文；URL 必须来自本轮搜索或 Wiki 结果，目标域名受白名单限制，私网和回环抓取被拒绝。网页只能影响分析，不能越过合法候选与确认层。
+`search_web` 通过 SearXNG 获取结果，`fetch_page` 通过 Crawl4AI 提取正文，`search_stellaris_wiki`
+优先通过 MediaWiki API 查询 Wiki，并在 API 被客户端挑战或返回非 JSON 时退回受白名单约束的
+SearXNG 站内检索。返回内容含标题、URL、来源类型和限长正文；URL 必须来自本轮搜索或 Wiki 结果，
+目标域名受白名单限制，私网和回环抓取被拒绝。网页总开关关闭时，工具定义不会发给模型，直接调用
+也会被本地拒绝。网页只能影响分析，不能越过合法候选与确认层。
 
 ## 发布边界
 

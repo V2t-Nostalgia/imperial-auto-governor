@@ -1,0 +1,64 @@
+# SPDX-FileCopyrightText: 2026 Nostalgia and Imperial Auto Governor contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
+name: iag-research
+
+services:
+  searxng:
+    image: searxng/searxng:2026.7.26-b060c780d@sha256:d0aaeb14880e6e92bde1518fcc7261e995783367d63d95203383607bef9c6516
+    container_name: iag-searxng
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      SEARXNG_BASE_URL: "http://127.0.0.1:8080/"
+      SEARXNG_SECRET: "${SEARXNG_SECRET:?SEARXNG_SECRET is required}"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - searxng-cache:/var/cache/searxng
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  crawl4ai:
+    image: unclecode/crawl4ai:0.9.0@sha256:385042cba2a216c257ccb77b0135dec5228ee25bf675edbc7487eb155bd5e644
+    container_name: iag-crawl4ai
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:11235:11235"
+    environment:
+      CRAWL4AI_API_TOKEN: "${CRAWL4AI_API_TOKEN:?CRAWL4AI_API_TOKEN is required}"
+      SECRET_KEY: "${CRAWL4AI_SECRET_KEY:?CRAWL4AI_SECRET_KEY is required}"
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?REDIS_PASSWORD is required}"
+      CRAWL4AI_HOOKS_ENABLED: "false"
+      CRAWL4AI_ALLOW_INTERNAL_URLS: "false"
+      CRAWL4AI_ALLOW_INSECURE_TLS: "false"
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+      - /home/appuser/.crawl4ai:size=128m,uid=999,gid=999,mode=0700
+      - /home/appuser/.config:size=64m,uid=999,gid=999,mode=0700
+      - /home/appuser/.gunicorn:size=16m,uid=999,gid=999,mode=0700
+      - /var/lib/crawl4ai/outputs:size=128m,uid=999,gid=999,mode=0700
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    shm_size: 1gb
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:11235/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 45s
+
+volumes:
+  searxng-cache:

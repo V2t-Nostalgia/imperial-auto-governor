@@ -74,7 +74,7 @@
           <div><dt>当前任务</dt><dd id="job-state">空闲</dd></div>
         </dl>
         <div class="button-row">
-          <a class="button-link" href="/downloads/IAGHostBridge-windows-x64.zip" download>下载 Windows 房主执行桥</a>
+          <a class="button-link" href="/downloads/IAGHostBridge-paired-windows-x64.zip" download>下载已配对 Windows 房主执行桥</a>
         </div>
         <p class="hint">新版需要接受一次管理员权限提示，以便在房主机打开 WinDivert；窗口关闭即停止，不会开机自启。</p>
       </article>
@@ -293,16 +293,17 @@
         </div>
         <label>附加请求参数（Raw JSON）<textarea id="request-body-overrides" rows="7" spellcheck="false" placeholder='{"top_p":0.9,"max_tokens":8192}'></textarea></label>
         <p class="hint">Raw JSON 会合并到请求 payload；不能覆盖 model、messages、tools 等协议字段。完整会话始终保留在本地，压缩只影响发给模型的上文。</p>
+        <label class="check-row"><input id="web-research-enabled" type="checkbox">允许灰风联网检索</label>
+        <p class="hint">关闭后，下一轮对话和自主巡检都不会向模型提供网页搜索、正文抓取或 Stellaris Wiki 工具；本地研究服务不会因此自动停止。</p>
         <details class="research-settings">
-          <summary>联网研究工具</summary>
-          <label class="check-row"><input id="web-research-enabled" type="checkbox">向模型开放只读联网检索</label>
+          <summary>联网研究服务设置</summary>
           <label>SearXNG URL<input id="searxng-url" type="url" placeholder="http://127.0.0.1:8080"></label>
           <label>Crawl4AI URL<input id="crawl4ai-url" type="url" placeholder="http://127.0.0.1:11235"></label>
           <label>Crawl4AI Token<input id="crawl4ai-token" type="password" placeholder="留空则保留现有 Token" autocomplete="new-password"></label>
           <label>Stellaris Wiki API<input id="stellaris-wiki-api-url" type="url"></label>
           <label>来源域名白名单<textarea id="web-allowed-domains" rows="5" spellcheck="false" placeholder="stellaris.paradoxwikis.com&#10;forum.paradoxplaza.com"></textarea></label>
           <label class="check-row"><input id="web-direct-fallback-enabled" type="checkbox">Crawl4AI 不可用时允许直接提取静态 HTML</label>
-          <p class="hint">SearXNG 必须启用 JSON 输出。网页内容只作不可信参考，不能直接控制建设。</p>
+          <p class="hint">SearXNG 必须启用 JSON 输出。网页内容只作不可信参考，不能创建合法候选或直接控制建设。</p>
         </details>
         <div class="model-feature-row"><span id="thinking-state" class="status-tag">标准模式</span><span id="tool-state" class="status-tag">工具待配置</span><span id="research-tool-state" class="status-tag">联网研究已关闭</span></div>
         <label>API Key<input id="api-key" type="password" placeholder="留空则保留现有密钥" autocomplete="new-password"></label>

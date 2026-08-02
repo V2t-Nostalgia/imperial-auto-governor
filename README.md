@@ -149,7 +149,8 @@ Stellaris 的游戏脚本不能读取任意本地文件、调用外部模型 API
 合作端电脑: Stellaris + IAGWindowsAgent + LLM 配置
 ```
 
-Windows Agent 快速开始见 [docs/WINDOWS_AGENT_README.md](docs/WINDOWS_AGENT_README.md)。
+Windows Agent 快速开始见 [docs/WINDOWS_AGENT_README.md](docs/WINDOWS_AGENT_README.md)，两台 Windows
+从零部署和首次实局验收见 [docs/WINDOWS_FULL_DEPLOYMENT.md](docs/WINDOWS_FULL_DEPLOYMENT.md)。
 
 ### Windows 房主和 Ubuntu 合作端
 
@@ -179,7 +180,10 @@ Agent 支持 OpenAI Responses 兼容接口和 Chat Completions 兼容接口，�
 
 每局游戏拥有独立的持久会话、玩家消息、灰风回复、工具审计、十年计划、紧急状态和建设事实账本。上下文达到设定比例后会生成滚动概况，但 SQLite 中的完整原始历史不会被删除。
 
-可选联网工具包括 SearXNG、Crawl4AI 和 MediaWiki API。网页内容始终作为不可信参考，只能影响 LLM 分析，不能创建本地不存在的候选或绕过执行器校验。部署说明见 [docs/RESEARCH_SERVICES.md](docs/RESEARCH_SERVICES.md)。
+可选联网工具包括 SearXNG、Crawl4AI 和 MediaWiki API；Wiki API 不可用时会退回受白名单约束的
+SearXNG 站内检索。网页内容始终作为不可信参考，只能影响 LLM 分析，不能创建本地不存在的候选或
+绕过执行器校验。玩家可在网页关闭联网总开关，关闭后下一轮不会向模型提供任何联网工具。部署说明见
+[docs/RESEARCH_SERVICES.md](docs/RESEARCH_SERVICES.md)。
 
 ## 安全确认状态
 

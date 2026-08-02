@@ -43,10 +43,31 @@ def copy_payload(stage: Path, dist: Path, host_bridge_archive: Path) -> None:
     shutil.copytree(dist, stage, dirs_exist_ok=True)
     for metadata in stage.rglob("DELVEWHEEL"):
         metadata.unlink()
-    shutil.copy2(ROOT / "docs" / "WINDOWS_AGENT_README.md", stage / "README.md")
+    windows_readme = (ROOT / "docs" / "WINDOWS_AGENT_README.md").read_text(
+        encoding="utf-8"
+    )
+    windows_readme = windows_readme.replace(
+        "](WINDOWS_FULL_DEPLOYMENT.md)",
+        "](docs/WINDOWS_FULL_DEPLOYMENT.md)",
+    )
+    (stage / "README.md").write_text(windows_readme, encoding="utf-8")
     docs = stage / "docs"
     docs.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / "docs" / "RESEARCH_SERVICES.md", docs / "RESEARCH_SERVICES.md")
+    shutil.copy2(
+        ROOT / "docs" / "WINDOWS_FULL_DEPLOYMENT.md",
+        docs / "WINDOWS_FULL_DEPLOYMENT.md",
+    )
+    shutil.copytree(
+        ROOT / "tools" / "research_services",
+        stage / "research_services",
+        ignore=shutil.ignore_patterns(
+            "compose.env",
+            "*.env",
+            "__pycache__",
+            "*.pyc",
+        ),
+    )
     copy_host_bridge_download(host_bridge_archive, stage / "_internal" / "web")
     copy_governance(stage)
 
@@ -78,7 +99,10 @@ def build(
             package_name="IAG Windows Agent",
             platform="windows-x64",
             identity=identity,
-            health_checks=["bundled resource and import health check: passed"],
+            health_checks=[
+                "bundled resource and import health check: passed",
+                "bundled research service payload and PowerShell syntax: passed",
+            ],
         )
         create_zip(stage, destination)
         verify_archive(

@@ -99,6 +99,42 @@ class ConversationAgentTests(unittest.TestCase):
                 self.database_path.name + suffix
             ).unlink(missing_ok=True)
 
+    def test_web_research_switch_controls_exposed_tool_schemas(self) -> None:
+        config = json.loads(self.config_path.read_text(encoding="utf-8"))
+        config["web_research_enabled"] = False
+        self.config_path.write_text(json.dumps(config), encoding="utf-8")
+        disabled = AgentToolbox(
+            self.config_path,
+            self.store,
+            allow_execute=False,
+            trigger="chat",
+        )
+        disabled_names = {
+            item["function"]["name"] for item in disabled.schemas()
+        }
+        self.assertTrue(
+            {"search_web", "fetch_page", "search_stellaris_wiki"}.isdisjoint(
+                disabled_names
+            )
+        )
+
+        config["web_research_enabled"] = True
+        self.config_path.write_text(json.dumps(config), encoding="utf-8")
+        enabled = AgentToolbox(
+            self.config_path,
+            self.store,
+            allow_execute=False,
+            trigger="chat",
+        )
+        enabled_names = {
+            item["function"]["name"] for item in enabled.schemas()
+        }
+        self.assertTrue(
+            {"search_web", "fetch_page", "search_stellaris_wiki"}.issubset(
+                enabled_names
+            )
+        )
+
     def test_persists_deepseek_tool_reasoning_and_final_reply(self) -> None:
         replies = iter(
             [

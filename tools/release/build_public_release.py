@@ -145,6 +145,7 @@ def run_source_health(stage: Path) -> list[str]:
             stage, "tools/windows_save_uploader/tests", "test_*.py"
         ),
         "save_state": run_unittest(stage, "tools/save_state", "test_*.py"),
+        "release": run_unittest(stage, "tools/release", "test_*.py"),
     }
     return [
         "python_compile: passed",

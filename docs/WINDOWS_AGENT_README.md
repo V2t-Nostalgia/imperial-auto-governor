@@ -13,7 +13,7 @@
 4. 点击“保存设置”。程序会在运行数据目录生成自签名 HTTPS 证书、前端密码、存档上传令牌和房主桥令牌。
 5. 把 GUI 显示的房主桥令牌与证书 SHA-256 指纹填入房主电脑的 `IAGHostBridgeGUI`，再启动房主桥。
 
-代理控制台中的“下载 Windows 房主执行桥”会提供当前 Agent 包内已经过发布校验的 Host Bridge ZIP；无需另外寻找旧的 `hostbridge7/8` 临时包。
+代理控制台中的“下载已配对 Windows 房主执行桥”会以 Agent 包内经过发布校验的公开 Host Bridge ZIP 为基础，在通过前端登录认证后生成仅供当前 Agent 使用的临时配对包。该包包含当前访问地址、TLS 指纹和桥接令牌；无需另外寻找旧的 `hostbridge7/8` 临时包，也不要把配对包作为公开附件再次分发。
 6. 点击“启动控制台”，然后点击“打开控制台”。首次访问自签名 HTTPS 页面时，浏览器会显示证书警告；应先核对 GUI 中的证书指纹。
 
 ## 首次配置
@@ -23,6 +23,12 @@
 每局游戏新建一条战役会话，并由玩家明确把当前上传存档绑定到该会话。填写本期十年计划后，选择读取周期和运行策略。紧急事件需由玩家在前端激活和结束；激活期间十年计划会暂停。
 
 联网检索为可选功能。SearXNG、Crawl4AI 与 MediaWiki 返回的内容一律是不可信参考，不能创建本地不存在的建设候选，也不能绕过执行器校验。
+
+正式包内的 `research_services/` 提供 Windows 一键部署脚本。在该目录运行
+`Manage-IAGResearchServices.ps1 -Action Install` 后，可在模型设置区使用“允许灰风联网检索”开关；
+关闭开关会从下一轮模型请求中移除全部联网工具，但不会停止 Docker 容器。完整的两机部署、房主桥
+配对、模组准备和首次实局验收见 [WINDOWS_FULL_DEPLOYMENT.md](WINDOWS_FULL_DEPLOYMENT.md)；在发布包中
+该文件位于 `docs/WINDOWS_FULL_DEPLOYMENT.md`。
 
 ## 停止与数据
 

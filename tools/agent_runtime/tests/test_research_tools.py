@@ -90,6 +90,45 @@ class ResearchToolTests(unittest.TestCase):
             "community_reference_wiki",
         )
 
+    @patch("research_tools.socket.getaddrinfo")
+    @patch("research_tools._json_request")
+    def test_wiki_search_falls_back_to_bounded_searxng_site_search(
+        self,
+        request_json,
+        getaddrinfo,
+    ) -> None:
+        getaddrinfo.return_value = [
+            (2, 1, 6, "", ("93.184.216.34", 443))
+        ]
+        request_json.side_effect = [
+            ResearchToolError("远端没有返回有效 UTF-8 JSON。"),
+            {
+                "results": [
+                    {
+                        "title": "Economy",
+                        "url": "https://stellaris.paradoxwikis.com/Economy",
+                        "content": "Community-maintained reference text.",
+                    }
+                ]
+            },
+        ]
+        client = ResearchClient(self.config())
+        result = client.search_stellaris_wiki({"query": "economy"})
+        self.assertEqual(result["source"], "searxng_site_fallback")
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(
+            result["results"][0]["source_type"],
+            "community_reference_wiki",
+        )
+        self.assertIn(result["results"][0]["url"], client.discovered_urls)
+
+    def test_disabled_client_rejects_research_without_network_access(self) -> None:
+        config = self.config()
+        config["web_research_enabled"] = False
+        client = ResearchClient(config)
+        with self.assertRaisesRegex(ResearchToolError, "玩家已关闭联网检索"):
+            client.search_web({"query": "Stellaris economy"})
+
 
 if __name__ == "__main__":
     unittest.main()

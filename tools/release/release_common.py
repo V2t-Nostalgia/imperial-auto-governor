@@ -55,6 +55,7 @@ PUBLIC_DOCS = {
     "TECHNICAL_OVERVIEW.md",
     "UBUNTU_AGENT_README.md",
     "WINDOWS_AGENT_README.md",
+    "WINDOWS_FULL_DEPLOYMENT.md",
 }
 HOST_SOURCE_FILES = {
     "Build-IAGHostBridge.ps1",
@@ -102,6 +103,7 @@ SOURCE_EXCLUDED_PARTS = {
 }
 SOURCE_EXCLUDED_PREFIXES = ("build_", "dist_", "release_", "hostbridge7", "hostbridge8")
 SOURCE_EXCLUDED_SUFFIXES = {
+    ".env",
     ".7z",
     ".dll",
     ".etl",
@@ -142,6 +144,7 @@ FORBIDDEN_RUNTIME_DIRECTORIES = {
     "venv",
 }
 FORBIDDEN_RUNTIME_SUFFIXES = {
+    ".env",
     ".7z",
     ".db",
     ".etl",
@@ -185,6 +188,26 @@ WINDOWS_USER_PATH_RE = re.compile(
 )
 LINUX_USER_PATH_RE = re.compile(rb"/home/(?P<user>[A-Za-z0-9._-]+)(?:/|\b)")
 THIRD_PARTY_CI_USERS = {b"runneradmin"}
+CONTAINER_COMPOSE_PATHS = {
+    "research_services/compose.yaml",
+    "tools/research_services/compose.yaml",
+}
+CRAWL4AI_CONTAINER_HOME_PREFIXES = (
+    b"/home/" + b"appuser/.crawl4ai",
+    b"/home/" + b"appuser/.config",
+    b"/home/" + b"appuser/.gunicorn",
+)
+CONTAINER_PATH_BOUNDARIES = (
+    b"",
+    b"/",
+    b":",
+    b" ",
+    b"\t",
+    b"\r",
+    b"\n",
+    b'"',
+    b"'",
+)
 TOKEN_PATTERNS = {
     "OpenAI-style token": re.compile(rb"\bsk-[A-Za-z0-9_-]{20,}\b"),
     "GitHub token": re.compile(
@@ -286,6 +309,13 @@ def iter_public_source_files() -> Iterable[Path]:
     packet = ROOT / "tools" / "packet_interceptor"
     for path in sorted(packet.iterdir() if packet.is_dir() else ()):
         if path.is_file() and path.suffix.casefold() in PACKET_SOURCE_SUFFIXES:
+            yield from emit(path)
+
+    research_services = ROOT / "tools" / "research_services"
+    for path in sorted(
+        research_services.rglob("*") if research_services.is_dir() else ()
+    ):
+        if path.is_file() and not source_excluded(path.relative_to(ROOT)):
             yield from emit(path)
 
     release_tools = ROOT / "tools" / "release"
@@ -445,6 +475,21 @@ def scan_tree(stage: Path, package_kind: str) -> list[str]:
             for match in pattern.finditer(data):
                 user = match.group("user").lower()
                 if _third_party_internal(relative, package_kind) and user in THIRD_PARTY_CI_USERS:
+                    continue
+                if (
+                    label == "personal Linux path"
+                    and relative.as_posix() in CONTAINER_COMPOSE_PATHS
+                    and user == b"appuser"
+                    and any(
+                        data[match.start() :].startswith(prefix)
+                        and data[
+                            match.start() + len(prefix) :
+                            match.start() + len(prefix) + 1
+                        ]
+                        in CONTAINER_PATH_BOUNDARIES
+                        for prefix in CRAWL4AI_CONTAINER_HOME_PREFIXES
+                    )
+                ):
                     continue
                 errors.append(f"{label}: {relative.as_posix()}")
         _scan_ipv4(data, relative, errors)
@@ -756,6 +801,40 @@ def run_windows_agent_health(stage: Path) -> None:
     executable = stage / "IAGWindowsAgent.exe"
     if not executable.is_file():
         raise ReleaseValidationError("IAGWindowsAgent.exe is missing.")
+    research_root = stage / "research_services"
+    required_research_files = (
+        research_root / "compose.yaml",
+        research_root / "Manage-IAGResearchServices.ps1",
+        research_root / "searxng" / "settings.yml",
+    )
+    missing_research = [
+        str(path.relative_to(stage))
+        for path in required_research_files
+        if not path.is_file()
+    ]
+    if missing_research:
+        raise ReleaseValidationError(
+            "Windows Agent research service payload is incomplete: "
+            + ", ".join(missing_research)
+        )
+    powershell = shutil.which("powershell")
+    if not powershell:
+        raise ReleaseValidationError(
+            "Windows PowerShell is required for the Windows Agent health check."
+        )
+    manager = required_research_files[1]
+    quoted_manager = str(manager).replace("'", "''")
+    parser_check = (
+        "$errors=$null;"
+        "[System.Management.Automation.Language.Parser]::ParseFile("
+        f"'{quoted_manager}',[ref]$null,[ref]$errors)|Out-Null;"
+        "if($errors.Count){$errors|ForEach-Object{Write-Error $_};exit 1}"
+    )
+    run_command(
+        [powershell, "-NoProfile", "-NonInteractive", "-Command", parser_check],
+        cwd=stage,
+        timeout=30,
+    )
     verify_host_bridge_download(
         stage / "_internal" / "web" / "downloads" / HOST_BRIDGE_DOWNLOAD_NAME
     )

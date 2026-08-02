@@ -213,12 +213,17 @@ class ResearchClient:
     def enabled(self) -> bool:
         return bool(self.config.get("web_research_enabled", False))
 
+    def _require_enabled(self) -> None:
+        if not self.enabled:
+            raise ResearchToolError("玩家已关闭联网检索。")
+
     def _remember(self, url: str) -> str:
         normalized, _fragment = urldefrag(url)
         self.discovered_urls.add(normalized)
         return normalized
 
     def search_web(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        self._require_enabled()
         query = _bounded_query(arguments.get("query"))
         maximum = _bounded_int(
             arguments.get("max_results", 5),
@@ -282,6 +287,7 @@ class ResearchClient:
         }
 
     def search_stellaris_wiki(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        self._require_enabled()
         query = _bounded_query(arguments.get("query"))
         maximum = _bounded_int(
             arguments.get("max_results", 5),
@@ -313,7 +319,41 @@ class ResearchClient:
                 "origin": "*",
             }
         )
-        value = _json_request(url, timeout=self.timeout)
+        try:
+            value = _json_request(url, timeout=self.timeout)
+        except ResearchToolError as api_error:
+            wiki_host = str(urlparse(endpoint).hostname or "")
+            prefix = f"site:{wiki_host} "
+            fallback = self.search_web(
+                {
+                    "query": prefix + query[: max(2, 500 - len(prefix))],
+                    "max_results": maximum,
+                    "language": "all",
+                }
+            )
+            results = []
+            for item in fallback.get("results", []):
+                if str(item.get("domain") or "").lower() != wiki_host.lower():
+                    continue
+                results.append(
+                    {
+                        **item,
+                        "source_type": "community_reference_wiki",
+                    }
+                )
+            return {
+                "schema": "iag.research.wiki_search.v1",
+                "success": True,
+                "source": "searxng_site_fallback",
+                "mediawiki_api_status": "unavailable",
+                "mediawiki_api_error": str(api_error)[:300],
+                "query": query,
+                "retrieved_at": now_iso(),
+                "untrusted_reference": True,
+                "trust_notice": UNTRUSTED_NOTICE,
+                "count": len(results),
+                "results": results,
+            }
         pages = value.get("query", {}).get("pages", [])
         if isinstance(pages, dict):
             pages = list(pages.values())
@@ -362,6 +402,7 @@ class ResearchClient:
         return {"Authorization": f"Bearer {token}"} if token else {}
 
     def fetch_page(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        self._require_enabled()
         requested, _fragment = urldefrag(str(arguments.get("url") or "").strip())
         if requested not in self.discovered_urls:
             raise ResearchToolError(

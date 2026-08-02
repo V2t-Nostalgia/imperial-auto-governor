@@ -56,7 +56,7 @@ bash agent_runtime/install_ubuntu.sh
 
 API Key、上传令牌、证书、日志、数据库和存档只会生成在运行目录中，不属于发行包。
 
-控制台中的“下载 Windows 房主执行桥”直接提供 Agent 包内经过发布校验的 Host Bridge ZIP，不依赖服务器上遗留的临时下载文件。
+控制台中的“下载已配对 Windows 房主执行桥”以 Agent 包内经过发布校验的公开 Host Bridge ZIP 为基础，在通过前端登录认证后生成仅供当前 Agent 使用的临时配对包。该包包含当前访问地址、TLS 指纹和桥接令牌，不依赖服务器上遗留的临时下载文件，也不应作为公开附件再次分发。
 
 ## 前台启动
 
