@@ -31,6 +31,7 @@ a = Analysis(
         "iag_packet_interceptor",
         "iag_same_family_construction_rewriter",
         "iag_building_upgrade_rewriter",
+        "iag_building_replacement_rewriter",
     ],
     hookspath=[],
     hooksconfig={},

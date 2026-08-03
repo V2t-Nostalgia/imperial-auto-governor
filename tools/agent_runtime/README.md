@@ -38,7 +38,7 @@
 - DeepSeek 工具回合会完整重放对应 assistant 消息的 `reasoning_content`、`tool_calls` 与本地 tool 结果；隐藏思维不会显示在网页中。
 - 前端可编辑长期战略 Prompt，并保留 Prompt 历史版本。稳定规则放在 Prompt，阶段要求和问答放在持久会话。
 - 自动巡检有三种策略：暂停、只分析并准备规划、分析并执行建设。默认始终为暂停。
-- 五步固定坐标校准：建筑入口、建筑载体、主区划载体、特化入口、特化载体分别保存窗口相对坐标与局部 OpenCV 防误点模板。
+- 十步固定坐标校准：建筑、主区划、特化、升级和替换五个动作族分别保存所需的窗口相对坐标与局部 OpenCV 防误点模板。
 - 端口发现：读取 `/proc` 中 Stellaris 进程实际持有的 UDP 套接字，并与拦截器遥测交叉验证。
 - Steam 代理识别：常驻观察器只读检查由 `steam` 托管的双向 UDP 流，并用可靠流标记筛选候选；只有载体命令或房主权威回包才能把候选升级为已确认。
 - Windows 房主入站一发式 WinDivert 改写、包长度检查、权威回包确认、审计日志和紧急停止。
@@ -278,11 +278,11 @@ reasoning_effort: max
 ## 每局固定坐标校准
 
 1. 在 Ubuntu 合作端进入本局，并把 Stellaris 调整到约定窗口位置与大小。
-2. 在前端依次校准川陀的“建筑入口”“建设指令中继”“发电区划载体”“特化入口”“工程学研究特化载体”“升级指令中继槽”和“升级按钮”。
+2. 在前端依次校准川陀的建筑入口与载体、发电区划载体、特化入口与载体、升级源槽与目标，以及替换源槽、替换按钮与目标。
 3. 每一步都把川陀恢复到提示要求的基础画面，然后点击“捕获当前窗口”。
 4. 在前端截图中单击对应入口或载体按钮，再保存点击位置。
 5. 点击“仅移动鼠标测试”。它只测试当前下拉框选中的载体，不会点击。
-6. 七步校准分别写入 `carrier_building_open.json`、`carrier_click.json`、`carrier_district_click.json`、`carrier_zone_open.json`、`carrier_zone_click.json`、`carrier_upgrade_open.json` 和 `carrier_upgrade_click.json`。
+6. 十步校准分别写入 `carrier_building_open.json`、`carrier_click.json`、`carrier_district_click.json`、`carrier_zone_open.json`、`carrier_zone_click.json`、`carrier_upgrade_open.json`、`carrier_upgrade_click.json`、`carrier_replacement_open.json`、`carrier_replacement_button.json` 和 `carrier_replacement_click.json`。
 7. 若窗口尺寸或局部按钮画面不再匹配，执行器会在点击前拒绝执行并要求重新校准。
 
 这里保存的是**窗口相对坐标**，不是整个桌面的绝对坐标，因此小范围移动窗口不会改变目标；窗口尺寸变化仍会触发保护。
@@ -301,7 +301,7 @@ reasoning_effort: max
 8. 后续房主新存档达到网页配置的复查月份时，灰风会自动审计；默认每轮最多执行三项，但模型应按资源和紧迫性提前停止。
 9. 前端显示房主明文权威回包确认，或后续房主存档明确显示目标进入队列/已经建成，建设才算成立；失败后不会自动重试。
 
-要暂停模型巡检与自动建设，选择“暂停自动巡检”并点击“应用策略”。房主 GUI 的“停止上传”只停止存档同步；关闭 GUI 会同时停止上传和心跳。紧急停止按钮用于终止正在进行或即将进入执行阶段的本轮操作。
+要暂停模型巡检与自动建设，选择“暂停自动巡检”并点击“应用策略”。房主 GUI 的“停止上传”只停止存档同步；关闭 GUI 会同时停止上传和心跳。紧急停止按钮会写入持久执行锁，用于终止正在进行或即将进入执行阶段的本轮操作；任务退出后，必须在网页点击“解除紧急停止”才会重新允许建设。
 
 顶部“本轮决策”仍保留旧的一次性规划与人工执行按钮，作为兼容和故障排查入口。
 

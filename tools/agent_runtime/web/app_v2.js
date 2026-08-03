@@ -64,6 +64,21 @@ const calibrationCopy = {
     target: "升级指令中继的升级按钮",
     prompt: "先在游戏内打开升级指令中继详情，捕获后选择它的升级按钮。",
   },
+  "replace_building:open": {
+    label: "川陀替换载体槽",
+    target: "预置替换指令中继所在的建筑槽",
+    prompt: "让川陀保持统一建设控制台基础画面，捕获后选择预置替换指令中继所在的建筑槽。",
+  },
+  "replace_building:replace": {
+    label: "川陀替换按钮",
+    target: "建筑详情中的替换按钮",
+    prompt: "先在游戏内打开替换指令中继详情，捕获后选择建筑替换按钮。",
+  },
+  "replace_building:command": {
+    label: "川陀替换载体候选",
+    target: "替换指令中继目标候选",
+    prompt: "先在游戏内打开替换建筑列表，捕获后选择替换指令中继目标候选。",
+  },
 };
 
 function selectedCalibrationAction() {
@@ -84,14 +99,20 @@ function updateCalibrationCopy() {
   const action = selectedCalibrationAction();
   const stageSelect = $("calibration-stage");
   const district = action === "build_district";
+  const replacement = action === "replace_building";
   if (district) stageSelect.value = "command";
+  if (!replacement && stageSelect.value === "replace") {
+    stageSelect.value = district ? "command" : "open";
+  }
   stageSelect.querySelector('option[value="open"]').disabled = district;
+  stageSelect.querySelector('option[value="replace"]').disabled = !replacement;
   $("calibration-stage-label").classList.toggle("single-step", district);
   const actionLabels = {
     build_building: "建筑（川陀）：建设指令中继",
     build_district: "主区划（川陀）：发电区划载体",
     build_zone: "区划特化（川陀）：工程学研究特化唯一载体",
     upgrade_building: "建筑升级（川陀）：升级指令中继",
+    replace_building: "建筑替换（川陀）：替换指令中继",
   };
   for (const option of $("calibration-action").options) {
     option.textContent = actionLabels[option.value] || option.textContent;
@@ -673,7 +694,7 @@ function renderConstructionCatalog(catalog, manifest) {
     ? selectedEntry.label_zh + " · " + selectedEntry.object_id
     : "本轮不建设";
   const action = manifest?.action || {};
-  const exactSlot = action.type === "upgrade_building"
+  const exactSlot = ["upgrade_building", "replace_building"].includes(action.type)
     ? " · 区域 " + action.zone_id + " / 槽位 " + action.building_position +
       " / 对象 " + action.building_object_id
     : "";
@@ -866,6 +887,14 @@ function renderStatus(status) {
   $("review-button").disabled = running || !executionAllowed;
   $("execute-button").disabled = running || !executionAllowed ||
     !run.manifest || manifest.action?.type === "noop";
+  const emergencyStopRequested = Boolean(status.emergency_stop_requested);
+  $("stop-button").disabled = emergencyStopRequested;
+  $("clear-stop-button").disabled = running || !emergencyStopRequested;
+  $("execution-interlock-state").textContent = emergencyStopRequested
+    ? "紧急停止已锁定"
+    : "执行锁未启用";
+  $("execution-interlock-state").className =
+    "status-tag " + (emergencyStopRequested ? "bad" : "good");
 
   const calibrationAction = selectedCalibrationAction();
   const calibrationStage = selectedCalibrationStage();
@@ -1274,6 +1303,16 @@ $("stop-button").addEventListener("click", async () => {
   try {
     await post("/api/emergency-stop");
     message("已请求中止当前执行", true);
+    await refresh();
+  } catch (error) {
+    message(error.message, true);
+  }
+});
+
+$("clear-stop-button").addEventListener("click", async () => {
+  try {
+    await post("/api/emergency-stop/clear");
+    message("紧急停止已解除；新的执行请求可以再次启动");
     await refresh();
   } catch (error) {
     message(error.message, true);

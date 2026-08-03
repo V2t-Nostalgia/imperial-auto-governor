@@ -50,6 +50,7 @@ from host_bridge_pairing import (
 from iag_agent import run_cycle
 from iag_supervisor import (
     carrier_click_profile_path,
+    carrier_intermediate_profile_path,
     carrier_navigation_profile_path,
     execute_run,
     runtime_path,
@@ -120,6 +121,12 @@ CATALOG_GROUPS = (
         "collection": "building_upgrades",
         "target_field": "to_building_id",
         "label_zh": "建筑升级",
+    },
+    {
+        "action_type": "replace_building",
+        "collection": "buildings",
+        "target_field": "to_building_id",
+        "label_zh": "建筑替换",
     },
 )
 
@@ -449,6 +456,7 @@ class ConsoleService:
                 "build_district",
                 "build_zone",
                 "upgrade_building",
+                "replace_building",
             )
         }
         # Retain the legacy attribute for callers that only know buildings.
@@ -459,10 +467,21 @@ class ConsoleService:
                 "build_building",
                 "build_zone",
                 "upgrade_building",
+                "replace_building",
             )
             if (
                 path := carrier_navigation_profile_path(
                     self.config, action_type
+                )
+            ) is not None
+        }
+        self.intermediate_profile_paths = {
+            action_type: path
+            for action_type in self.profile_paths
+            if (
+                path := carrier_intermediate_profile_path(
+                    self.config,
+                    action_type,
                 )
             ) is not None
         }
@@ -1624,6 +1643,15 @@ class ConsoleService:
             open_path = self.navigation_profile_paths.get(action_type)
             open_required = navigation_enabled and open_path is not None
             open_profile = optional_json(open_path) if open_path is not None else None
+            intermediate_path = self.intermediate_profile_paths.get(action_type)
+            intermediate_required = (
+                navigation_enabled and intermediate_path is not None
+            )
+            intermediate_profile = (
+                optional_json(intermediate_path)
+                if intermediate_path is not None
+                else None
+            )
             steps = {
                 "open": {
                     "required": open_required,
@@ -1638,13 +1666,31 @@ class ConsoleService:
                     "profile": command_profile,
                 },
             }
+            if intermediate_path is not None:
+                steps["replace"] = {
+                    "required": intermediate_required,
+                    "calibrated": bool(intermediate_profile),
+                    "path": str(intermediate_path),
+                    "profile": intermediate_profile,
+                }
+            required_step_count = (
+                1 + int(open_required) + int(intermediate_required)
+            )
+            calibrated_step_count = int(bool(command_profile))
+            if open_required:
+                calibrated_step_count += int(bool(open_profile))
+            if intermediate_required:
+                calibrated_step_count += int(bool(intermediate_profile))
             value[action_type] = {
                 "steps": steps,
-                "required_step_count": 2 if open_required else 1,
-                "calibrated_step_count": int(bool(command_profile))
-                + int(open_required and bool(open_profile)),
+                "required_step_count": required_step_count,
+                "calibrated_step_count": calibrated_step_count,
                 "sequence_ready": bool(command_profile)
-                and (not open_required or bool(open_profile)),
+                and (not open_required or bool(open_profile))
+                and (
+                    not intermediate_required
+                    or bool(intermediate_profile)
+                ),
             }
         return value
 
@@ -1918,6 +1964,11 @@ class ConsoleService:
             if path is None:
                 raise ConsoleError(f"{action_type} 没有面板入口校准步骤。")
             return path
+        if stage == "replace":
+            path = self.intermediate_profile_paths.get(action_type)
+            if path is None:
+                raise ConsoleError(f"{action_type} 没有替换按钮校准步骤。")
+            return path
         if stage != "command":
             raise ConsoleError(f"不支持的载体校准阶段：{stage}")
         try:
@@ -2064,6 +2115,21 @@ class ConsoleService:
     def emergency_stop(self) -> dict[str, Any]:
         atomic_write_text(self.stop_path, now_iso() + "\n")
         return {"requested": True, "requested_at": now_iso()}
+
+    def clear_emergency_stop(self) -> dict[str, Any]:
+        """Release the persistent execution interlock after work has stopped."""
+        with self._job_lock:
+            if self._job.get("state") == "running":
+                raise ConsoleError(
+                    "当前代理任务仍在运行；请等待其中止完成后再解除紧急停止。"
+                )
+            was_requested = self.stop_path.is_file()
+            self.stop_path.unlink(missing_ok=True)
+        return {
+            "requested": False,
+            "cleared": was_requested,
+            "cleared_at": now_iso(),
+        }
 
 
 class ConsoleHandler(BaseHTTPRequestHandler):
@@ -2480,6 +2546,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 result = self.service.start_execute(str(run_id) if run_id else None)
             elif path == "/api/emergency-stop":
                 result = self.service.emergency_stop()
+            elif path == "/api/emergency-stop/clear":
+                result = self.service.clear_emergency_stop()
             else:
                 self.send_json({"error": "not_found"}, status=404)
                 return

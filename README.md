@@ -86,6 +86,7 @@ Stellaris 的游戏脚本不能读取任意本地文件、调用外部模型 API
 | 主区划建设 | `district_generator` | 城市、发电、采矿和农业区划 |
 | 区划特化 | `zone_research_engineering` | 已验证的工业、科研、行政、贸易等特化 |
 | 建筑升级 | `building_upc_upgrade_command_relay_target` | 按目标建筑对象和精确槽位升级 |
+| 建筑替换 | `building_upc_replacement_command_relay_target` | 仅对存档明确证明为继承/征服的殖民地，按精确源对象和槽位重构普通建筑；v0.5.7 专用载体需首次实局验收 |
 
 同一轮可以执行多项建设，但始终按 `prepare A -> execute A -> 确认 A -> prepare B` 串行运行。默认每轮最多三项；任一动作失败、等待确认或规划存档超过玩家设置的版本容差时，后续动作都会停止。
 
@@ -97,7 +98,7 @@ Stellaris 的游戏脚本不能读取任意本地文件、调用外部模型 API
 
 - 度假星球、事件星球和结构无法可靠解析的特殊殖民地。
 - 尚未取得真实命令样本或未完成本地规则建模的命令族。
-- 会导致命令族变化、记录增长或客户端预测分叉的替换。
+- 原始拥有者缺失、与当前拥有者相同，或源建筑不在保守白名单中的替换。
 - 舰队、外交、战争、人口迁移、政策和市场操作。
 
 ## 抓包与改写边界
@@ -138,7 +139,7 @@ Stellaris 的游戏脚本不能读取任意本地文件、调用外部模型 API
 - 对进入灰风的非星系拥有者舰队触发 `第四面墙`，使其 MIA 42 天后返回。
 - 显式移除失落帝国圣地标记和 `holy_planet` 修正。
 
-当前固定载体目录由独立的 `Carrier Construction Console / 载体统一建设控制台` 0.4.1 提供。它只改造带 `iag_carrier_building_world` 标记的川陀，不影响普通殖民地。当前创意工坊文件 ID 为 `3774390530`。
+当前固定载体目录由独立的 `Carrier Construction Console / 载体统一建设控制台` 0.4.2 提供。它只改造带 `iag_carrier_building_world` 标记的川陀，不影响普通殖民地。0.4.2 为建筑替换增加独立、已占用的载体区域，不会把替换候选混入普通建筑列表。当前创意工坊文件 ID 为 `3774390530`。
 
 两个游戏端模组必须由房主和合作玩家使用一致版本加载。模组本身不会抓包、点击、调用 LLM 或直接在目标星球瞬间添加建筑。
 
@@ -172,7 +173,7 @@ Ubuntu 独立安装见 [docs/UBUNTU_AGENT_README.md](docs/UBUNTU_AGENT_README.md
 3. 在房主电脑以管理员权限启动 `IAGHostBridgeGUI`，填写 Agent 地址、证书指纹和桥接令牌，确认存档目录后点击“开始上传”。
 4. 在合作端启动 Agent，配置 Stellaris 路径、模型 Base URL、模型名、API Key 和上下文参数。
 5. 新建战役会话，并由玩家把当前上传存档明确绑定到该会话。
-6. 按前端提示校准四个动作族的七个窗口相对坐标步骤，并先使用“仅移动鼠标”检查位置。
+6. 按前端提示校准五个动作族的十个窗口相对坐标步骤，并先使用“仅移动鼠标”检查位置；建筑替换依次校准源建筑、替换按钮和目标候选。
 7. 先使用“自主分析，只准备规划”，检查存档状态、合法候选、端口和模型判断。
 8. 验收无误后切换到“自主分析并执行建设”。每份达到复查月份的新存档会触发下一轮审计。
 
@@ -215,14 +216,14 @@ python tools/release/verify_release.py --directory public_release
 
 ## 发行附件
 
-v0.5.6 使用五个正式附件：
+v0.5.7 使用五个正式附件：
 
 ```text
-ImperialAutoGovernor-0.5.6-source.zip
-IAGWindowsAgent-0.5.6-windows-x64.zip
-IAGHostBridge-0.5.6-windows-x64.zip
-IAGUbuntuAgent-0.5.6-linux-x86_64.tar.gz
-SHA256SUMS-0.5.6.txt
+ImperialAutoGovernor-0.5.7-source.zip
+IAGWindowsAgent-0.5.7-windows-x64.zip
+IAGHostBridge-0.5.7-windows-x64.zip
+IAGUbuntuAgent-0.5.7-linux-x86_64.tar.gz
+SHA256SUMS-0.5.7.txt
 ```
 
 源码、构建、隐私扫描、签名 Tag、GitHub Release、Zenodo 和 Software Heritage 流程见 [docs/PUBLICATION.md](docs/PUBLICATION.md)。技术架构见 [docs/TECHNICAL_OVERVIEW.md](docs/TECHNICAL_OVERVIEW.md)。

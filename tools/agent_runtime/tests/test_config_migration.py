@@ -62,6 +62,18 @@ class ConfigMigrationTests(unittest.TestCase):
                 "calibration/carrier_upgrade_click.json",
             )
             self.assertEqual(
+                value["carrier_navigation_profiles"]["replace_building"],
+                "calibration/carrier_replacement_open.json",
+            )
+            self.assertEqual(
+                value["carrier_intermediate_profiles"]["replace_building"],
+                "calibration/carrier_replacement_button.json",
+            )
+            self.assertEqual(
+                value["carrier_click_profiles"]["replace_building"],
+                "calibration/carrier_replacement_click.json",
+            )
+            self.assertEqual(
                 value["carrier_click_step_delay_seconds"],
                 0.45,
             )

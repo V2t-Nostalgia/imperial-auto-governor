@@ -127,6 +127,26 @@ class HostExecutorProtocolTests(unittest.TestCase):
             },
         }
 
+    @staticmethod
+    def replacement_manifest() -> dict:
+        return {
+            "carrier": {
+                "command": "building_upc_replacement_command_relay_target",
+                "required_origin": "non-host co-op client outbound",
+            },
+            "action": {
+                "type": "replace_building",
+                "planet_id": 280,
+                "build_queue_id": 8555,
+                "colony_id": 76,
+                "zone_id": 229,
+                "building_position": 1,
+                "building_object_id": 463,
+                "from_building_id": "building_commercial_zone",
+                "to_building_id": "building_holo_theatres",
+            },
+        }
+
     def test_complete_ready_result_round_trip(self) -> None:
         request = begin_host_execution(
             self.config,
@@ -236,6 +256,23 @@ class HostExecutorProtocolTests(unittest.TestCase):
             "building_research_lab_2",
         )
         self.assertEqual(request["action"]["type"], "upgrade_building")
+        complete_host_execution(self.config, request["request_id"])
+
+    def test_replacement_request_uses_the_dedicated_carrier(self) -> None:
+        request = begin_host_execution(
+            self.config,
+            run_id="20260803_040000",
+            manifest=self.replacement_manifest(),
+            host_ip="198.51.100.20",
+            peer_ip="192.0.2.10",
+        )
+
+        self.assertEqual(
+            request["carrier"]["command"],
+            "building_upc_replacement_command_relay_target",
+        )
+        self.assertEqual(request["action"]["type"], "replace_building")
+        self.assertEqual(request["action"]["building_object_id"], 463)
         complete_host_execution(self.config, request["request_id"])
 
     def test_old_uploader_is_rejected_before_request_creation(self) -> None:

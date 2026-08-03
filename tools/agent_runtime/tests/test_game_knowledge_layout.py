@@ -446,6 +446,10 @@ building_farming_districts_1 = {
             costs["upgrade_building"]["building_research_lab_2"]["cost"],
             {"minerals": 600, "exotic_gases": 50},
         )
+        self.assertEqual(
+            costs["replace_building"]["building_research_lab_1"]["cost"],
+            {"minerals": 400},
+        )
         conditional = costs["upgrade_building"]["building_energy_nexus"]
         self.assertEqual(conditional["status"], "conditional")
         self.assertIn(

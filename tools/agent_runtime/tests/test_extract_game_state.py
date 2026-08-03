@@ -15,6 +15,7 @@ from extract_game_state import (  # noqa: E402
     construction_items,
     construction_queues,
     is_iag_carrier_planet,
+    planet_ownership,
     planet_display_name_hint,
 )
 
@@ -61,6 +62,20 @@ class ExtractGameStateTests(unittest.TestCase):
 
     def test_ordinary_planet_is_not_carrier(self) -> None:
         self.assertFalse(is_iag_carrier_planet('name="Earth"', "", "Earth"))
+
+    def test_explicit_original_owner_identifies_inherited_colony(self) -> None:
+        ownership = planet_ownership(
+            "owner=0\noriginal_owner=7\n",
+            0,
+        )
+        self.assertEqual(ownership["owner_id"], 0)
+        self.assertEqual(ownership["original_owner_id"], 7)
+        self.assertTrue(ownership["is_inherited_colony"])
+
+    def test_missing_original_owner_is_not_inferred(self) -> None:
+        ownership = planet_ownership("owner=0\n", 0)
+        self.assertIsNone(ownership["original_owner_id"])
+        self.assertFalse(ownership["is_inherited_colony"])
 
     def test_generated_planet_name_hint_keeps_system_identity(self) -> None:
         self.assertEqual(

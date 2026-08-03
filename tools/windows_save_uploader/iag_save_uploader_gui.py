@@ -27,7 +27,7 @@ from iag_save_uploader import (
 )
 
 
-APP_VERSION = "2026.08.02-hostbridge8"
+APP_VERSION = "2026.08.03-hostbridge9"
 APP_ROOT = (
     Path(sys.executable).resolve().parent
     if getattr(sys, "frozen", False)

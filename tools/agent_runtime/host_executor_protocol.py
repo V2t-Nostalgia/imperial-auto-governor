@@ -16,12 +16,13 @@ from typing import Any, Mapping
 
 
 HOST_EXECUTOR_CAPABILITY = "host_inbound_rewrite_v1"
-REQUIRED_HOST_EXECUTOR_APP_VERSION = "2026.08.02-hostbridge8"
+REQUIRED_HOST_EXECUTOR_APP_VERSION = "2026.08.03-hostbridge9"
 VERIFIED_CARRIER_BY_ACTION = {
     "build_building": "building_upc_construction_command_relay",
     "build_district": "district_generator",
     "build_zone": "zone_research_engineering",
     "upgrade_building": "building_upc_upgrade_command_relay_target",
+    "replace_building": "building_upc_replacement_command_relay_target",
 }
 SUPPORTED_CARRIERS_BY_ACTION = {
     "build_building": {
@@ -33,6 +34,10 @@ SUPPORTED_CARRIERS_BY_ACTION = {
     "upgrade_building": {
         "building_upc_upgrade_command_relay_target",
         "building_research_lab_2",
+    },
+    "replace_building": {
+        "building_upc_replacement_command_relay_target",
+        "building_holo_theatres",
     },
 }
 _STATE_LOCK = threading.RLock()

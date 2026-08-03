@@ -29,7 +29,7 @@ Stellaris、Windows Agent、LLM 和可选的联网研究服务。模型只从本
 
 ## 2. 启动合作端 Agent
 
-1. 完整解压 `IAGWindowsAgent-0.5.6-windows-x64.zip`。不要只移动 EXE。
+1. 完整解压 `IAGWindowsAgent-0.5.7-windows-x64.zip`。不要只移动 EXE。
 2. 双击 `IAGWindowsAgent.exe`。
 3. 在 GUI 中确认运行数据目录、Stellaris 安装目录、控制台监听地址和端口。需要让房主电脑访问时，
    监听地址使用 `0.0.0.0`；默认端口为 `8765`。
@@ -94,7 +94,7 @@ powershell -ExecutionPolicy Bypass -File .\Manage-IAGResearchServices.ps1 -Actio
 
 ## 7. 校准和首次执行
 
-1. 按前端向导校准建筑、区划、区域特化和建筑升级所需的窗口相对坐标。
+1. 按前端向导校准建筑、区划、区域特化、建筑升级和建筑替换所需的窗口相对坐标。替换需要依次校准源建筑、替换按钮和目标候选。
 2. 每个校准点先运行“仅移动鼠标”，确认指针落在正确载体入口，不执行点击。
 3. 运行一次立即巡检，检查读取到的游戏日期、殖民地数量、合法候选和规划理由。
 4. 确认 Host Bridge 已连接、合作端端口候选已确认、载体窗口位置正确后，再切换为

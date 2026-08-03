@@ -45,6 +45,9 @@ class WebConsoleSecurityTests(unittest.TestCase):
                 "upgrade_building": {
                     "command": "building_upc_upgrade_command_relay_target"
                 },
+                "replace_building": {
+                    "command": "building_upc_replacement_command_relay_target"
+                },
             },
             "buildings": {
                 "building_research_lab_1": {
@@ -90,6 +93,13 @@ class WebConsoleSecurityTests(unittest.TestCase):
                     "to_building_id": "building_research_lab_2",
                 }
             },
+            {
+                "action": {
+                    "type": "replace_building",
+                    "from_building_id": "building_research_lab_1",
+                    "to_building_id": "building_holo_theatres",
+                }
+            },
         ]
         manifest = {
             "action": {
@@ -111,6 +121,11 @@ class WebConsoleSecurityTests(unittest.TestCase):
                     "sequence_ready": True,
                     "required_step_count": 2,
                     "calibrated_step_count": 2,
+                },
+                "replace_building": {
+                    "sequence_ready": True,
+                    "required_step_count": 3,
+                    "calibrated_step_count": 3,
                 },
             },
         )
@@ -136,6 +151,20 @@ class WebConsoleSecurityTests(unittest.TestCase):
             "building_research_lab_1",
         )
         self.assertTrue(upgrades["carrier"]["sequence_ready"])
+        replacements = next(
+            group
+            for group in catalog["groups"]
+            if group["action_type"] == "replace_building"
+        )
+        self.assertEqual(replacements["legal_candidate_count"], 1)
+        self.assertEqual(
+            replacements["entries"][0]["object_id"],
+            "building_holo_theatres",
+        )
+        self.assertEqual(
+            replacements["carrier"]["calibration"]["required_step_count"],
+            3,
+        )
 
     def test_accepts_matching_basic_auth(self) -> None:
         self.assertTrue(
@@ -396,6 +425,23 @@ class WebConsoleSecurityTests(unittest.TestCase):
                 service.campaign_binding_status()["state"],
                 "unbound",
             )
+
+            stopped = service.emergency_stop()
+            self.assertTrue(stopped["requested"])
+            self.assertTrue(service.stop_path.is_file())
+            cleared = service.clear_emergency_stop()
+            self.assertTrue(cleared["cleared"])
+            self.assertFalse(service.stop_path.exists())
+
+            with service._job_lock:
+                service._job = {"state": "running"}
+            service.emergency_stop()
+            with self.assertRaises(ConsoleError):
+                service.clear_emergency_stop()
+            self.assertTrue(service.stop_path.is_file())
+            with service._job_lock:
+                service._job = {"state": "idle"}
+            service.clear_emergency_stop()
         finally:
             if service is not None:
                 service.close()

@@ -166,6 +166,33 @@ class ConstructionEvidenceTests(unittest.TestCase):
             evidence["target_slot"]["object_id_matches_source"]
         )
 
+    def test_replacement_evidence_confirms_only_the_exact_saved_slot(self) -> None:
+        action = {
+            "type": "replace_building",
+            "planet_id": 280,
+            "zone_id": 282,
+            "building_position": 1,
+            "building_object_id": 463,
+            "from_building_id": "building_research_lab_1",
+            "to_building_id": "building_holo_theatres",
+        }
+        wrong_slot = copy.deepcopy(snapshot())
+        wrong_slot["planets"][0]["zones"][0]["buildings"][0]["type"] = (
+            "building_holo_theatres"
+        )
+        self.assertEqual(
+            construction_action_evidence(wrong_slot, action)["total_count"],
+            0,
+        )
+
+        exact_slot = copy.deepcopy(snapshot())
+        exact_building = exact_slot["planets"][0]["zones"][0]["buildings"][1]
+        exact_building["type"] = "building_holo_theatres"
+        exact_building["object_id"] = 9002
+        evidence = construction_action_evidence(exact_slot, action)
+        self.assertEqual(evidence["completed_count"], 1)
+        self.assertEqual(evidence["target_slot"]["position"], 1)
+
     def test_negative_reconciliation_requires_save_after_observation(self) -> None:
         pending = {
             "source_save_sha256": "old",

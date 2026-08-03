@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+import copy
 from pathlib import Path
 
 
@@ -186,6 +187,30 @@ def add_upgrade_carrier(value: dict) -> None:
     )
 
 
+def add_replacement_carrier(value: dict) -> None:
+    value["planets"].append(
+        {
+            "safety": {
+                "is_iag_carrier": True,
+                "eligible_for_first_run": False,
+            },
+            "zones": [
+                {
+                    "buildings": [
+                        {
+                            "object_id": 1000,
+                            "position": 2,
+                            "type": (
+                                "building_upc_replacement_command_relay_base"
+                            ),
+                        }
+                    ]
+                }
+            ],
+        }
+    )
+
+
 class PlannerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -211,6 +236,141 @@ class PlannerTests(unittest.TestCase):
                         len(upgrade["to_building_id"].encode("ascii")),
                         maximum,
                     )
+
+    def test_replacement_carrier_fits_every_enabled_building_target(self) -> None:
+        carrier = self.capabilities["carriers"]["replace_building"]
+        maximum = int(carrier["maximum_equal_length_id_bytes"])
+        self.assertEqual(len(carrier["command"].encode("ascii")), maximum)
+        for building_id, capability in self.capabilities["buildings"].items():
+            if capability.get("enabled"):
+                with self.subTest(target=building_id):
+                    self.assertLessEqual(len(building_id.encode("ascii")), maximum)
+
+    def test_replacement_candidates_require_explicit_inherited_ownership(self) -> None:
+        for original_owner, expected in ((0, False), (7, True), (None, False)):
+            with self.subTest(original_owner=original_owner):
+                value = snapshot()
+                add_replacement_carrier(value)
+                planet = value["planets"][0]
+                planet["owner_id"] = 0
+                planet["original_owner_id"] = original_owner
+                planet["safety"]["is_inherited_colony"] = original_owner == 7
+                zone = planet["zones"][0]
+                zone["occupied_building_positions"] = [0]
+                zone["available_building_positions"] = [1]
+                zone["buildings"] = [
+                    {
+                        "object_id": 419,
+                        "position": 0,
+                        "type": "building_research_lab_1",
+                    }
+                ]
+                capabilities = copy.deepcopy(self.capabilities)
+                for building_id, definition in capabilities["buildings"].items():
+                    definition["enabled"] = building_id == "building_holo_theatres"
+                value["known_technologies"].append("tech_holo_entertainment")
+                value["layout_rules"] = {
+                    "construction_costs": {
+                        "replace_building": {
+                            "building_holo_theatres": {
+                                "status": "available",
+                                "cost": {"minerals": 400},
+                            }
+                        }
+                    }
+                }
+
+                replacements = [
+                    item
+                    for item in build_candidates(value, capabilities, config())
+                    if item["action"].get("type") == "replace_building"
+                ]
+                self.assertEqual(bool(replacements), expected)
+                if expected:
+                    action = replacements[0]["action"]
+                    self.assertEqual(action["building_object_id"], 419)
+                    self.assertEqual(action["building_position"], 0)
+                    self.assertEqual(
+                        action["to_building_id"],
+                        "building_holo_theatres",
+                    )
+                    manifest = execution_manifest(
+                        {
+                            "confidence": 0.9,
+                            "reasoning_zh": "继承殖民地的旧布局需要重构",
+                        },
+                        replacements[0],
+                        value,
+                        capabilities,
+                    )
+                    self.assertEqual(
+                        manifest["carrier"]["command"],
+                        "building_upc_replacement_command_relay_target",
+                    )
+
+    def test_pending_replacement_target_suppresses_nonrepeatable_duplicate(self) -> None:
+        value = snapshot()
+        add_replacement_carrier(value)
+        planet = value["planets"][0]
+        planet["owner_id"] = 0
+        planet["original_owner_id"] = 7
+        planet["safety"]["is_inherited_colony"] = True
+        planet["construction"] = {
+            "has_pending_construction": True,
+            "queued_item_ids": [9001],
+            "queue_depth": 1,
+            "pending_items": [
+                {
+                    "kind": "building_replacement",
+                    "zone_id": 200,
+                    "building_object_id": 419,
+                    "from_building_id": "building_research_lab_1",
+                    "to_building_id": "building_holo_theatres",
+                }
+            ],
+        }
+        zone = planet["zones"][0]
+        zone["occupied_building_positions"] = [0, 1]
+        zone["available_building_positions"] = []
+        zone["buildings"] = [
+            {
+                "object_id": 419,
+                "position": 0,
+                "type": "building_research_lab_1",
+            },
+            {
+                "object_id": 420,
+                "position": 1,
+                "type": "building_research_lab_1",
+            },
+        ]
+        capabilities = copy.deepcopy(self.capabilities)
+        for building_id, definition in capabilities["buildings"].items():
+            definition["enabled"] = building_id == "building_holo_theatres"
+        capabilities["buildings"]["building_holo_theatres"].update(
+            {
+                "allow_multiple": False,
+                "planet_unique_types": [],
+            }
+        )
+        value["known_technologies"].append("tech_holo_entertainment")
+        value["layout_rules"] = {
+            "construction_costs": {
+                "replace_building": {
+                    "building_holo_theatres": {
+                        "status": "available",
+                        "cost": {"minerals": 400},
+                    }
+                }
+            }
+        }
+
+        replacements = [
+            item
+            for item in build_candidates(value, capabilities, config())
+            if item["action"].get("type") == "replace_building"
+        ]
+        self.assertEqual(replacements, [])
 
     def test_upgrade_candidates_bind_each_exact_saved_building_slot(self) -> None:
         value = snapshot()

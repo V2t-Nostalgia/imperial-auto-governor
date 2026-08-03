@@ -112,6 +112,7 @@
         <button class="catalog-tab" data-catalog-action="build_district" type="button">主区划 <b id="catalog-count-build-district">0</b></button>
         <button class="catalog-tab" data-catalog-action="build_zone" type="button">区划特化 <b id="catalog-count-build-zone">0</b></button>
         <button class="catalog-tab" data-catalog-action="upgrade_building" type="button">建筑升级 <b id="catalog-count-upgrade-building">0</b></button>
+        <button class="catalog-tab" data-catalog-action="replace_building" type="button">建筑替换 <b id="catalog-count-replace-building">0</b></button>
       </div>
       <div id="construction-catalog-list" class="construction-catalog-list" aria-live="polite"></div>
       <p class="hint">这里列出模型可用的真实目标；游戏内不逐次寻找目标条目。执行器始终点击川陀上的固定载体首项，再由房主入站桥等长改写为置顶目标。</p>
@@ -230,7 +231,9 @@
           <textarea id="chat-input" rows="3" placeholder="告诉灰风新的战略要求，或询问当前帝国状态。Enter 发送，Shift+Enter 换行。"></textarea>
           <div class="button-row">
             <button class="primary" id="send-message">发送</button>
-            <button class="danger" id="stop-button">中止当前执行</button>
+            <button class="danger" id="stop-button">紧急停止</button>
+            <button id="clear-stop-button" disabled>解除紧急停止</button>
+            <span id="execution-interlock-state" class="status-tag good">执行锁未启用</span>
           </div>
         </div>
         <p class="hint">完整记录保存在本地数据库；模型调用会在所选上下文上限内重放历史。实际建设仍受一发式、存档哈希、等长改写和房主确认约束。</p>
@@ -253,8 +256,8 @@
           <div><span class="kicker">CARRIER CALIBRATION</span><h2>载体点击校准</h2></div>
           <span id="calibration-state" class="status-tag">未校准</span>
         </div>
-        <label>载体类型<select id="calibration-action"><option value="build_building">建筑（川陀）：建设指令中继</option><option value="build_district">主区划（川陀）：发电区划载体</option><option value="build_zone">区划特化（川陀）：工程学研究特化唯一载体</option><option value="upgrade_building">建筑升级（川陀）：升级指令中继</option></select></label>
-        <label id="calibration-stage-label">点击阶段<select id="calibration-stage"><option value="open">第 1 步：打开候选面板</option><option value="command">第 2 步：点击唯一载体首项</option></select></label>
+        <label>载体类型<select id="calibration-action"><option value="build_building">建筑（川陀）：建设指令中继</option><option value="build_district">主区划（川陀）：发电区划载体</option><option value="build_zone">区划特化（川陀）：工程学研究特化唯一载体</option><option value="upgrade_building">建筑升级（川陀）：升级指令中继</option><option value="replace_building">建筑替换（川陀）：替换指令中继</option></select></label>
+        <label id="calibration-stage-label">点击阶段<select id="calibration-stage"><option value="open">第 1 步：打开候选面板</option><option value="replace">第 2 步：点击替换按钮</option><option value="command">最后一步：点击载体候选</option></select></label>
         <div class="calibration-frame" id="calibration-frame">
           <p id="calibration-placeholder">让川陀保持统一建设控制台基础画面，然后捕获建筑入口。</p>
           <img id="calibration-image" alt="Stellaris 校准截图">
@@ -328,6 +331,6 @@
 
     <footer><span id="footer-message">控制台已就绪</span><span id="last-refresh">--</span></footer>
   </main>
-  <script src="app_v2.js?v=18"></script>
+  <script src="app_v2.js?v=19"></script>
 </body>
 </html>

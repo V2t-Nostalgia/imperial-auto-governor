@@ -35,13 +35,18 @@
         "build_building":  "calibration/carrier_click.json",
         "build_district":  "calibration/carrier_district_click.json",
         "build_zone":  "calibration/carrier_zone_click.json",
-        "upgrade_building":  "calibration/carrier_upgrade_click.json"
+        "upgrade_building":  "calibration/carrier_upgrade_click.json",
+        "replace_building":  "calibration/carrier_replacement_click.json"
     },
     "carrier_navigation_enabled":  true,
     "carrier_navigation_profiles":  {
         "build_building":  "calibration/carrier_building_open.json",
         "build_zone":  "calibration/carrier_zone_open.json",
-        "upgrade_building":  "calibration/carrier_upgrade_open.json"
+        "upgrade_building":  "calibration/carrier_upgrade_open.json",
+        "replace_building":  "calibration/carrier_replacement_open.json"
+    },
+    "carrier_intermediate_profiles":  {
+        "replace_building":  "calibration/carrier_replacement_button.json"
     },
     "carrier_click_step_delay_seconds":  0.45,
     "carrier_pointer_settle_seconds":  0.20,

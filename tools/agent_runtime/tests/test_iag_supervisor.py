@@ -20,6 +20,7 @@ from iag_supervisor import (  # noqa: E402
     SupervisorError,
     carrier_click_sequence_paths,
     carrier_click_profile_path,
+    carrier_intermediate_profile_path,
     carrier_navigation_profile_path,
     execute_carrier_click_sequence,
     interceptor_command,
@@ -58,6 +59,11 @@ class SupervisorTests(unittest.TestCase):
         value["action"] = {"type": "upgrade_building"}
         validate_manifest(value)
 
+    def test_accepts_replacement_manifest(self) -> None:
+        value = manifest()
+        value["action"] = {"type": "replace_building"}
+        validate_manifest(value)
+
     def test_action_specific_click_profiles_do_not_reuse_building_click(self) -> None:
         config = {
             "runtime_root": "/runtime",
@@ -78,6 +84,10 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(
             carrier_click_profile_path(config, "upgrade_building"),
             Path("/runtime/calibration/carrier_upgrade_click.json"),
+        )
+        self.assertEqual(
+            carrier_click_profile_path(config, "replace_building"),
+            Path("/runtime/calibration/carrier_replacement_click.json"),
         )
 
     def test_navigation_profiles_create_two_step_building_and_zone_sequences(self) -> None:
@@ -112,6 +122,18 @@ class SupervisorTests(unittest.TestCase):
             [
                 Path("/runtime/calibration/carrier_upgrade_open.json"),
                 Path("/runtime/calibration/carrier_upgrade_click.json"),
+            ],
+        )
+        self.assertEqual(
+            carrier_intermediate_profile_path(config, "replace_building"),
+            Path("/runtime/calibration/carrier_replacement_button.json"),
+        )
+        self.assertEqual(
+            carrier_click_sequence_paths(config, "replace_building"),
+            [
+                Path("/runtime/calibration/carrier_replacement_open.json"),
+                Path("/runtime/calibration/carrier_replacement_button.json"),
+                Path("/runtime/calibration/carrier_replacement_click.json"),
             ],
         )
 

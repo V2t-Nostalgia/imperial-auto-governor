@@ -19,6 +19,7 @@ SOURCE_CARRIER_IDS = {
     "build_district": "district_generator",
     "build_zone": "zone_research_engineering",
     "upgrade_building": "building_upc_upgrade_command_relay_target",
+    "replace_building": "building_upc_replacement_command_relay_target",
 }
 SUPPORTED_SOURCE_CARRIER_IDS = {
     "build_building": {
@@ -30,6 +31,10 @@ SUPPORTED_SOURCE_CARRIER_IDS = {
     "upgrade_building": {
         "building_upc_upgrade_command_relay_target",
         "building_research_lab_2",
+    },
+    "replace_building": {
+        "building_upc_replacement_command_relay_target",
+        "building_holo_theatres",
     },
 }
 # Backward-compatible aliases for the building-layout helpers below.
@@ -72,6 +77,9 @@ from iag_same_family_construction_rewriter import (  # noqa: E402
 )
 from iag_building_upgrade_rewriter import (  # noqa: E402
     rewrite_building_upgrade_carrier,
+)
+from iag_building_replacement_rewriter import (  # noqa: E402
+    rewrite_building_replacement_carrier,
 )
 from iag_packet_interceptor import (  # noqa: E402
     BUILD_HEAD,
@@ -213,16 +221,19 @@ def validate_request(request: dict[str, Any], *, client_id: str) -> dict[str, An
         ):
             if not isinstance(action.get(field), int) or int(action[field]) < 0:
                 raise HostInterceptorError(f"区划特化动作字段 {field} 无效。")
-    elif action_type == "upgrade_building":
+    elif action_type in {"upgrade_building", "replace_building"}:
         target_id = str(action.get("to_building_id", ""))
+        operation_label = "升级" if action_type == "upgrade_building" else "替换"
         try:
             encoded = target_id.encode("ascii")
         except UnicodeEncodeError as error:
-            raise HostInterceptorError("升级目标建筑 ID 必须是 ASCII。") from error
+            raise HostInterceptorError(
+                f"{operation_label}目标建筑 ID 必须是 ASCII。"
+            ) from error
         maximum_length = len(selected_carrier.encode("ascii"))
         if not encoded or len(encoded) > maximum_length:
             raise HostInterceptorError(
-                f"升级目标无法放入等长载体 {selected_carrier}。"
+                f"{operation_label}目标无法放入等长载体 {selected_carrier}。"
             )
         for field in (
             "build_queue_id",
@@ -231,7 +242,9 @@ def validate_request(request: dict[str, Any], *, client_id: str) -> dict[str, An
             "building_object_id",
         ):
             if not isinstance(action.get(field), int) or int(action[field]) < 0:
-                raise HostInterceptorError(f"建筑升级动作字段 {field} 无效。")
+                raise HostInterceptorError(
+                    f"建筑{operation_label}动作字段 {field} 无效。"
+                )
     return validated_action
 
 
@@ -582,7 +595,7 @@ def rewrite_carrier_payload(
                 district_id=int(action["district_id"]),
                 slot_selector=int(action["slot_selector"]),
             )
-        else:
+        elif action_type == "upgrade_building":
             result = rewrite_building_upgrade_carrier(
                 payload,
                 source_upgrade_id=carrier_id,
@@ -592,6 +605,18 @@ def rewrite_carrier_payload(
                 zone_id=int(action["zone_id"]),
                 building_object_id=int(action["building_object_id"]),
             )
+        elif action_type == "replace_building":
+            result = rewrite_building_replacement_carrier(
+                payload,
+                source_replacement_id=carrier_id,
+                target_replacement_id=str(action["to_building_id"]),
+                build_queue_id=int(action["build_queue_id"]),
+                colony_id=int(action["colony_id"]),
+                zone_id=int(action["zone_id"]),
+                source_building_object_id=int(action["building_object_id"]),
+            )
+        else:
+            raise HostInterceptorError(f"不支持的建设动作：{action_type}")
     except ValueError as error:
         raise HostInterceptorError(str(error)) from error
     if result is None:

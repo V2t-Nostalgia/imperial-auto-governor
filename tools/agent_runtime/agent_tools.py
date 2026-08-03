@@ -61,6 +61,7 @@ def construction_action_label(
         "build_building": "buildings",
         "build_district": "districts",
         "build_zone": "zones",
+        "replace_building": "buildings",
     }
     object_id = construction_action_id(action)
     if action_type == "upgrade_building":
@@ -76,6 +77,14 @@ def construction_action_label(
             {},
         )
         return str(definition.get("label_zh") or object_id)
+    if action_type == "replace_building":
+        buildings = capabilities.get("buildings", {})
+        target = buildings.get(object_id, {}) if isinstance(buildings, dict) else {}
+        target_label = str(target.get("label_zh") or object_id)
+        source_id = str(action.get("from_building_id") or "未知建筑")
+        source = buildings.get(source_id, {}) if isinstance(buildings, dict) else {}
+        source_label = str(source.get("label_zh") or source_id)
+        return f"将{source_label}替换为{target_label}"
     section = capabilities.get(section_by_type.get(action_type, ""), {})
     definition = section.get(object_id, {}) if isinstance(section, dict) else {}
     return str(definition.get("label_zh") or object_id)
@@ -334,6 +343,22 @@ def _matching_pending_count(
                 continue
             if not _same_id(item.get("zone_id"), action.get("zone_id")):
                 continue
+        elif action_type == "replace_building":
+            if item.get("kind") == "building_replacement":
+                if item.get("to_building_id") != action.get("to_building_id"):
+                    continue
+                if not _same_id(
+                    item.get("building_object_id"),
+                    action.get("building_object_id"),
+                ):
+                    continue
+            elif item.get("kind") == "building":
+                if item.get("building_id") != action.get("to_building_id"):
+                    continue
+            else:
+                continue
+            if not _same_id(item.get("zone_id"), action.get("zone_id")):
+                continue
         else:
             continue
         count += 1
@@ -395,7 +420,7 @@ def construction_action_evidence(
             ):
                 continue
             completed_count += 1
-    elif action_type == "upgrade_building":
+    elif action_type in {"upgrade_building", "replace_building"}:
         target_slot: dict[str, Any] | None = None
         for zone in planet.get("zones", []):
             if not _same_id(zone.get("zone_id"), action.get("zone_id")):
@@ -427,7 +452,7 @@ def construction_action_evidence(
         "pending_count": pending_count,
         "total_count": completed_count + pending_count,
     }
-    if action_type == "upgrade_building":
+    if action_type in {"upgrade_building", "replace_building"}:
         evidence["target_slot"] = target_slot
     return evidence
 
@@ -931,6 +956,17 @@ class AgentToolbox:
             pending.update(
                 {
                     "kind": "building_upgrade",
+                    "zone_id": action.get("zone_id"),
+                    "building_position": action.get("building_position"),
+                    "building_object_id": action.get("building_object_id"),
+                    "from_building_id": action.get("from_building_id"),
+                    "to_building_id": action.get("to_building_id"),
+                }
+            )
+        elif action.get("type") == "replace_building":
+            pending.update(
+                {
+                    "kind": "building_replacement",
                     "zone_id": action.get("zone_id"),
                     "building_position": action.get("building_position"),
                     "building_object_id": action.get("building_object_id"),
@@ -1512,7 +1548,7 @@ class AgentToolbox:
             action = result["action"]
             batch_index = self._submitted_count() + 1
             slot_detail = ""
-            if action.get("type") == "upgrade_building":
+            if action.get("type") in {"upgrade_building", "replace_building"}:
                 slot_detail = (
                     f"（区域 {action.get('zone_id')}，槽位 "
                     f"{action.get('building_position')}，对象 "

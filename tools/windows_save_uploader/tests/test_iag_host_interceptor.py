@@ -124,6 +124,18 @@ def research_lab_upgrade_carrier_payload() -> bytes:
     )
 
 
+def holo_theatre_replacement_carrier_payload() -> bytes:
+    """Real Sirius-I replacement captured on 2026-08-03."""
+    return bytes.fromhex(
+        "a10004000000b43d01000300f30101000300400201000c0003000000"
+        "c70001000c00ff7f0000cc0001000e0000130401000e0000db000100"
+        "1400210000000400410001000300822c010014000000000063400100"
+        "1400d81f0000bd3d01000300b22b01000f0016006275696c64696e67"
+        "5f686f6c6f5f7468656174726573132a010014004b000000b32b0100"
+        "1400940000015a3d01001400a3010000040004000400"
+    )
+
+
 def request(action: dict) -> dict:
     return {
         "schema": "iag.host_executor_request.v1",
@@ -420,6 +432,49 @@ class HostInterceptorTests(unittest.TestCase):
         self.assertEqual(metadata["layout"], "building_upgrade_v1")
         self.assertEqual(metadata["carrier_serial"], 31)
         self.assertEqual(metadata["source_building_object_id"], 16777534)
+
+    def test_replacement_rewrite_redirects_real_record_to_exact_slot(self) -> None:
+        action = {
+            "type": "replace_building",
+            "planet_id": 280,
+            "build_queue_id": 8555,
+            "colony_id": 76,
+            "zone_id": 229,
+            "building_position": 1,
+            "building_object_id": 463,
+            "from_building_id": "building_commercial_zone",
+            "to_building_id": "building_foundry_1",
+        }
+        legacy_request = request(action)
+        legacy_request["carrier"]["command"] = "building_holo_theatres"
+        validated = validate_request(
+            legacy_request,
+            client_id="client-12345678",
+        )
+
+        original = holo_theatre_replacement_carrier_payload()
+        rewritten, metadata = rewrite_carrier_payload(original, validated)
+
+        self.assertEqual(len(rewritten), len(original))
+        self.assertIn(b"building_foundry_1", rewritten)
+        self.assertIn(
+            bytes.fromhex("634001001400") + (8555).to_bytes(4, "little"),
+            rewritten,
+        )
+        self.assertIn(
+            bytes.fromhex("132a01001400") + (76).to_bytes(4, "little"),
+            rewritten,
+        )
+        self.assertIn(
+            bytes.fromhex("b32b01001400") + (229).to_bytes(4, "little"),
+            rewritten,
+        )
+        self.assertIn(
+            bytes.fromhex("5a3d01001400") + (463).to_bytes(4, "little"),
+            rewritten,
+        )
+        self.assertEqual(metadata["layout"], "building_replacement_v1")
+        self.assertEqual(metadata["carrier_serial"], 33)
 
     def test_rejects_payload_without_exact_carrier(self) -> None:
         action = {

@@ -101,7 +101,14 @@ SOURCE_EXCLUDED_PARTS = {
     "windows_build",
     "windows_dist",
 }
-SOURCE_EXCLUDED_PREFIXES = ("build_", "dist_", "release_", "hostbridge7", "hostbridge8")
+SOURCE_EXCLUDED_PREFIXES = (
+    "build_",
+    "dist_",
+    "release_",
+    "hostbridge7",
+    "hostbridge8",
+    "hostbridge9",
+)
 SOURCE_EXCLUDED_SUFFIXES = {
     ".env",
     ".7z",

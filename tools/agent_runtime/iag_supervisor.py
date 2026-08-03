@@ -118,6 +118,7 @@ def carrier_click_profile_path(
         "build_district": "carrier_district_click.json",
         "build_zone": "carrier_zone_click.json",
         "upgrade_building": "carrier_upgrade_click.json",
+        "replace_building": "carrier_replacement_click.json",
     }
     if action_type not in default_names:
         raise SupervisorError(f"Unsupported carrier action {action_type}.")
@@ -140,6 +141,7 @@ def carrier_navigation_profile_path(
         "build_building": "carrier_building_open.json",
         "build_zone": "carrier_zone_open.json",
         "upgrade_building": "carrier_upgrade_open.json",
+        "replace_building": "carrier_replacement_open.json",
     }
     if action_type == "build_district":
         return None
@@ -149,6 +151,25 @@ def carrier_navigation_profile_path(
     profiles = config.get("carrier_navigation_profiles")
     value = profiles.get(action_type) if isinstance(profiles, dict) else None
     path = Path(value or (Path("calibration") / default_names[action_type]))
+    if path.is_absolute():
+        return path.expanduser()
+    return runtime_root / path
+
+
+def carrier_intermediate_profile_path(
+    config: dict[str, Any],
+    action_type: str,
+) -> Path | None:
+    """Return an action-specific click between panel opening and command."""
+    if action_type != "replace_building":
+        return None
+    runtime_root = Path(config["runtime_root"]).expanduser()
+    profiles = config.get("carrier_intermediate_profiles")
+    value = profiles.get(action_type) if isinstance(profiles, dict) else None
+    path = Path(
+        value
+        or (Path("calibration") / "carrier_replacement_button.json")
+    )
     if path.is_absolute():
         return path.expanduser()
     return runtime_root / path
@@ -165,7 +186,19 @@ def carrier_click_sequence_paths(
     navigation_profile = carrier_navigation_profile_path(config, action_type)
     if navigation_profile is None:
         return [command_profile]
-    return [navigation_profile, command_profile]
+    intermediate_profile = carrier_intermediate_profile_path(
+        config,
+        action_type,
+    )
+    return [
+        profile
+        for profile in (
+            navigation_profile,
+            intermediate_profile,
+            command_profile,
+        )
+        if profile is not None
+    ]
 
 
 def execute_carrier_click_sequence(
@@ -218,6 +251,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         "build_district",
         "build_zone",
         "upgrade_building",
+        "replace_building",
     }:
         raise SupervisorError("The selected run has no executable construction action.")
     safety = manifest.get("safety", {})
@@ -706,6 +740,10 @@ def execute_run(run_dir: Path, config_path: Path) -> dict[str, Any]:
         raise SupervisorError(
             "execution_transport must be windows_host_bridge or "
             "linux_client_nfqueue."
+        )
+    if action_type == "replace_building":
+        raise SupervisorError(
+            "Building replacement requires the production Windows host bridge."
         )
 
     # Retained only as an explicit research fallback. The production route is

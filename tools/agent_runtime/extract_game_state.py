@@ -444,6 +444,25 @@ def colony_is_establishing(colony_block: str) -> bool:
     )
 
 
+def planet_ownership(
+    planet_block: str,
+    current_country_id: int,
+) -> dict[str, int | bool | None]:
+    """Return explicit ownership evidence without inferring missing fields."""
+    owner_id = scalar(planet_block, "owner")
+    original_owner_id = scalar(planet_block, "original_owner")
+    is_inherited = (
+        owner_id == current_country_id
+        and original_owner_id is not None
+        and original_owner_id != owner_id
+    )
+    return {
+        "owner_id": owner_id,
+        "original_owner_id": original_owner_id,
+        "is_inherited_colony": is_inherited,
+    }
+
+
 def extract_game_state(
     text: str,
     *,
@@ -493,6 +512,7 @@ def extract_game_state(
         )
         is_carrier = is_iag_carrier_planet(planet_block, colony_block, name)
         is_colonizing = colony_is_establishing(colony_block)
+        ownership = planet_ownership(planet_block, owner_id)
 
         zones_flat: list[dict[str, Any]] = []
         for district in profile["districts"]:
@@ -519,6 +539,8 @@ def extract_game_state(
                 ),
                 "planet_id": planet_id,
                 "colony_id": colony_id,
+                "owner_id": ownership["owner_id"],
+                "original_owner_id": ownership["original_owner_id"],
                 "planet_class": planet_class,
                 "planet_size": profile.get("planet_size"),
                 "active_modifiers": profile.get("active_modifiers", []),
@@ -533,6 +555,7 @@ def extract_game_state(
                 "safety": {
                     "is_iag_carrier": is_carrier,
                     "is_colonizing": is_colonizing,
+                    "is_inherited_colony": ownership["is_inherited_colony"],
                     "special_planet_requires_manual_review": special_marked,
                     "eligible_for_first_run": (
                         not is_carrier

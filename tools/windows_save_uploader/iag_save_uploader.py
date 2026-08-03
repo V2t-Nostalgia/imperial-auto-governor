@@ -673,7 +673,7 @@ class SaveUploader:
         return {
             "client_id": self.state["client_id"],
             "hostname": socket.gethostname(),
-            "app_version": "2026.08.02-hostbridge8",
+            "app_version": "2026.08.03-hostbridge9",
             "capabilities": capabilities,
             "state": state,
             "campaign_id": self.state.get("campaign_id"),

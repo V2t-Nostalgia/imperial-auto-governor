@@ -1294,6 +1294,14 @@ def enrich_snapshot_layout(
             )
             for building_type in sorted(upgrade_target_types)
         },
+        "replace_building": {
+            building_type: construction_cost_rule(
+                game_root,
+                "building",
+                building_type,
+            )
+            for building_type in sorted(target_building_types)
+        },
         "build_district": {
             district_type: construction_cost_rule(
                 game_root,
@@ -1516,6 +1524,12 @@ def enrich_snapshot_layout(
     ] = (
         "exact building object IDs and positions from the save; direct upgrade "
         "edges and prerequisites from matching installed Stellaris rules"
+    )
+    snapshot.setdefault("data_quality", {}).setdefault("precision", {})[
+        "building_replacements"
+    ] = (
+        "exact source building object IDs and positions from the save; target "
+        "costs and prerequisites from matching installed Stellaris rules"
     )
     return snapshot
 
