@@ -13,10 +13,19 @@ RELEASE = Path(__file__).resolve().parent
 if str(RELEASE) not in sys.path:
     sys.path.insert(0, str(RELEASE))
 
-from release_common import scan_tree  # noqa: E402
+from release_common import iter_public_source_files, scan_tree  # noqa: E402
 
 
 class ReleasePrivacyScannerTests(unittest.TestCase):
+    def test_public_source_contains_relay_hotfix_documents(self) -> None:
+        root = RELEASE.parents[1]
+        selected = {
+            path.relative_to(root).as_posix()
+            for path in iter_public_source_files()
+        }
+        self.assertIn("docs/STEAM_RELAY_HOTFIX.md", selected)
+        self.assertIn("docs/RELEASE_NOTES_0.5.8.md", selected)
+
     def test_allows_only_known_crawl4ai_container_home_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

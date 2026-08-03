@@ -51,7 +51,9 @@ ROOT_DIRECTORIES = {".github", "common", "events", "localisation", "LICENSES"}
 PUBLIC_DOCS = {
     "DEMO_VIDEO_PLAN.md",
     "PUBLICATION.md",
+    "RELEASE_NOTES_0.5.8.md",
     "RESEARCH_SERVICES.md",
+    "STEAM_RELAY_HOTFIX.md",
     "TECHNICAL_OVERVIEW.md",
     "UBUNTU_AGENT_README.md",
     "WINDOWS_AGENT_README.md",
