@@ -8,7 +8,6 @@ from PyInstaller.utils.hooks import collect_all
 ROOT = Path(SPECPATH).resolve()
 PACKET_ROOT = ROOT.parent / "packet_interceptor"
 pydivert_datas, pydivert_binaries, pydivert_hidden = collect_all("pydivert")
-psutil_datas, psutil_binaries, psutil_hidden = collect_all("psutil")
 pydivert_datas = [
     item
     for item in pydivert_datas
@@ -23,9 +22,9 @@ pydivert_hidden = [
 a = Analysis(
     ["iag_save_uploader_gui.py"],
     pathex=[str(ROOT), str(PACKET_ROOT)],
-    binaries=pydivert_binaries + psutil_binaries,
-    datas=pydivert_datas + psutil_datas,
-    hiddenimports=pydivert_hidden + psutil_hidden + [
+    binaries=pydivert_binaries,
+    datas=pydivert_datas,
+    hiddenimports=pydivert_hidden + [
         "iag_stream_command_injector",
         "iag_command_replacement_injector",
         "iag_building_to_zone_replacer",
