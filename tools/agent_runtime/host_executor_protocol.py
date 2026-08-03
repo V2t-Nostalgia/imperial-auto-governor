@@ -16,7 +16,7 @@ from typing import Any, Mapping
 
 
 HOST_EXECUTOR_CAPABILITY = "host_inbound_rewrite_v1"
-REQUIRED_HOST_EXECUTOR_APP_VERSION = "2026.08.03-hostbridge9"
+REQUIRED_HOST_EXECUTOR_APP_VERSION = "2026.08.03-hostbridge10"
 VERIFIED_CARRIER_BY_ACTION = {
     "build_building": "building_upc_construction_command_relay",
     "build_district": "district_generator",
@@ -335,6 +335,12 @@ def record_host_ready(
             "elevated": value.get("elevated") is True,
             "interceptor_open": value.get("interceptor_open") is True,
             "filter": str(value.get("filter", ""))[:1000],
+            "route_scope": str(value.get("route_scope", ""))[:160],
+            "stellaris_udp_ports": [
+                int(port)
+                for port in value.get("stellaris_udp_ports", [])[:96]
+                if isinstance(port, int) and 1 <= port <= 65535
+            ] if isinstance(value.get("stellaris_udp_ports"), list) else [],
             "process_id": int(value.get("process_id", 0) or 0),
         }
         if not ready["elevated"] or not ready["interceptor_open"]:

@@ -35,7 +35,7 @@ class HostBridgePairingTests(unittest.TestCase):
 
     def source_archive(self) -> Path:
         archive = self.root / "public.zip"
-        package_root = "IAGHostBridge-0.5.7-windows-x64"
+        package_root = "IAGHostBridge-0.5.8-windows-x64"
         example = {
             "server_url": "",
             "server_certificate_sha256": "REPLACE",
@@ -61,7 +61,7 @@ class HostBridgePairingTests(unittest.TestCase):
             certificate_fingerprint=fingerprint,
             upload_token="unit-test-token",
         )
-        package_root = "IAGHostBridge-0.5.7-windows-x64"
+        package_root = "IAGHostBridge-0.5.8-windows-x64"
         with zipfile.ZipFile(destination) as archive:
             config = json.loads(
                 archive.read(

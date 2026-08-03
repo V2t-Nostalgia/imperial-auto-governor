@@ -17,8 +17,12 @@ from tkinter import scrolledtext
 from tkinter import ttk
 from urllib.parse import urlparse
 
-from iag_host_interceptor import is_windows_admin
+from iag_host_interceptor import (
+    is_windows_admin,
+    packet_filter_for_routes,
+)
 from iag_save_uploader import (
+    APP_VERSION,
     PinnedHTTPSUploader,
     SaveUploader,
     UploaderError,
@@ -27,7 +31,6 @@ from iag_save_uploader import (
 )
 
 
-APP_VERSION = "2026.08.03-hostbridge9"
 APP_ROOT = (
     Path(sys.executable).resolve().parent
     if getattr(sys, "frozen", False)
@@ -37,13 +40,29 @@ DEFAULT_CONFIG_PATH = APP_ROOT / "iag_save_uploader.json"
 
 
 def run_health_check(arguments: list[str]) -> int:
-    """Exercise certificate-pinned HTTPS without opening WinDivert or the GUI."""
+    """Exercise packaged route filtering and HTTPS without opening WinDivert."""
     parser = argparse.ArgumentParser(prog="IAGHostBridgeGUI --health-check")
     parser.add_argument("--health-check", action="store_true", required=True)
     parser.add_argument("--server-url", required=True)
     parser.add_argument("--certificate-sha256", required=True)
     parser.add_argument("--token", required=True)
     values = parser.parse_args(arguments)
+    try:
+        import psutil  # type: ignore[import-not-found]
+        import pydivert  # type: ignore[import-not-found]
+    except ImportError as error:
+        raise UploaderError(
+            f"Host Bridge runtime dependency is missing: {error}"
+        ) from error
+    if not str(getattr(psutil, "__version__", "")):
+        raise UploaderError("psutil runtime did not expose a version.")
+    test_filter = packet_filter_for_routes(
+        "192.0.2.10",
+        [61000, 61001, 62000],
+    )
+    valid, _position, message = pydivert.WinDivert.check_filter(test_filter)
+    if not valid:
+        raise UploaderError(f"WinDivert route filter is invalid: {message}")
     client = PinnedHTTPSUploader(
         values.server_url,
         values.certificate_sha256,

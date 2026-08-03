@@ -74,7 +74,10 @@ def build(
             package_name="IAG Windows Host Bridge",
             platform="windows-x64",
             identity=identity,
-            health_checks=["certificate-pinned HTTPS console health check: passed"],
+            health_checks=[
+                "packaged psutil and WinDivert relay-route filter health check: passed",
+                "certificate-pinned HTTPS console health check: passed",
+            ],
         )
         create_zip(stage, destination)
         verify_archive(

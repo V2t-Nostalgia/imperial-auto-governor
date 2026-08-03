@@ -32,6 +32,7 @@ from iag_host_interceptor import (
 GAME_DATE_RE = re.compile(r'(?m)^\s*date="([^"]+)"\s*$')
 SAVE_NAME_RE = re.compile(r'(?m)^\s*name="([^"]*)"\s*$')
 VALID_FINGERPRINT_RE = re.compile(r"^[a-f0-9]{64}$")
+APP_VERSION = "2026.08.03-hostbridge10"
 
 
 class UploaderError(RuntimeError):
@@ -673,7 +674,7 @@ class SaveUploader:
         return {
             "client_id": self.state["client_id"],
             "hostname": socket.gethostname(),
-            "app_version": "2026.08.03-hostbridge9",
+            "app_version": APP_VERSION,
             "capabilities": capabilities,
             "state": state,
             "campaign_id": self.state.get("campaign_id"),

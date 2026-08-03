@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 
 UPLOADER = Path(__file__).resolve().parents[1]
@@ -14,7 +15,10 @@ for path in (UPLOADER, PACKET_TOOLS):
 from iag_host_interceptor import (  # noqa: E402
     SOURCE_CARRIER_IDS,
     HostInterceptorError,
+    discover_stellaris_udp_ports,
+    packet_filter_for_routes,
     packet_filter_for_peer,
+    packet_game_direction,
     rewrite_carrier_payload,
     validate_request,
 )
@@ -491,6 +495,81 @@ class HostInterceptorTests(unittest.TestCase):
         value = packet_filter_for_peer("192.0.2.10")
         self.assertIn("ip.SrcAddr == 192.0.2.10", value)
         self.assertIn("ip.DstAddr == 192.0.2.10", value)
+
+    def test_filter_covers_stellaris_ports_for_steam_relay(self) -> None:
+        value = packet_filter_for_routes(
+            "192.0.2.10",
+            [61000, 61001, 61002, 62000],
+        )
+        self.assertIn("ip.SrcAddr == 192.0.2.10", value)
+        self.assertIn("udp.SrcPort >= 61000", value)
+        self.assertIn("udp.DstPort <= 61002", value)
+        self.assertIn("udp.DstPort == 62000", value)
+
+    def test_public_relay_packet_matches_host_stellaris_port(self) -> None:
+        inbound = SimpleNamespace(
+            is_inbound=True,
+            is_outbound=False,
+            src_addr="203.0.113.77",
+            dst_addr="192.0.2.20",
+            src_port=27020,
+            dst_port=61111,
+        )
+        self.assertEqual(
+            packet_game_direction(
+                inbound,
+                peer_ip="192.0.2.10",
+                stellaris_udp_ports={61111},
+            ),
+            (True, False, "stellaris_process_udp_port"),
+        )
+
+    def test_unrelated_public_udp_packet_is_not_a_game_route(self) -> None:
+        packet = SimpleNamespace(
+            is_inbound=True,
+            is_outbound=False,
+            src_addr="203.0.113.77",
+            dst_addr="192.0.2.20",
+            src_port=27020,
+            dst_port=62000,
+        )
+        self.assertEqual(
+            packet_game_direction(
+                packet,
+                peer_ip="192.0.2.10",
+                stellaris_udp_ports={61111},
+            ),
+            (False, False, None),
+        )
+
+    def test_discovers_only_exact_stellaris_process_udp_ports(self) -> None:
+        fake_psutil = SimpleNamespace(
+            process_iter=lambda _fields: [
+                SimpleNamespace(
+                    info={
+                        "pid": 42,
+                        "name": "stellaris.exe",
+                        "exe": r"C:\\Games\\Stellaris\\stellaris.exe",
+                    }
+                ),
+                SimpleNamespace(
+                    info={
+                        "pid": 99,
+                        "name": "steam.exe",
+                        "exe": r"C:\\Steam\\steam.exe",
+                    }
+                ),
+            ],
+            net_connections=lambda kind: [
+                SimpleNamespace(pid=42, laddr=("0.0.0.0", 61111)),
+                SimpleNamespace(pid=42, laddr=("0.0.0.0", 61112)),
+                SimpleNamespace(pid=99, laddr=("0.0.0.0", 62000)),
+            ] if kind == "udp" else [],
+        )
+        self.assertEqual(
+            discover_stellaris_udp_ports(psutil_module=fake_psutil),
+            [61111, 61112],
+        )
 
     def test_rejects_non_verified_carrier(self) -> None:
         value = request(

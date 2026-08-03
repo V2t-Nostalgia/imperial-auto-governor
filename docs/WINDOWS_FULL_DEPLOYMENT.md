@@ -29,7 +29,7 @@ Stellaris、Windows Agent、LLM 和可选的联网研究服务。模型只从本
 
 ## 2. 启动合作端 Agent
 
-1. 完整解压 `IAGWindowsAgent-0.5.7-windows-x64.zip`。不要只移动 EXE。
+1. 完整解压 `IAGWindowsAgent-0.5.8-windows-x64.zip`。不要只移动 EXE。
 2. 双击 `IAGWindowsAgent.exe`。
 3. 在 GUI 中确认运行数据目录、Stellaris 安装目录、控制台监听地址和端口。需要让房主电脑访问时，
    监听地址使用 `0.0.0.0`；默认端口为 `8765`。

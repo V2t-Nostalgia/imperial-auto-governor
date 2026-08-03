@@ -3,7 +3,7 @@
 
 # 首次公开与长期归档
 
-本文件是 v0.5.7 的发布清单，不声称尚未取得的签名、DOI 或 SWHID。构建脚本不会创建临时签名密钥，也不会替发布者提交源码或操作外部服务。
+本文件是 v0.5.8 的发布清单，不声称尚未取得的签名、DOI 或 SWHID。构建脚本不会创建临时签名密钥，也不会替发布者提交源码或操作外部服务。
 
 ## 正式发布流程
 
@@ -23,35 +23,35 @@
    ```
 
 6. 提交经过审阅的源码。正式附件的 `RELEASE_MANIFEST.json` 必须记录该提交；若清单显示 `uncommitted-review-build`，只能用于本地审阅，提交后必须重建。
-7. 由发布者使用自己的长期密钥创建签名 annotated tag `v0.5.7`：
+7. 由发布者使用自己的长期密钥创建签名 annotated tag `v0.5.8`：
 
    ```bash
-   git tag -s v0.5.7 -m "Imperial Auto Governor v0.5.7"
-   git tag -v v0.5.7
-   git push origin v0.5.7
+   git tag -s v0.5.8 -m "Imperial Auto Governor v0.5.8"
+   git tag -v v0.5.8
+   git push origin v0.5.8
    ```
 
 8. 创建 GitHub Draft Release，目标必须是签名 Tag 对应的提交。
 9. 上传且只上传以下五个附件：
 
    ```text
-   ImperialAutoGovernor-0.5.7-source.zip
-   IAGWindowsAgent-0.5.7-windows-x64.zip
-   IAGHostBridge-0.5.7-windows-x64.zip
-   IAGUbuntuAgent-0.5.7-linux-x86_64.tar.gz
-   SHA256SUMS-0.5.7.txt
+   ImperialAutoGovernor-0.5.8-source.zip
+   IAGWindowsAgent-0.5.8-windows-x64.zip
+   IAGHostBridge-0.5.8-windows-x64.zip
+   IAGUbuntuAgent-0.5.8-linux-x86_64.tar.gz
+   SHA256SUMS-0.5.8.txt
    ```
 
-10. 从 GitHub Draft Release 重新下载五个附件，在独立空目录核对 `SHA256SUMS-0.5.7.txt`，并再次运行解压验证。
+10. 从 GitHub Draft Release 重新下载五个附件，在独立空目录核对 `SHA256SUMS-0.5.8.txt`，并再次运行解压验证。
 11. 验证无误后再把 Draft Release 正式发布。不要上传 `public_release.zip`、展开目录、重复包或本地审阅缓存。
 12. 发布后由发布者创建 Zenodo DOI，并向 Software Heritage 提交规范仓库 URL；服务返回后再记录 DOI 与 SWHID，不得预填。
 
 ## 签名清单
 
-可以额外生成 `SHA256SUMS-0.5.7.txt.asc`，但只能由项目发布者使用自己的长期密钥签署：
+可以额外生成 `SHA256SUMS-0.5.8.txt.asc`，但只能由项目发布者使用自己的长期密钥签署：
 
 ```bash
-gpg --armor --detach-sign SHA256SUMS-0.5.7.txt
+gpg --armor --detach-sign SHA256SUMS-0.5.8.txt
 ```
 
 代码和构建脚本不得创建临时密钥冒充发布者签名。

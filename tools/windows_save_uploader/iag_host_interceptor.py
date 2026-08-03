@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
+import ipaddress
 import os
 import sys
 import threading
@@ -48,6 +49,7 @@ ZONE_SLOT_BUILD_STRING_TAG = bytes.fromhex("b22b01000f00")
 ZONE_SLOT_COLONY_TAG = bytes.fromhex("132a01001400")
 ZONE_SLOT_ZONE_TAG = bytes.fromhex("b32b01001400")
 ZONE_SLOT_RECORD_TAIL = bytes.fromhex("040004000400")
+MAX_STELLARIS_UDP_PORTS = 96
 
 
 def _prepare_import_paths() -> None:
@@ -631,12 +633,142 @@ def rewrite_carrier_payload(
     return rewritten, metadata
 
 
+def normalize_process_name(value: str) -> str:
+    name = Path(str(value or "").strip()).name.casefold()
+    return name[:-4] if name.endswith(".exe") else name
+
+
+def discover_stellaris_udp_ports(
+    *,
+    psutil_module: Any | None = None,
+) -> list[int]:
+    """Return UDP ports owned by the live Stellaris process on the host."""
+    if psutil_module is None:
+        try:
+            import psutil as psutil_module  # type: ignore[import-not-found,no-redef]
+        except ImportError as error:
+            raise HostInterceptorError(
+                "Windows Host Bridge 缺少 psutil，无法发现 Stellaris UDP 端口。"
+            ) from error
+
+    stellaris_pids: set[int] = set()
+    try:
+        processes = psutil_module.process_iter(["pid", "name", "exe"])
+    except Exception as error:
+        raise HostInterceptorError(
+            f"无法枚举 Windows 进程以发现 Stellaris UDP 端口：{error}"
+        ) from error
+    for process in processes:
+        try:
+            info = process.info
+            identities = {
+                normalize_process_name(str(info.get("name") or "")),
+                normalize_process_name(str(info.get("exe") or "")),
+            }
+            if "stellaris" in identities:
+                stellaris_pids.add(int(info["pid"]))
+        except Exception:
+            continue
+    if not stellaris_pids:
+        return []
+
+    try:
+        connections = psutil_module.net_connections(kind="udp")
+    except Exception as error:
+        raise HostInterceptorError(
+            f"无法读取 Stellaris UDP 端口：{error}"
+        ) from error
+    ports: set[int] = set()
+    for connection in connections:
+        if getattr(connection, "pid", None) not in stellaris_pids:
+            continue
+        local = getattr(connection, "laddr", None)
+        if not local:
+            continue
+        try:
+            port = int(local.port if hasattr(local, "port") else local[1])
+        except (AttributeError, IndexError, TypeError, ValueError):
+            continue
+        if 1 <= port <= 65535:
+            ports.add(port)
+    if len(ports) > MAX_STELLARIS_UDP_PORTS:
+        raise HostInterceptorError(
+            "Stellaris 占用的 UDP 端口数量异常，拒绝打开过宽的 WinDivert 过滤器："
+            f"{len(ports)} > {MAX_STELLARIS_UDP_PORTS}。"
+        )
+    return sorted(ports)
+
+
+def _contiguous_port_ranges(ports: list[int]) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    for port in sorted(set(ports)):
+        if not 1 <= port <= 65535:
+            raise HostInterceptorError(f"无效的 UDP 端口：{port}")
+        if ranges and port == ranges[-1][1] + 1:
+            ranges[-1] = (ranges[-1][0], port)
+        else:
+            ranges.append((port, port))
+    return ranges
+
+
+def _port_filter_terms(ports: list[int]) -> list[str]:
+    terms: list[str] = []
+    for start, end in _contiguous_port_ranges(ports):
+        for field in ("udp.SrcPort", "udp.DstPort"):
+            if start == end:
+                terms.append(f"{field} == {start}")
+            else:
+                terms.append(
+                    f"({field} >= {start} and {field} <= {end})"
+                )
+    return terms
+
+
+def packet_filter_for_routes(peer_ip: str, stellaris_udp_ports: list[int]) -> str:
+    """Cover direct-LAN traffic and Steam relay traffic bound to Stellaris."""
+    try:
+        peer = ipaddress.ip_address(peer_ip)
+    except ValueError as error:
+        raise HostInterceptorError(f"合作端 IP 无效：{peer_ip}") from error
+    if peer.version != 4:
+        raise HostInterceptorError("房主执行桥目前只支持 IPv4 合作端地址。")
+    terms = [
+        f"ip.SrcAddr == {peer}",
+        f"ip.DstAddr == {peer}",
+        *_port_filter_terms(stellaris_udp_ports),
+    ]
+    return "udp and (" + " or ".join(terms) + ")"
+
+
 def packet_filter_for_peer(peer_ip: str) -> str:
-    return (
-        "udp and ("
-        f"ip.SrcAddr == {peer_ip} or ip.DstAddr == {peer_ip}"
-        ")"
+    """Backward-compatible direct-LAN-only filter helper."""
+    return packet_filter_for_routes(peer_ip, [])
+
+
+def packet_game_direction(
+    packet: Any,
+    *,
+    peer_ip: str,
+    stellaris_udp_ports: set[int],
+) -> tuple[bool, bool, str | None]:
+    """Classify direct or relay traffic without trusting the relay address."""
+    direct_inbound = bool(packet.is_inbound and packet.src_addr == peer_ip)
+    direct_outbound = bool(packet.is_outbound and packet.dst_addr == peer_ip)
+    port_inbound = bool(
+        packet.is_inbound and int(packet.dst_port) in stellaris_udp_ports
     )
+    port_outbound = bool(
+        packet.is_outbound and int(packet.src_port) in stellaris_udp_ports
+    )
+    inbound = direct_inbound or port_inbound
+    outbound = direct_outbound or port_outbound
+    if direct_inbound or direct_outbound:
+        route = "direct_peer_ip"
+    elif port_inbound or port_outbound:
+        route = "stellaris_process_udp_port"
+    else:
+        route = None
+    return inbound, outbound, route
 
 
 def run_host_interceptor(
@@ -663,7 +795,15 @@ def run_host_interceptor(
     peer_ip = str(request.get("peer_ip", "")).strip()
     if not peer_ip:
         raise HostInterceptorError("执行请求缺少合作端 IP。")
-    packet_filter = packet_filter_for_peer(peer_ip)
+    stellaris_udp_ports = discover_stellaris_udp_ports()
+    if not stellaris_udp_ports:
+        raise HostInterceptorError(
+            "未发现房主 Stellaris 进程拥有的 UDP 端口；为避免在错误网络流上"
+            "放行原始载体，本次不会回报 READY，也不会触发点击。"
+        )
+    packet_filter = packet_filter_for_routes(peer_ip, stellaris_udp_ports)
+    route_scope = "direct_peer_ip_and_stellaris_process_udp_ports"
+    stellaris_udp_port_set = set(stellaris_udp_ports)
     deadline = time.monotonic() + max(int(request.get("timeout_seconds", 120)), 15)
     observe_seconds = max(int(request.get("observe_seconds", 15)), 3)
     stop = stop_event or threading.Event()
@@ -671,6 +811,8 @@ def run_host_interceptor(
         "request_id": request["request_id"],
         "carrier_command": carrier_id,
         "filter": packet_filter,
+        "route_scope": route_scope,
+        "stellaris_udp_ports": stellaris_udp_ports,
         "inbound_packets": 0,
         "outbound_packets": 0,
         "carrier_seen": False,
@@ -681,6 +823,7 @@ def run_host_interceptor(
         "padding_length": None,
         "before_sha256": None,
         "after_sha256": None,
+        "carrier_route": None,
     }
     replacement_time: float | None = None
 
@@ -707,19 +850,29 @@ def run_host_interceptor(
                 "elevated": True,
                 "interceptor_open": True,
                 "filter": packet_filter,
+                "route_scope": route_scope,
+                "stellaris_udp_ports": stellaris_udp_ports,
                 "process_id": os.getpid(),
                 "carrier_command": carrier_id,
             }
         )
-        publish("host_interceptor_ready", filter=packet_filter)
+        publish(
+            "host_interceptor_ready",
+            filter=packet_filter,
+            route_scope=route_scope,
+            stellaris_udp_ports=stellaris_udp_ports,
+        )
 
         for packet in divert:
             original = packet.payload or b""
-            is_peer_inbound = packet.is_inbound and packet.src_addr == peer_ip
-            is_peer_outbound = packet.is_outbound and packet.dst_addr == peer_ip
-            if is_peer_inbound:
+            is_game_inbound, is_game_outbound, packet_route = packet_game_direction(
+                packet,
+                peer_ip=peer_ip,
+                stellaris_udp_ports=stellaris_udp_port_set,
+            )
+            if is_game_inbound:
                 telemetry["inbound_packets"] += 1
-            elif is_peer_outbound:
+            elif is_game_outbound:
                 telemetry["outbound_packets"] += 1
 
             if stop.is_set():
@@ -733,7 +886,7 @@ def run_host_interceptor(
 
             try:
                 if (
-                    is_peer_inbound
+                    is_game_inbound
                     and not telemetry["rewritten"]
                     and carrier_needle in original
                 ):
@@ -750,6 +903,7 @@ def run_host_interceptor(
                             "padding_length": metadata.get("padding_length"),
                             "before_sha256": sha256_hex(original),
                             "after_sha256": sha256_hex(rewritten),
+                            "carrier_route": packet_route,
                         }
                     )
                     replacement_time = time.monotonic()
@@ -761,7 +915,7 @@ def run_host_interceptor(
                         **metadata,
                     )
                 elif (
-                    is_peer_outbound
+                    is_game_outbound
                     and telemetry["rewritten"]
                     and target_needle(action) in original
                 ):
@@ -777,7 +931,7 @@ def run_host_interceptor(
                 # A packet containing the exact carrier is never forwarded
                 # unchanged after a failed rewrite attempt.
                 if not (
-                    is_peer_inbound and carrier_needle in original
+                    is_game_inbound and carrier_needle in original
                 ):
                     packet.payload = original
                     divert.send(packet, recalculate_checksum=True)

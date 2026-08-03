@@ -173,6 +173,8 @@ class HostExecutorProtocolTests(unittest.TestCase):
                 "elevated": True,
                 "interceptor_open": True,
                 "filter": "udp",
+                "route_scope": "direct_peer_ip_and_stellaris_process_udp_ports",
+                "stellaris_udp_ports": [61111, 61112],
                 "process_id": 42,
             },
             client_id=self.client["client_id"],
@@ -184,6 +186,11 @@ class HostExecutorProtocolTests(unittest.TestCase):
             timeout_seconds=0.2,
         )
         self.assertTrue(ready["interceptor_open"])
+        self.assertEqual(
+            ready["route_scope"],
+            "direct_peer_ip_and_stellaris_process_udp_ports",
+        )
+        self.assertEqual(ready["stellaris_udp_ports"], [61111, 61112])
 
         record_host_result(
             self.config,

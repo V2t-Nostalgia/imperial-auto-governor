@@ -105,6 +105,10 @@ Stellaris 的游戏脚本不能读取任意本地文件、调用外部模型 API
 
 生产路线运行在 Windows 房主电脑上，使用 WinDivert 捕获非房主合作玩家发往房主的入站 UDP 流量。它不是通用数据包注入器，也不会让 LLM 自由编写十六进制命令。
 
+从 v0.5.8 起，房主桥会在每次一次性执行前重新枚举房主本机 `stellaris.exe` 实际占用的 UDP 端口，并同时保留合作端 IP 的直连筛选。前者覆盖 Steam 公网或中继会话，后者兼容局域网直连；载体仍须出现在进入房主 Stellaris 端口的真实流量中，其他进程的 UDP 不会因为公网地址变化而被纳入改写。
+
+故障证据、根因和回归边界见 [docs/STEAM_RELAY_HOTFIX.md](docs/STEAM_RELAY_HOTFIX.md)。
+
 执行器遵守以下约束：
 
 - 必须使用本局实时出现的真实载体命令。
@@ -216,14 +220,14 @@ python tools/release/verify_release.py --directory public_release
 
 ## 发行附件
 
-v0.5.7 使用五个正式附件：
+v0.5.8 使用五个正式附件：
 
 ```text
-ImperialAutoGovernor-0.5.7-source.zip
-IAGWindowsAgent-0.5.7-windows-x64.zip
-IAGHostBridge-0.5.7-windows-x64.zip
-IAGUbuntuAgent-0.5.7-linux-x86_64.tar.gz
-SHA256SUMS-0.5.7.txt
+ImperialAutoGovernor-0.5.8-source.zip
+IAGWindowsAgent-0.5.8-windows-x64.zip
+IAGHostBridge-0.5.8-windows-x64.zip
+IAGUbuntuAgent-0.5.8-linux-x86_64.tar.gz
+SHA256SUMS-0.5.8.txt
 ```
 
 源码、构建、隐私扫描、签名 Tag、GitHub Release、Zenodo 和 Software Heritage 流程见 [docs/PUBLICATION.md](docs/PUBLICATION.md)。技术架构见 [docs/TECHNICAL_OVERVIEW.md](docs/TECHNICAL_OVERVIEW.md)。

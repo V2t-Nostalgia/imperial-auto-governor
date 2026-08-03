@@ -2,7 +2,7 @@ cff-version: 1.2.0
 message: "If you use this software or its documented method, please cite it using this metadata."
 title: "Imperial Auto Governor"
 type: software
-version: 0.5.7
+version: 0.5.8
 date-released: 2026-08-03
 authors:
   - name: "Nostalgia"

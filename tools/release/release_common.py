@@ -108,6 +108,7 @@ SOURCE_EXCLUDED_PREFIXES = (
     "hostbridge7",
     "hostbridge8",
     "hostbridge9",
+    "hostbridge10",
 )
 SOURCE_EXCLUDED_SUFFIXES = {
     ".env",
