@@ -331,10 +331,10 @@
         <label class="check-line"><input id="fixed-click-guard-enabled" type="checkbox">启用固定点击界面校验</label>
         <div id="session-proxy-settings" class="session-proxy-settings" hidden>
           <div class="subpanel-heading"><strong>会话代理</strong><span id="session-proxy-state" class="status-tag">未启动</span></div>
-          <p class="hint">Windows Agent 必须以管理员身份运行，并在合作端加入房间前启动代理；一旦本局插入过命令，必须先退出房间再停止代理。</p>
+          <p class="hint">Windows Agent 必须以管理员身份运行，并在合作端加入房间前启动代理。发现阶段会根据本机 Stellaris UDP 端口识别局域网直连或 Steam 中继的实际对端；一旦本局插入过命令，必须先退出房间再停止代理。</p>
           <div class="proxy-address-grid">
             <label>合作端本地 IP（留空自动）<input id="session-proxy-local-ip" type="text" placeholder="自动发现"></label>
-            <label>房主 IP（必填）<input id="session-proxy-host-ip" type="text" placeholder="&lt;HOST_IP&gt;"></label>
+            <label>房主 IP（直连提示，必填）<input id="session-proxy-host-ip" type="text" placeholder="&lt;HOST_IP&gt;"></label>
             <label>合作端 actor（0 自动）<input id="session-proxy-source-actor" type="number" min="0" step="1"></label>
             <label>房主 actor<input id="session-proxy-host-actor" type="number" min="1" step="1"></label>
           </div>

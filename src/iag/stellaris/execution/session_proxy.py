@@ -17,6 +17,7 @@ until the co-op client has left the room.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import time
@@ -29,10 +30,10 @@ from typing import Any
 
 from iag.stellaris.execution.packet.autonomous_commands import (
     ACTOR_TAG,
-    BuildingTarget,
     ORIGIN_TAG,
     RESEARCH_LAB_RECORD_TEMPLATE,
     SERIAL_WIDTH,
+    BuildingTarget,
     _actor_origin,
     _serial_u32,
     _unique_value_offset,
@@ -47,14 +48,14 @@ from iag.stellaris.execution.packet.iag_same_family_construction_rewriter import
 from iag.stellaris.execution.packet.iag_stream_command_injector import (
     COMMAND_SERIAL_OFFSET,
     RELIABLE_HEADER_LENGTH,
-    StreamTranslator,
     UINT24_HALF_RANGE,
+    StreamTranslator,
     find_command_records,
     forward_distance_uint24,
     is_reliable_packet,
     read_uint24_be,
 )
-
+from iag.stellaris.execution.passive_network_observer import owned_udp_ports
 
 APPLICATION_COMMAND_PREFIX = b"\x00\x00\x00"
 COMMAND_RECORD_LENGTH = len(RESEARCH_LAB_RECORD_TEMPLATE)
@@ -65,6 +66,8 @@ FLEET_DESTINATION_TAGS = {
     "0c3a01001400",
     "132a01001400",
 }
+MAX_STELLARIS_UDP_PORTS = 96
+DISCOVERY_FILTER = "ip and udp"
 
 DISTRICT_GENERATOR_RECORD = bytes.fromhex(
     "890004000000b43d01000300f30101000300400201000c0002000000"
@@ -142,25 +145,42 @@ def write_json(
 
 @dataclass(frozen=True)
 class FlowKey:
+    local_ip: str
     local_port: int
+    host_ip: str
     host_port: int
+    route: str
 
 
 @dataclass
 class FlowEvidence:
     outbound_packets: int = 0
     inbound_packets: int = 0
+    reliable_outbound_packets: int = 0
+    reliable_inbound_packets: int = 0
     first_seen: float = 0.0
     last_seen: float = 0.0
+    last_outbound_seen: float = 0.0
+    last_inbound_seen: float = 0.0
 
 
 class FlowDiscovery:
-    """Lock one fresh bidirectional reliable flow between the configured IPs."""
+    """Lock one fresh reliable flow over a direct or Steam-relay route."""
 
-    def __init__(self, minimum_each_direction: int = 3) -> None:
+    def __init__(
+        self,
+        minimum_each_direction: int = 3,
+        *,
+        relay_settle_seconds: float = 0.5,
+        candidate_window_seconds: float = 5.0,
+    ) -> None:
         self.minimum_each_direction = minimum_each_direction
+        self.relay_settle_seconds = relay_settle_seconds
+        self.candidate_window_seconds = candidate_window_seconds
         self.candidates: dict[FlowKey, FlowEvidence] = defaultdict(FlowEvidence)
         self.locked: FlowKey | None = None
+        self.provisional: FlowKey | None = None
+        self.provisional_since = 0.0
 
     def observe(
         self,
@@ -171,34 +191,191 @@ class FlowDiscovery:
         dst_port: int,
         local_ip: str,
         host_ip: str,
+        port_owners: dict[int, set[str]],
+        game_process_present: bool,
+        is_outbound: bool,
+        is_inbound: bool,
         payload: bytes,
         observed_at: float,
     ) -> FlowKey | None:
-        if self.locked is not None or not is_reliable_packet(payload):
+        if self.locked is not None or not game_process_present:
             return self.locked
-        if src_ip == local_ip and dst_ip == host_ip:
-            key = FlowKey(local_port=src_port, host_port=dst_port)
+
+        direct_outbound = is_outbound and src_ip == local_ip and dst_ip == host_ip
+        direct_inbound = is_inbound and src_ip == host_ip and dst_ip == local_ip
+        outbound_owners = port_owners.get(src_port, set())
+        inbound_owners = port_owners.get(dst_port, set())
+        relay_outbound = is_outbound and bool(outbound_owners)
+        relay_inbound = is_inbound and bool(inbound_owners)
+        if direct_outbound or relay_outbound:
+            owner_names = outbound_owners
+            key = FlowKey(
+                local_ip=src_ip,
+                local_port=src_port,
+                host_ip=dst_ip,
+                host_port=dst_port,
+                route=(
+                    "direct_peer_ip"
+                    if direct_outbound
+                    else _brokered_route(owner_names)
+                ),
+            )
             direction = "outbound"
-        elif src_ip == host_ip and dst_ip == local_ip:
-            key = FlowKey(local_port=dst_port, host_port=src_port)
+        elif direct_inbound or relay_inbound:
+            owner_names = inbound_owners
+            key = FlowKey(
+                local_ip=dst_ip,
+                local_port=dst_port,
+                host_ip=src_ip,
+                host_port=src_port,
+                route=(
+                    "direct_peer_ip"
+                    if direct_inbound
+                    else _brokered_route(owner_names)
+                ),
+            )
             direction = "inbound"
         else:
             return None
+
+        try:
+            peer = ipaddress.ip_address(key.host_ip)
+        except ValueError:
+            return None
+        if peer.version != 4 or peer.is_unspecified or peer.is_multicast:
+            return None
+
+        for stale_key, stale_evidence in list(self.candidates.items()):
+            if (
+                stale_key != key
+                and observed_at - stale_evidence.last_seen
+                > self.candidate_window_seconds
+            ):
+                del self.candidates[stale_key]
 
         evidence = self.candidates[key]
         if evidence.first_seen == 0.0:
             evidence.first_seen = observed_at
         evidence.last_seen = observed_at
         if direction == "outbound":
+            if (
+                evidence.last_outbound_seen
+                and observed_at - evidence.last_outbound_seen
+                > self.candidate_window_seconds
+            ):
+                evidence.outbound_packets = 0
+                evidence.reliable_outbound_packets = 0
             evidence.outbound_packets += 1
+            evidence.last_outbound_seen = observed_at
+            if is_reliable_packet(payload):
+                evidence.reliable_outbound_packets += 1
         else:
+            if (
+                evidence.last_inbound_seen
+                and observed_at - evidence.last_inbound_seen
+                > self.candidate_window_seconds
+            ):
+                evidence.inbound_packets = 0
+                evidence.reliable_inbound_packets = 0
             evidence.inbound_packets += 1
-        if (
-            evidence.outbound_packets >= self.minimum_each_direction
-            and evidence.inbound_packets >= self.minimum_each_direction
-        ):
-            self.locked = key
+            evidence.last_inbound_seen = observed_at
+            if is_reliable_packet(payload):
+                evidence.reliable_inbound_packets += 1
+        eligible = [
+            candidate
+            for candidate, candidate_evidence in self.candidates.items()
+            if observed_at - candidate_evidence.last_seen
+            <= self.candidate_window_seconds
+            and observed_at - candidate_evidence.last_outbound_seen
+            <= self.candidate_window_seconds
+            and observed_at - candidate_evidence.last_inbound_seen
+            <= self.candidate_window_seconds
+            and candidate_evidence.outbound_packets
+            >= self.minimum_each_direction
+            and candidate_evidence.inbound_packets
+            >= self.minimum_each_direction
+            and (
+                candidate_evidence.reliable_outbound_packets
+                or candidate_evidence.reliable_inbound_packets
+            )
+        ]
+        direct = [candidate for candidate in eligible if candidate.route == "direct_peer_ip"]
+        if len(direct) == 1:
+            self.locked = direct[0]
+        elif len(eligible) != 1:
+            self.provisional = None
+            self.provisional_since = 0.0
+        elif self.provisional != eligible[0]:
+            self.provisional = eligible[0]
+            self.provisional_since = observed_at
+        elif observed_at - self.provisional_since >= self.relay_settle_seconds:
+            self.locked = eligible[0]
         return self.locked
+
+    def candidate_payload(self) -> list[dict[str, object]]:
+        """Expose bounded route evidence without logging packet contents."""
+        return [
+            {
+                **asdict(key),
+                "outbound_packets": evidence.outbound_packets,
+                "inbound_packets": evidence.inbound_packets,
+                "reliable_outbound_packets": (
+                    evidence.reliable_outbound_packets
+                ),
+                "reliable_inbound_packets": evidence.reliable_inbound_packets,
+            }
+            for key, evidence in sorted(
+                self.candidates.items(),
+                key=lambda item: (
+                    item[0].host_ip,
+                    item[0].host_port,
+                    item[0].local_port,
+                ),
+            )
+        ][:16]
+
+
+def _brokered_route(owner_names: set[str]) -> str:
+    normalized = {Path(value).stem.casefold() for value in owner_names}
+    if "steam" in normalized:
+        return "steam_brokered_udp_port"
+    return "stellaris_process_udp_port"
+
+
+def session_udp_port_owners(
+    process_names: list[str],
+    transport_process_names: list[str],
+) -> tuple[dict[int, set[str]], bool]:
+    """Return current game/transport UDP ports and game-process presence."""
+    owners, game_process_present = owned_udp_ports(
+        process_names,
+        transport_process_names,
+    )
+    owners = {
+        int(port): set(names)
+        for port, names in owners.items()
+        if 1 <= int(port) <= 65535
+    }
+    if len(owners) > MAX_STELLARIS_UDP_PORTS:
+        raise RuntimeError(
+            "Stellaris/transport UDP port count is unexpectedly broad: "
+            f"{len(owners)} > {MAX_STELLARIS_UDP_PORTS}."
+        )
+    return owners, game_process_present
+
+
+def packet_filter_for_flow(flow: FlowKey) -> str:
+    """Build the modifying filter only after the actual peer tuple is known."""
+    return (
+        "udp and ("
+        f"(outbound and ip.SrcAddr == {flow.local_ip} and "
+        f"ip.DstAddr == {flow.host_ip} and udp.SrcPort == {flow.local_port} "
+        f"and udp.DstPort == {flow.host_port}) or "
+        f"(inbound and ip.SrcAddr == {flow.host_ip} and "
+        f"ip.DstAddr == {flow.local_ip} and udp.SrcPort == {flow.host_port} "
+        f"and udp.DstPort == {flow.local_port})"
+        ")"
+    )
 
 
 @dataclass(frozen=True)
@@ -874,6 +1051,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--local-ip", required=True)
     parser.add_argument("--host-ip", required=True)
+    parser.add_argument("--process-name", action="append")
+    parser.add_argument("--transport-process-name", action="append")
     parser.add_argument("--minimum-flow-packets", type=int, default=3)
     parser.add_argument("--max-payload-length", type=int, default=1400)
     parser.add_argument("--response-timeout-seconds", type=int, default=30)
@@ -895,8 +1074,24 @@ def run() -> int:
     if args.minimum_flow_packets < 2:
         raise ValueError("minimum-flow-packets must be at least 2.")
 
+    process_names = [
+        str(value).strip()
+        for value in (args.process_name or ["stellaris"])
+        if str(value).strip()
+    ]
+    transport_process_names = [
+        str(value).strip()
+        for value in (args.transport_process_name or ["steam"])
+        if str(value).strip()
+    ]
     session_id = uuid.uuid4().hex
     discovery = FlowDiscovery(args.minimum_flow_packets)
+    port_owners, game_process_present = session_udp_port_owners(
+        process_names,
+        transport_process_names,
+    )
+    last_port_refresh = time.monotonic()
+    active_filter = DISCOVERY_FILTER
     last_serials: dict[tuple[str, int, int], int] = {}
     arm_request: ArmRequest | None = None
     arm_error_signature: tuple[int, int] | None = None
@@ -936,7 +1131,17 @@ def run() -> int:
             "pid": os.getpid(),
             "local_ip": args.local_ip,
             "host_ip": args.host_ip,
+            "configured_host_ip": args.host_ip,
+            "route_scope": "direct_peer_ip_or_owned_game_transport_udp_port",
+            "active_filter": active_filter,
+            "game_process_present": game_process_present,
+            "stellaris_udp_ports": sorted(port_owners),
+            "udp_port_owners": {
+                str(port): sorted(names)
+                for port, names in sorted(port_owners.items())
+            },
             "flow": asdict(discovery.locked) if discovery.locked else None,
+            "flow_candidates": discovery.candidate_payload(),
             "last_serials": {
                 f"{direction}_actor_{actor}_origin_{origin}": serial
                 for (direction, actor, origin), serial in sorted(last_serials.items())
@@ -1010,17 +1215,18 @@ def run() -> int:
 
     import pydivert  # type: ignore[import-not-found]
 
-    packet_filter = (
-        "udp and ("
-        f"(ip.SrcAddr == {args.local_ip} and ip.DstAddr == {args.host_ip}) or "
-        f"(ip.SrcAddr == {args.host_ip} and ip.DstAddr == {args.local_ip}))"
-    )
     started = {
         "event": "session_proxy_started",
         "timestamp": now_iso(),
         "session_id": session_id,
         "pid": os.getpid(),
-        "filter": packet_filter,
+        "filter": DISCOVERY_FILTER,
+        "route_scope": "direct_peer_ip_or_owned_game_transport_udp_port",
+        "configured_host_ip": args.host_ip,
+        "process_names": process_names,
+        "transport_process_names": transport_process_names,
+        "game_process_present": game_process_present,
+        "stellaris_udp_ports": sorted(port_owners),
         "inserted_length": INSERTED_LENGTH,
         "application_prefix_hex": APPLICATION_COMMAND_PREFIX.hex(),
         "command_record_length": COMMAND_RECORD_LENGTH,
@@ -1037,7 +1243,10 @@ def run() -> int:
     append_jsonl(args.log, started)
 
     try:
-        with pydivert.WinDivert(packet_filter) as divert:
+        with pydivert.WinDivert(
+            DISCOVERY_FILTER,
+            flags=pydivert.Flag.SNIFF,
+        ) as discovery_divert:
             args.ready_file.parent.mkdir(parents=True, exist_ok=True)
             write_json(args.ready_file, started, required=True)
             write_json(args.status_file, status())
@@ -1045,48 +1254,115 @@ def run() -> int:
             print(f"Session ID: {session_id}", flush=True)
             print("State: READY_WAITING_FOR_FLOW", flush=True)
 
+            for packet in discovery_divert:
+                original = packet.payload or b""
+                now = time.monotonic()
+                if now - last_port_refresh >= 1.0:
+                    refreshed_owners, refreshed_game_present = (
+                        session_udp_port_owners(
+                            process_names,
+                            transport_process_names,
+                        )
+                    )
+                    last_port_refresh = now
+                    if (
+                        refreshed_owners != port_owners
+                        or refreshed_game_present != game_process_present
+                    ):
+                        port_owners = refreshed_owners
+                        game_process_present = refreshed_game_present
+                        append_jsonl(
+                            args.log,
+                            {
+                                "event": "game_transport_udp_ports_refreshed",
+                                "timestamp": now_iso(),
+                                "game_process_present": game_process_present,
+                                "udp_port_owners": {
+                                    str(port): sorted(names)
+                                    for port, names in sorted(port_owners.items())
+                                },
+                            },
+                        )
+                        write_json(args.status_file, status())
+
+                candidate_packets_before = sum(
+                    evidence.outbound_packets + evidence.inbound_packets
+                    for evidence in discovery.candidates.values()
+                )
+                locked = discovery.observe(
+                    src_ip=str(packet.src_addr),
+                    src_port=int(packet.src_port),
+                    dst_ip=str(packet.dst_addr),
+                    dst_port=int(packet.dst_port),
+                    local_ip=args.local_ip,
+                    host_ip=args.host_ip,
+                    port_owners=port_owners,
+                    game_process_present=game_process_present,
+                    is_outbound=bool(packet.is_outbound),
+                    is_inbound=bool(packet.is_inbound),
+                    payload=original,
+                    observed_at=now,
+                )
+                candidate_packets_after = sum(
+                    evidence.outbound_packets + evidence.inbound_packets
+                    for evidence in discovery.candidates.values()
+                )
+                if candidate_packets_after != candidate_packets_before:
+                    write_json(args.status_file, status())
+                if locked is not None:
+                    append_jsonl(
+                        args.log,
+                        {
+                            "event": "flow_locked",
+                            "timestamp": now_iso(),
+                            **asdict(locked),
+                            "configured_host_ip": args.host_ip,
+                        },
+                    )
+                    write_json(args.status_file, status())
+                    break
+                if now - started_at >= args.session_seconds:
+                    return 0
+
+        locked = discovery.locked
+        if locked is None:
+            return 0
+        active_filter = packet_filter_for_flow(locked)
+        append_jsonl(
+            args.log,
+            {
+                "event": "modifying_filter_activated",
+                "timestamp": now_iso(),
+                "filter": active_filter,
+                "flow": asdict(locked),
+            },
+        )
+        write_json(args.status_file, status())
+
+        with pydivert.WinDivert(active_filter) as divert:
+            print(
+                "State: FLOW_LOCKED "
+                f"({locked.route} {locked.local_ip}:{locked.local_port} -> "
+                f"{locked.host_ip}:{locked.host_port})",
+                flush=True,
+            )
             for packet in divert:
                 original = packet.payload or b""
                 outgoing = original
                 now = time.monotonic()
                 src_ip = str(packet.src_addr)
                 dst_ip = str(packet.dst_addr)
-
-                just_locked = discovery.locked is None
-                locked = discovery.observe(
-                    src_ip=src_ip,
-                    src_port=int(packet.src_port),
-                    dst_ip=dst_ip,
-                    dst_port=int(packet.dst_port),
-                    local_ip=args.local_ip,
-                    host_ip=args.host_ip,
-                    payload=original,
-                    observed_at=now,
-                )
-                if just_locked and locked is not None:
-                    append_jsonl(
-                        args.log,
-                        {
-                            "event": "flow_locked",
-                            "timestamp": now_iso(),
-                            "local_port": locked.local_port,
-                            "host_port": locked.host_port,
-                        },
-                    )
-                    write_json(args.status_file, status())
-
-                if locked is None:
-                    divert.send(packet, recalculate_checksum=True)
-                    continue
                 is_outbound_flow = (
-                    src_ip == args.local_ip
-                    and dst_ip == args.host_ip
+                    bool(packet.is_outbound)
+                    and src_ip == locked.local_ip
+                    and dst_ip == locked.host_ip
                     and int(packet.src_port) == locked.local_port
                     and int(packet.dst_port) == locked.host_port
                 )
                 is_inbound_flow = (
-                    src_ip == args.host_ip
-                    and dst_ip == args.local_ip
+                    bool(packet.is_inbound)
+                    and src_ip == locked.host_ip
+                    and dst_ip == locked.local_ip
                     and int(packet.src_port) == locked.host_port
                     and int(packet.dst_port) == locked.local_port
                 )

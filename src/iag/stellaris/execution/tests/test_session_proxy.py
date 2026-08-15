@@ -5,29 +5,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from iag.stellaris.execution.packet.autonomous_commands import (
-    BuildingTarget,
     RESEARCH_LAB_RECORD_TEMPLATE,
+    BuildingTarget,
     build_building_record,
-)
-from iag.stellaris.execution.session_proxy import (
-    APPLICATION_COMMAND_PREFIX,
-    ArmRequest,
-    COMMAND_RECORD_LENGTH,
-    DistrictConstructionTarget,
-    FleetMoveTarget,
-    FlowDiscovery,
-    INSERTED_LENGTH,
-    ZoneSpecializationTarget,
-    build_district_record,
-    build_fleet_move_record,
-    build_zone_specialization_record,
-    inject_at_packet_boundary,
-    next_actor_serial,
-    observe_command_serials,
-    parse_arm_request,
-    retag_matching_response,
-    translate_outbound_command_serials,
-    write_json,
 )
 from iag.stellaris.execution.packet.iag_stream_command_injector import (
     RELIABLE_HEADER_LENGTH,
@@ -35,6 +15,29 @@ from iag.stellaris.execution.packet.iag_stream_command_injector import (
     is_reliable_packet,
     read_uint24_be,
     write_uint24_be,
+)
+from iag.stellaris.execution.session_proxy import (
+    APPLICATION_COMMAND_PREFIX,
+    COMMAND_RECORD_LENGTH,
+    INSERTED_LENGTH,
+    ArmRequest,
+    DistrictConstructionTarget,
+    FleetMoveTarget,
+    FlowDiscovery,
+    FlowKey,
+    ZoneSpecializationTarget,
+    build_district_record,
+    build_fleet_move_record,
+    build_zone_specialization_record,
+    inject_at_packet_boundary,
+    next_actor_serial,
+    observe_command_serials,
+    packet_filter_for_flow,
+    parse_arm_request,
+    retag_matching_response,
+    session_udp_port_owners,
+    translate_outbound_command_serials,
+    write_json,
 )
 
 
@@ -95,6 +98,10 @@ class SessionProxyTests(unittest.TestCase):
                     dst_port=51000,
                     local_ip="192.0.2.10",
                     host_ip="192.0.2.20",
+                    port_owners={50000: {"stellaris.exe"}},
+                    game_process_present=True,
+                    is_outbound=True,
+                    is_inbound=False,
                     payload=reliable,
                     observed_at=float(index + 1),
                 )
@@ -108,6 +115,10 @@ class SessionProxyTests(unittest.TestCase):
                 dst_port=50000,
                 local_ip="192.0.2.10",
                 host_ip="192.0.2.20",
+                port_owners={50000: {"stellaris.exe"}},
+                game_process_present=True,
+                is_outbound=False,
+                is_inbound=True,
                 payload=reliable,
                 observed_at=3.0,
             )
@@ -119,6 +130,10 @@ class SessionProxyTests(unittest.TestCase):
             dst_port=50000,
             local_ip="192.0.2.10",
             host_ip="192.0.2.20",
+            port_owners={50000: {"stellaris.exe"}},
+            game_process_present=True,
+            is_outbound=False,
+            is_inbound=True,
             payload=reliable,
             observed_at=4.0,
         )
@@ -126,6 +141,215 @@ class SessionProxyTests(unittest.TestCase):
         assert locked is not None
         self.assertEqual(locked.local_port, 50000)
         self.assertEqual(locked.host_port, 51000)
+        self.assertEqual(locked.host_ip, "192.0.2.20")
+        self.assertEqual(locked.route, "direct_peer_ip")
+
+    def test_flow_discovery_locks_steam_relay_by_transport_port(self) -> None:
+        discovery = FlowDiscovery(minimum_each_direction=2)
+        reliable = header()
+        for index in range(2):
+            discovery.observe(
+                src_ip="192.0.2.10",
+                src_port=52000,
+                dst_ip="198.51.100.45",
+                dst_port=61000,
+                local_ip="192.0.2.10",
+                host_ip="192.0.2.20",
+                port_owners={52000: {"steam.exe"}},
+                game_process_present=True,
+                is_outbound=True,
+                is_inbound=False,
+                payload=reliable if index == 0 else b"steam-outbound-frame",
+                observed_at=float(index + 1),
+            )
+        for index in range(2):
+            locked = discovery.observe(
+                src_ip="198.51.100.45",
+                src_port=61000,
+                dst_ip="192.0.2.10",
+                dst_port=52000,
+                local_ip="192.0.2.10",
+                host_ip="192.0.2.20",
+                port_owners={52000: {"steam.exe"}},
+                game_process_present=True,
+                is_outbound=False,
+                is_inbound=True,
+                payload=b"steam-inbound-frame",
+                observed_at=float(index + 3),
+            )
+        self.assertIsNone(locked)
+        locked = discovery.observe(
+            src_ip="198.51.100.45",
+            src_port=61000,
+            dst_ip="192.0.2.10",
+            dst_port=52000,
+            local_ip="192.0.2.10",
+            host_ip="192.0.2.20",
+            port_owners={52000: {"steam.exe"}},
+            game_process_present=True,
+            is_outbound=False,
+            is_inbound=True,
+            payload=b"steam-inbound-frame",
+            observed_at=4.6,
+        )
+        self.assertIsNotNone(locked)
+        assert locked is not None
+        self.assertEqual(locked.host_ip, "198.51.100.45")
+        self.assertEqual(locked.host_port, 61000)
+        self.assertEqual(locked.route, "steam_brokered_udp_port")
+
+    def test_flow_discovery_refuses_ambiguous_relay_candidates(self) -> None:
+        discovery = FlowDiscovery(
+            minimum_each_direction=1,
+            relay_settle_seconds=0.5,
+        )
+        for peer_index, (local_port, remote_ip, remote_port) in enumerate(
+            (
+                (52000, "198.51.100.45", 61000),
+                (52001, "198.51.100.46", 61001),
+            )
+        ):
+            start = float(peer_index) / 10.0
+            discovery.observe(
+                src_ip="192.0.2.10",
+                src_port=local_port,
+                dst_ip=remote_ip,
+                dst_port=remote_port,
+                local_ip="192.0.2.10",
+                host_ip="192.0.2.20",
+                port_owners={
+                    52000: {"steam.exe"},
+                    52001: {"steam.exe"},
+                },
+                game_process_present=True,
+                is_outbound=True,
+                is_inbound=False,
+                payload=header(),
+                observed_at=1.0 + start,
+            )
+            discovery.observe(
+                src_ip=remote_ip,
+                src_port=remote_port,
+                dst_ip="192.0.2.10",
+                dst_port=local_port,
+                local_ip="192.0.2.10",
+                host_ip="192.0.2.20",
+                port_owners={
+                    52000: {"steam.exe"},
+                    52001: {"steam.exe"},
+                },
+                game_process_present=True,
+                is_outbound=False,
+                is_inbound=True,
+                payload=header(),
+                observed_at=1.1 + start,
+            )
+        result = discovery.observe(
+            src_ip="198.51.100.45",
+            src_port=61000,
+            dst_ip="192.0.2.10",
+            dst_port=52000,
+            local_ip="192.0.2.10",
+            host_ip="192.0.2.20",
+            port_owners={52000: {"steam.exe"}, 52001: {"steam.exe"}},
+            game_process_present=True,
+            is_outbound=False,
+            is_inbound=True,
+            payload=header(),
+            observed_at=2.0,
+        )
+        self.assertIsNone(result)
+        self.assertIsNone(discovery.locked)
+        self.assertIsNone(discovery.provisional)
+
+    def test_flow_discovery_requires_reliable_marker_for_relay(self) -> None:
+        discovery = FlowDiscovery(
+            minimum_each_direction=1,
+            relay_settle_seconds=0.0,
+        )
+        common = {
+            "local_ip": "192.0.2.10",
+            "host_ip": "192.0.2.20",
+            "port_owners": {52000: {"steam.exe"}},
+            "game_process_present": True,
+        }
+        discovery.observe(
+            src_ip="192.0.2.10",
+            src_port=52000,
+            dst_ip="198.51.100.45",
+            dst_port=61000,
+            is_outbound=True,
+            is_inbound=False,
+            payload=b"ordinary-steam-frame",
+            observed_at=1.0,
+            **common,
+        )
+        result = discovery.observe(
+            src_ip="198.51.100.45",
+            src_port=61000,
+            dst_ip="192.0.2.10",
+            dst_port=52000,
+            is_outbound=False,
+            is_inbound=True,
+            payload=b"ordinary-steam-frame",
+            observed_at=2.0,
+            **common,
+        )
+        self.assertIsNone(result)
+        self.assertIsNone(discovery.provisional)
+
+    def test_flow_discovery_ignores_non_stellaris_relay_port(self) -> None:
+        discovery = FlowDiscovery(minimum_each_direction=2)
+        result = discovery.observe(
+            src_ip="192.0.2.10",
+            src_port=53000,
+            dst_ip="198.51.100.45",
+            dst_port=61000,
+            local_ip="192.0.2.10",
+            host_ip="192.0.2.20",
+            port_owners={52000: {"steam.exe"}},
+            game_process_present=True,
+            is_outbound=True,
+            is_inbound=False,
+            payload=header(),
+            observed_at=1.0,
+        )
+        self.assertIsNone(result)
+        self.assertEqual(discovery.candidate_payload(), [])
+
+    def test_locked_relay_filter_uses_actual_peer_tuple(self) -> None:
+        packet_filter = packet_filter_for_flow(
+            FlowKey(
+                local_ip="192.0.2.10",
+                local_port=52000,
+                host_ip="198.51.100.45",
+                host_port=61000,
+                route="stellaris_process_udp_port",
+            )
+        )
+        self.assertIn("ip.DstAddr == 198.51.100.45", packet_filter)
+        self.assertIn("udp.SrcPort == 52000", packet_filter)
+        self.assertIn("udp.DstPort == 61000", packet_filter)
+        self.assertNotIn("192.0.2.20", packet_filter)
+
+    def test_session_udp_ports_include_game_and_steam_owners(self) -> None:
+        with patch(
+            "iag.stellaris.execution.session_proxy.owned_udp_ports",
+            return_value=(
+                {
+                    52000: {"stellaris.exe"},
+                    52001: {"steam.exe"},
+                },
+                True,
+            ),
+        ):
+            owners, game_present = session_udp_port_owners(
+                ["stellaris"],
+                ["steam"],
+            )
+        self.assertTrue(game_present)
+        self.assertEqual(owners[52000], {"stellaris.exe"})
+        self.assertEqual(owners[52001], {"steam.exe"})
 
     def test_arm_file_requires_current_session_id(self) -> None:
         value = {

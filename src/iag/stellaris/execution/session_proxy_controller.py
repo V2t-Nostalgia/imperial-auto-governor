@@ -152,6 +152,28 @@ class SessionProxyController:
                 str(int(self.config.get("session_proxy_response_timeout_seconds", 30))),
                 "--acknowledge-disposable-session",
             ]
+            configured_process_names = self.config.get(
+                "process_names",
+                ["stellaris"],
+            )
+            if isinstance(configured_process_names, str):
+                configured_process_names = [configured_process_names]
+            for process_name in configured_process_names:
+                normalized = str(process_name).strip()
+                if normalized:
+                    worker_arguments.extend(["--process-name", normalized])
+            configured_transport_names = self.config.get(
+                "transport_process_names",
+                ["steam"],
+            )
+            if isinstance(configured_transport_names, str):
+                configured_transport_names = [configured_transport_names]
+            for process_name in configured_transport_names:
+                normalized = str(process_name).strip()
+                if normalized:
+                    worker_arguments.extend(
+                        ["--transport-process-name", normalized]
+                    )
             command = session_proxy_worker_command(worker_arguments)
             creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             stdout_handle = self.stdout_path.open("w", encoding="utf-8")
@@ -228,7 +250,9 @@ class SessionProxyController:
                 raise SessionProxyError("会话代理尚未启动。")
             if not current.get("flow"):
                 raise SessionProxyError(
-                    "代理尚未锁定本局双向可靠流；请确认合作端已经加入房间。"
+                    "代理尚未锁定本局双向可靠流。请确认代理在合作端进房前"
+                    "启动，并让游戏产生双向流量；公网/Steam 中继会按本机 "
+                    "Stellaris/Steam UDP 端口自动识别实际对端。"
                 )
             if current.get("armed"):
                 raise SessionProxyError("会话代理已有一项等待执行的命令。")

@@ -9,7 +9,7 @@ Imperial Auto Governor（IAG）正在从单一的《Stellaris》经济建设 Age
 IAG 的核心不是 Clausewitz Mod 直接修改玩家殖民地，而是经过验证的联机协作执行链。玩家可以选择两种执行方式：
 
 - `carrier_click`：稳定默认模式。载体星球产生合法命令，Host Bridge 在命令进入房主前做受约束改写。
-- `session_proxy`：Windows 实验模式。合作端进房前启动会话代理，由代理在当前可靠流中插入已验证的完整命令，并持续维护偏移、ACK 与 actor serial 映射。
+- `session_proxy`：Windows 实验模式。合作端进房前启动会话代理，先按本机 Stellaris/Steam UDP 端口发现局域网直连或公网中继的实际可靠流，再插入已验证的完整命令并持续维护偏移、ACK 与 actor serial 映射。
 
 两种方式共同遵守以下状态与审计流程：
 
@@ -95,7 +95,7 @@ Linux 端可运行：
 
 运行数据默认写入 `runtime/`，不会进入 Git。Windows 与 Linux 的抓包依赖由 `requirements.txt` 的环境标记分别安装。
 
-`session_proxy` 当前只支持 Windows。Windows Agent 必须以管理员身份启动代理，并且代理必须在合作端加入房间前进入 READY，直到合作端退出房间后才能停止。第一次自动识别 actor 前，需要合作玩家在本局自然发出一条命令；也可以由玩家显式配置 actor。
+`session_proxy` 当前只支持 Windows。Windows Agent 必须以管理员身份启动代理，并且代理必须在合作端加入房间前进入 READY，直到合作端退出房间后才能停止。房主 IP 仅作为直连提示；Steam 公网/中继会话会从本机 Stellaris 与 Steam 进程拥有的 UDP 端口发现实际对端，锁定后才打开精确修改过滤器。第一次自动识别 actor 前，需要合作玩家在本局自然发出一条命令；也可以由玩家显式配置 actor。
 
 ## 模型网关
 

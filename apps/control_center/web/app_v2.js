@@ -1011,16 +1011,26 @@ function renderExecutionSettings(settings, proxy = {}, running = false) {
   $("save-execution-settings").disabled = running;
   const proxyRunning = proxy.running === true;
   const flow = proxy.flow || {};
+  const flowCandidates = Array.isArray(proxy.flow_candidates)
+    ? proxy.flow_candidates
+    : [];
   $("session-proxy-state").textContent = !proxyRunning
     ? "未启动"
-    : (proxy.flow ? "可靠流已锁定" : "已启动 · 等待进房");
+    : (proxy.flow ? "可靠流已锁定" : "已启动 · 发现直连/中继流");
   $("session-proxy-state").className =
     "status-tag " + (!proxyRunning ? "" : (proxy.flow ? "good" : "warn"));
   $("session-proxy-detail").textContent = proxyRunning
-    ? "PID " + (proxy.pid || "--") +
-      " · " + (flow.local_port || "--") + " → " + (flow.host_port || "--") +
-      " · actor " + (proxy.source_actor || "等待自然命令") +
-      " · 已注入 " + Number(proxy.insertion_count || 0) + " 条"
+    ? (proxy.flow
+      ? "PID " + (proxy.pid || "--") +
+        " · " + (flow.local_ip || "--") + ":" + (flow.local_port || "--") +
+        " → " + (flow.host_ip || "--") + ":" + (flow.host_port || "--") +
+        " · " + (flow.route || "未知路径") +
+        " · actor " + (proxy.source_actor || "等待自然命令") +
+        " · 已注入 " + Number(proxy.insertion_count || 0) + " 条"
+      : "PID " + (proxy.pid || "--") +
+        " · 可靠流候选 " + flowCandidates.length +
+        " · 游戏/Steam UDP 端口 " +
+        Number((proxy.stellaris_udp_ports || []).length || 0))
     : "尚未建立代理进程。";
   $("start-session-proxy").disabled = running || proxyRunning;
   $("stop-session-proxy").disabled = running || !proxyRunning;
