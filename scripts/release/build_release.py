@@ -247,6 +247,15 @@ def is_authored_text(relative: Path) -> bool:
     return relative.suffix.casefold() in TEXT_SUFFIXES or relative.name == "NOTICE"
 
 
+def is_certifi_ca_bundle(relative: Path) -> bool:
+    lowered_parts = tuple(part.casefold() for part in relative.parts)
+    return (
+        relative.name.casefold() == "cacert.pem"
+        and "_internal" in lowered_parts
+        and "certifi" in lowered_parts
+    )
+
+
 def scan_tree(stage: Path) -> list[str]:
     """Scan the exact staged tree without mutating it."""
     errors: list[str] = []
@@ -262,7 +271,10 @@ def scan_tree(stage: Path) -> list[str]:
             errors.append(f"forbidden runtime directory: {relative.as_posix()}")
         if path.name.casefold() in FORBIDDEN_CONFIG_NAMES:
             errors.append(f"runtime configuration: {relative.as_posix()}")
-        if path.suffix.casefold() in FORBIDDEN_SUFFIXES:
+        if (
+            path.suffix.casefold() in FORBIDDEN_SUFFIXES
+            and not is_certifi_ca_bundle(relative)
+        ):
             errors.append(f"forbidden runtime artifact: {relative.as_posix()}")
 
         data = path.read_bytes()

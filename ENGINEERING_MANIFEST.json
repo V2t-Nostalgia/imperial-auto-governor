@@ -1,6 +1,6 @@
 {
   "schema": "iag.engineering_manifest.v1",
-  "generated_at": "2026-08-15T19:00:54+08:00",
+  "generated_at": "2026-08-15T19:06:03+08:00",
   "project_root": ".",
   "migration_source_commit": "81bb66d2609c42136fdae35b6538dea28d4ba9d7",
   "policy": {
@@ -801,8 +801,8 @@
     },
     {
       "path": "scripts/release/build_release.py",
-      "sha256": "7071a8ee66e24189bc5b9b4031aff4d81c07ba5ef6acf932f727c17f2054de81",
-      "bytes": 29164,
+      "sha256": "ba8e0279d17a92c3c0be464964f06e50eea97730feb007ca99afa9cbdf019fb3",
+      "bytes": 29509,
       "origin": "new_engineering_file",
       "legacy_source": null
     },
