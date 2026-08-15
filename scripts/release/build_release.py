@@ -45,10 +45,11 @@ GOVERNANCE_FILES = (
 FORBIDDEN_PARTS = {
     ".git",
     ".idea",
+    ".pytest_cache",
+    ".ruff_cache",
     ".tmp",
     ".venv",
     "__pycache__",
-    "build",
     "captures",
     "databases",
     "dist",
@@ -56,7 +57,6 @@ FORBIDDEN_PARTS = {
     "runtime",
     "saves",
     "secrets",
-    "state",
 }
 FORBIDDEN_SUFFIXES = {
     ".env",
@@ -256,18 +256,30 @@ def is_certifi_ca_bundle(relative: Path) -> bool:
     )
 
 
+def has_forbidden_runtime_directory(relative: Path) -> bool:
+    directory_parts = tuple(part.casefold() for part in relative.parts[:-1])
+    for index, part in enumerate(directory_parts):
+        if part in FORBIDDEN_PARTS:
+            return True
+        prefix = directory_parts[: index + 1]
+        if part == "build" and prefix != ("scripts", "build"):
+            return True
+        if part == "state" and prefix != ("src", "iag", "stellaris", "state"):
+            return True
+    return False
+
+
 def scan_tree(stage: Path) -> list[str]:
     """Scan the exact staged tree without mutating it."""
     errors: list[str] = []
     for path in sorted(stage.rglob("*")):
         relative = path.relative_to(stage)
-        lowered_parts = tuple(part.casefold() for part in relative.parts)
         if path.is_symlink():
             errors.append(f"symbolic link: {relative.as_posix()}")
             continue
         if not path.is_file():
             continue
-        if any(part in FORBIDDEN_PARTS for part in lowered_parts[:-1]):
+        if has_forbidden_runtime_directory(relative):
             errors.append(f"forbidden runtime directory: {relative.as_posix()}")
         if path.name.casefold() in FORBIDDEN_CONFIG_NAMES:
             errors.append(f"runtime configuration: {relative.as_posix()}")
@@ -447,6 +459,7 @@ def extract_verified(archive: Path, destination: Path, expected_root: str) -> Pa
 def source_health(stage: Path) -> list[str]:
     environment = os.environ.copy()
     environment["PYTHONPATH"] = os.pathsep.join((str(stage / "src"), str(stage)))
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
     run(
         (sys.executable, "-m", "compileall", "-q", "src", "apps", "scripts"),
         cwd=stage,
@@ -465,6 +478,7 @@ def source_health(stage: Path) -> list[str]:
             "-m",
             "ruff",
             "check",
+            "--no-cache",
             "--select",
             "E9,F",
             "src",
@@ -479,6 +493,20 @@ def source_health(stage: Path) -> list[str]:
         f"repository unittest suite: passed ({detail})",
         "Ruff E9/F diagnostics: passed",
     ]
+
+
+def remove_health_artifacts(stage: Path) -> None:
+    for name in ("__pycache__", ".pytest_cache", ".ruff_cache"):
+        directories = sorted(
+            (path for path in stage.rglob(name) if path.is_dir()),
+            key=lambda path: len(path.parts),
+            reverse=True,
+        )
+        for directory in directories:
+            shutil.rmtree(directory)
+    for pattern in ("*.pyc", "*.pyo"):
+        for path in stage.rglob(pattern):
+            path.unlink()
 
 
 def find_bash() -> str:
@@ -502,6 +530,7 @@ def find_bash() -> str:
 def ubuntu_health(stage: Path) -> list[str]:
     environment = os.environ.copy()
     environment["PYTHONPATH"] = os.pathsep.join((str(stage / "src"), str(stage)))
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
     run((sys.executable, "-m", "compileall", "-q", "src", "apps"), cwd=stage)
     run(
         (
@@ -667,7 +696,10 @@ def build_windows_binaries(skip_build: bool) -> tuple[Path, Path]:
 
 def package_source(stage: Path, commit: str, files: list[Path]) -> list[str]:
     copy_relative_files(stage, files)
-    checks = source_health(stage)
+    try:
+        checks = source_health(stage)
+    finally:
+        remove_health_artifacts(stage)
     finalize_stage(
         stage,
         package="Imperial Auto Governor source",
@@ -771,7 +803,10 @@ def package_ubuntu(
     downloads = stage / "apps" / "control_center" / "web" / "downloads"
     downloads.mkdir(parents=True, exist_ok=True)
     shutil.copy2(host_archive, downloads / "IAGHostBridge-windows-x64.zip")
-    checks = ubuntu_health(stage)
+    try:
+        checks = ubuntu_health(stage)
+    finally:
+        remove_health_artifacts(stage)
     finalize_stage(
         stage,
         package="IAG Ubuntu Agent",
