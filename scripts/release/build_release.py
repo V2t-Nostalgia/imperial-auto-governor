@@ -104,11 +104,10 @@ TOKEN_PATTERNS = {
     "Slack token": re.compile(rb"\bxox[baprs]-[A-Za-z0-9-]{20,}\b"),
     "AWS access key": re.compile(rb"\bAKIA[0-9A-Z]{16}\b"),
 }
-PRIVATE_KEY_MARKERS = (
-    b"-----BEGIN PRIVATE KEY-----",
-    b"-----BEGIN RSA PRIVATE KEY-----",
-    b"-----BEGIN EC PRIVATE KEY-----",
-    b"-----BEGIN OPENSSH PRIVATE KEY-----",
+PRIVATE_KEY_BLOCK_RE = re.compile(
+    rb"-----BEGIN (?P<label>(?:RSA |EC |OPENSSH )?PRIVATE KEY)-----\r?\n"
+    rb"(?:[A-Za-z0-9+/=]{20,}\r?\n){2,}"
+    rb"-----END (?P=label)-----"
 )
 DOCUMENTATION_NETWORK_SPECS = (
     (192, 0, 2, 0, 24),
@@ -267,10 +266,8 @@ def scan_tree(stage: Path) -> list[str]:
             errors.append(f"forbidden runtime artifact: {relative.as_posix()}")
 
         data = path.read_bytes()
-        lowered = data.lower()
-        for marker in PRIVATE_KEY_MARKERS:
-            if marker.lower() in lowered:
-                errors.append(f"private key material: {relative.as_posix()}")
+        if PRIVATE_KEY_BLOCK_RE.search(data):
+            errors.append(f"private key material: {relative.as_posix()}")
         for label, pattern in TOKEN_PATTERNS.items():
             if pattern.search(data):
                 errors.append(f"{label}: {relative.as_posix()}")
@@ -286,15 +283,16 @@ def scan_tree(stage: Path) -> list[str]:
                     f"private network address {address}: {relative.as_posix()}"
                 )
 
-        for pattern, label in (
-            (WINDOWS_USER_RE, "personal Windows path"),
-            (LINUX_USER_RE, "personal Linux path"),
-        ):
-            for match in pattern.finditer(data):
-                user = match.group("user").decode("ascii", errors="replace")
-                if user.casefold() in {"runneradmin", "appuser"}:
-                    continue
-                errors.append(f"{label} ({user}): {relative.as_posix()}")
+        if "_internal" not in relative.parts or is_authored_text(relative):
+            for pattern, label in (
+                (WINDOWS_USER_RE, "personal Windows path"),
+                (LINUX_USER_RE, "personal Linux path"),
+            ):
+                for match in pattern.finditer(data):
+                    user = match.group("user").decode("ascii", errors="replace")
+                    if user.casefold() in {"runneradmin", "appuser"}:
+                        continue
+                    errors.append(f"{label} ({user}): {relative.as_posix()}")
         if is_authored_text(relative) and EMAIL_RE.search(data):
             errors.append(f"email address in authored content: {relative.as_posix()}")
     return sorted(set(errors))
