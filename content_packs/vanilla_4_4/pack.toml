@@ -1,0 +1,17 @@
+schema_version = "iag.content_pack_manifest.v1"
+pack_id = "stellaris_vanilla_4_4"
+version = "0.1.0"
+display_name_zh = "Stellaris 原版 4.4"
+description_zh = "把 Stellaris 4.4 原版建筑、区划和区域映射到平台既有能力。"
+
+supported_game_versions = [">=4.4,<4.5"]
+required_mods = []
+verified_mod_versions = []
+required_platform_capabilities = [
+  "economy_construction_v1",
+  "stellaris_definition_reader_v1",
+]
+
+[resources]
+capabilities = "mappings/capabilities.json"
+strategy_reference = "prompts/stellaris_4_4_sources.md"

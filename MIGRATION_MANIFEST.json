@@ -1,0 +1,709 @@
+{
+  "schema": "iag.migration_manifest.v1",
+  "generated_at": "2026-08-09T00:30:22+08:00",
+  "source_root": "<LEGACY_REPOSITORY>",
+  "source_commit": "81bb66d2609c42136fdae35b6538dea28d4ba9d7",
+  "target_root": ".",
+  "policy": {
+    "source_is_read_only": true,
+    "tests_copied": false,
+    "runtime_data_copied": false,
+    "release_archives_copied": false,
+    "obsolete_packet_probes_copied": false
+  },
+  "files": [
+    {
+      "source": "AUTHORS.md",
+      "target": "AUTHORS.md",
+      "source_sha256": "b4419dfe7f29169645448d7cfd4d4e218595869bd8a0b03a1b935aa7d7fc6a21",
+      "bytes": 379,
+      "initial_copy_sha256": "b4419dfe7f29169645448d7cfd4d4e218595869bd8a0b03a1b935aa7d7fc6a21"
+    },
+    {
+      "source": "CITATION.cff",
+      "target": "CITATION.cff",
+      "source_sha256": "f98004d519839afe5e81725bf34123575edd500629bf633497751719532c7ff2",
+      "bytes": 605,
+      "initial_copy_sha256": "f98004d519839afe5e81725bf34123575edd500629bf633497751719532c7ff2"
+    },
+    {
+      "source": "CONTRIBUTING.md",
+      "target": "CONTRIBUTING.md",
+      "source_sha256": "8e043049ec604f545f556c00d32daa3bfbbba0ca706df2e96aee1f137c0c7d61",
+      "bytes": 1347,
+      "initial_copy_sha256": "8e043049ec604f545f556c00d32daa3bfbbba0ca706df2e96aee1f137c0c7d61"
+    },
+    {
+      "source": "DCO",
+      "target": "DCO",
+      "source_sha256": "32c6ec6495909000b5924bf2008acbeddc3d0bad2eb614c23d0b29e4872300af",
+      "bytes": 1353,
+      "initial_copy_sha256": "32c6ec6495909000b5924bf2008acbeddc3d0bad2eb614c23d0b29e4872300af"
+    },
+    {
+      "source": "LICENSE",
+      "target": "LICENSE",
+      "source_sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "bytes": 35149,
+      "initial_copy_sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+    },
+    {
+      "source": "LICENSES/CC-BY-SA-4.0.txt",
+      "target": "LICENSES/CC-BY-SA-4.0.txt",
+      "source_sha256": "cde7883b9050a1104f4ac19a1572aafd6e5d7323b68351aaf51fbf4beba54966",
+      "bytes": 18375,
+      "initial_copy_sha256": "cde7883b9050a1104f4ac19a1572aafd6e5d7323b68351aaf51fbf4beba54966"
+    },
+    {
+      "source": "LICENSES/GPL-3.0-only.txt",
+      "target": "LICENSES/GPL-3.0-only.txt",
+      "source_sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "bytes": 35149,
+      "initial_copy_sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+    },
+    {
+      "source": "NOTICE",
+      "target": "NOTICE",
+      "source_sha256": "e0693e13fe874a176d0caac87db5dbadc243fd2f4c3edf5b507e01d6aeefe658",
+      "bytes": 1324,
+      "initial_copy_sha256": "e0693e13fe874a176d0caac87db5dbadc243fd2f4c3edf5b507e01d6aeefe658"
+    },
+    {
+      "source": "ORIGIN.md",
+      "target": "ORIGIN.md",
+      "source_sha256": "079bed8e0f3984af5b90e69e1e59dbc737c9818f464e53a2be9011e9742ab579",
+      "bytes": 1717,
+      "initial_copy_sha256": "079bed8e0f3984af5b90e69e1e59dbc737c9818f464e53a2be9011e9742ab579"
+    },
+    {
+      "source": "REUSE.toml",
+      "target": "REUSE.toml",
+      "source_sha256": "34b6966b0b4a6892660ddb3d413dd792e7fe6697670a4f487f6fa20c15689d11",
+      "bytes": 660,
+      "initial_copy_sha256": "34b6966b0b4a6892660ddb3d413dd792e7fe6697670a4f487f6fa20c15689d11"
+    },
+    {
+      "source": "SECURITY.md",
+      "target": "SECURITY.md",
+      "source_sha256": "35f52fe202180372362b405e9a2c935761fe15d19bd50870191c06004714c535",
+      "bytes": 808,
+      "initial_copy_sha256": "35f52fe202180372362b405e9a2c935761fe15d19bd50870191c06004714c535"
+    },
+    {
+      "source": "TRADEMARKS.md",
+      "target": "TRADEMARKS.md",
+      "source_sha256": "745737cc4a9878bacd91eb4e7570dc7c6c11cc980bf9c8de004d12dbea77f498",
+      "bytes": 804,
+      "initial_copy_sha256": "745737cc4a9878bacd91eb4e7570dc7c6c11cc980bf9c8de004d12dbea77f498"
+    },
+    {
+      "source": "tools/agent_runtime/IAGWindowsAgent.spec",
+      "target": "apps/control_center/IAGWindowsAgent.spec",
+      "source_sha256": "573e1b8a54279e2d2638207630e01d9ec7958871b7f7cf718d4ac1f80d662837",
+      "bytes": 1366,
+      "initial_copy_sha256": "573e1b8a54279e2d2638207630e01d9ec7958871b7f7cf718d4ac1f80d662837"
+    },
+    {
+      "source": "tools/agent_runtime/agent_config.example.json",
+      "target": "apps/control_center/agent_config.linux.example.json",
+      "source_sha256": "e044bfe3ac78b38deb1667ca1286a2d86e85f0261142bc19efb6b1d37bc5f660",
+      "bytes": 5556,
+      "initial_copy_sha256": "e044bfe3ac78b38deb1667ca1286a2d86e85f0261142bc19efb6b1d37bc5f660"
+    },
+    {
+      "source": "tools/agent_runtime/agent_config.windows.example.json",
+      "target": "apps/control_center/agent_config.windows.example.json",
+      "source_sha256": "80fc5f9014f0e2db6d0a35a2224bcf81247bfef72dabd0178c4e9befcd9fc668",
+      "bytes": 4308,
+      "initial_copy_sha256": "80fc5f9014f0e2db6d0a35a2224bcf81247bfef72dabd0178c4e9befcd9fc668"
+    },
+    {
+      "source": "tools/agent_runtime/schemas/fixed_click_profile.schema.json",
+      "target": "apps/control_center/schemas/fixed_click_profile.schema.json",
+      "source_sha256": "747cd9e318b96fe5e90739045d0ea6c331bb9bf70a6ea0020d7f16dbe7983132",
+      "bytes": 1884,
+      "initial_copy_sha256": "747cd9e318b96fe5e90739045d0ea6c331bb9bf70a6ea0020d7f16dbe7983132"
+    },
+    {
+      "source": "tools/agent_runtime/web/app.js",
+      "target": "apps/control_center/web/app.js",
+      "source_sha256": "dbd190c5d2ed59c45e16b3b8fcba7deea72dfef3b50dcb0d1b2e5684c0acb8e7",
+      "bytes": 11912,
+      "initial_copy_sha256": "dbd190c5d2ed59c45e16b3b8fcba7deea72dfef3b50dcb0d1b2e5684c0acb8e7"
+    },
+    {
+      "source": "tools/agent_runtime/web/app_v2.js",
+      "target": "apps/control_center/web/app_v2.js",
+      "source_sha256": "2bf16de3313adf44c39e0fb20a82c0351956e94e23c248bf033e744c6e0c14e8",
+      "bytes": 54750,
+      "initial_copy_sha256": "2bf16de3313adf44c39e0fb20a82c0351956e94e23c248bf033e744c6e0c14e8"
+    },
+    {
+      "source": "tools/agent_runtime/web/construction.css",
+      "target": "apps/control_center/web/construction.css",
+      "source_sha256": "ccf285541f584d593e82254eefb56d018db74ff3f3f3b4218bc14a88da4555ce",
+      "bytes": 2954,
+      "initial_copy_sha256": "ccf285541f584d593e82254eefb56d018db74ff3f3f3b4218bc14a88da4555ce"
+    },
+    {
+      "source": "tools/agent_runtime/web/conversation.css",
+      "target": "apps/control_center/web/conversation.css",
+      "source_sha256": "4b4315a3a33b15651bff03e6f204c3b86bc660058a238c25383dd9110b00849d",
+      "bytes": 10365,
+      "initial_copy_sha256": "4b4315a3a33b15651bff03e6f204c3b86bc660058a238c25383dd9110b00849d"
+    },
+    {
+      "source": "tools/agent_runtime/web/index.html",
+      "target": "apps/control_center/web/index.html",
+      "source_sha256": "3a530d839bdbbaf85d2e837ea81dd2a94eea8dc4c19d80cf099bfe07b68ad308",
+      "bytes": 23245,
+      "initial_copy_sha256": "3a530d839bdbbaf85d2e837ea81dd2a94eea8dc4c19d80cf099bfe07b68ad308"
+    },
+    {
+      "source": "tools/agent_runtime/web/styles.css",
+      "target": "apps/control_center/web/styles.css",
+      "source_sha256": "78aff26a0c46010c6002a1758c80ef35286f036278e71efb36fe3ec19002e022",
+      "bytes": 8767,
+      "initial_copy_sha256": "78aff26a0c46010c6002a1758c80ef35286f036278e71efb36fe3ec19002e022"
+    },
+    {
+      "source": "tools/agent_runtime/web_console.py",
+      "target": "apps/control_center/web_console.py",
+      "source_sha256": "9be28a36a9b6ec7e8835c005c016884087b03efa5022ed0c8c6f08160cf057b1",
+      "bytes": 103204,
+      "initial_copy_sha256": "9be28a36a9b6ec7e8835c005c016884087b03efa5022ed0c8c6f08160cf057b1"
+    },
+    {
+      "source": "tools/agent_runtime/windows_agent_gui.py",
+      "target": "apps/control_center/windows_agent_gui.py",
+      "source_sha256": "bec2749aa85179476289a6bcd5098453df8e31ff75483b37f3f1c239531c034b",
+      "bytes": 22390,
+      "initial_copy_sha256": "bec2749aa85179476289a6bcd5098453df8e31ff75483b37f3f1c239531c034b"
+    },
+    {
+      "source": "tools/windows_save_uploader/IAGSaveUploaderGUI.spec",
+      "target": "apps/host_bridge/IAGSaveUploaderGUI.spec",
+      "source_sha256": "f49a909b02335ee823cc81daac52a5f286c394da3f2b4ca022932f02bc62fcb4",
+      "bytes": 1742,
+      "initial_copy_sha256": "f49a909b02335ee823cc81daac52a5f286c394da3f2b4ca022932f02bc62fcb4"
+    },
+    {
+      "source": "tools/windows_save_uploader/iag_host_interceptor.py",
+      "target": "apps/host_bridge/iag_host_interceptor.py",
+      "source_sha256": "4f39d4d364e297f9cc4b8d01a8e2576007e765a0bfe15c6241e6ba4ab7efe1d4",
+      "bytes": 37521,
+      "initial_copy_sha256": "4f39d4d364e297f9cc4b8d01a8e2576007e765a0bfe15c6241e6ba4ab7efe1d4"
+    },
+    {
+      "source": "tools/windows_save_uploader/iag_save_uploader.example.json",
+      "target": "apps/host_bridge/iag_save_uploader.example.json",
+      "source_sha256": "a24db9642c58bbc29e96371fda621d36009e55de91c5cbca8356305a3181901b",
+      "bytes": 473,
+      "initial_copy_sha256": "a24db9642c58bbc29e96371fda621d36009e55de91c5cbca8356305a3181901b"
+    },
+    {
+      "source": "tools/windows_save_uploader/iag_save_uploader.py",
+      "target": "apps/host_bridge/iag_save_uploader.py",
+      "source_sha256": "ad2cd1e4538c1b261f1f77c125cabe59138f71a808fcf17db553c4dfd4ba04b2",
+      "bytes": 31438,
+      "initial_copy_sha256": "ad2cd1e4538c1b261f1f77c125cabe59138f71a808fcf17db553c4dfd4ba04b2"
+    },
+    {
+      "source": "tools/windows_save_uploader/iag_save_uploader_gui.py",
+      "target": "apps/host_bridge/iag_save_uploader_gui.py",
+      "source_sha256": "ea5148b306e297bada2bee9a0aeaa9287a0fdfb3686e439d495f9001c8b7453a",
+      "bytes": 23461,
+      "initial_copy_sha256": "ea5148b306e297bada2bee9a0aeaa9287a0fdfb3686e439d495f9001c8b7453a"
+    },
+    {
+      "source": "tools/agent_runtime/capabilities.json",
+      "target": "content_packs/vanilla_4_4/mappings/capabilities.json",
+      "source_sha256": "b39fc074f2589711593a45ea71b124f68e80417e5f59890e89aaf73b96693fa4",
+      "bytes": 19942,
+      "initial_copy_sha256": "b39fc074f2589711593a45ea71b124f68e80417e5f59890e89aaf73b96693fa4"
+    },
+    {
+      "source": "tools/agent_runtime/strategy/stellaris_4_4_sources.md",
+      "target": "content_packs/vanilla_4_4/prompts/stellaris_4_4_sources.md",
+      "source_sha256": "55a5e4431ed8154767e8b559e89d2dd7b2aab6af67ce8712aa79486ab4cb8261",
+      "bytes": 3212,
+      "initial_copy_sha256": "55a5e4431ed8154767e8b559e89d2dd7b2aab6af67ce8712aa79486ab4cb8261"
+    },
+    {
+      "source": "tools/agent_runtime/README.md",
+      "target": "docs/reference/v0_5_8/AGENT_RUNTIME.md",
+      "source_sha256": "edd8acc97031d08ed649e79dcc659237152dc7e9c9463c27b92b3a6e1a37bbc4",
+      "bytes": 25240,
+      "initial_copy_sha256": "edd8acc97031d08ed649e79dcc659237152dc7e9c9463c27b92b3a6e1a37bbc4"
+    },
+    {
+      "source": "tools/windows_save_uploader/README.md",
+      "target": "docs/reference/v0_5_8/HOST_BRIDGE.md",
+      "source_sha256": "cf6bb1d63bfc9e2a3a7fa7d9e193188f3cc51d8a10f20e5ff79f97c14eb311df",
+      "bytes": 4762,
+      "initial_copy_sha256": "cf6bb1d63bfc9e2a3a7fa7d9e193188f3cc51d8a10f20e5ff79f97c14eb311df"
+    },
+    {
+      "source": "tools/packet_interceptor/README.md",
+      "target": "docs/reference/v0_5_8/PACKET_INTERCEPTOR.md",
+      "source_sha256": "c43bef9d0c363f324c06abe2c800efeb3e06609f406fe42d3c4d08fe61c0a2e1",
+      "bytes": 3509,
+      "initial_copy_sha256": "c43bef9d0c363f324c06abe2c800efeb3e06609f406fe42d3c4d08fe61c0a2e1"
+    },
+    {
+      "source": "docs/RESEARCH_SERVICES.md",
+      "target": "docs/reference/v0_5_8/RESEARCH_SERVICES.md",
+      "source_sha256": "3509fdb7b4361767ed0c3fa29b8eed9199c2fd335482c8a07e480f24d7a600fa",
+      "bytes": 4076,
+      "initial_copy_sha256": "3509fdb7b4361767ed0c3fa29b8eed9199c2fd335482c8a07e480f24d7a600fa"
+    },
+    {
+      "source": "docs/STEAM_RELAY_HOTFIX.md",
+      "target": "docs/reference/v0_5_8/STEAM_RELAY_HOTFIX.md",
+      "source_sha256": "0fe364950c0b8767e7c6e60958cd0386d6d1d7a6e874c3f26d20bf348d4d5f50",
+      "bytes": 2538,
+      "initial_copy_sha256": "0fe364950c0b8767e7c6e60958cd0386d6d1d7a6e874c3f26d20bf348d4d5f50"
+    },
+    {
+      "source": "docs/TECHNICAL_OVERVIEW.md",
+      "target": "docs/reference/v0_5_8/TECHNICAL_OVERVIEW.md",
+      "source_sha256": "d26608ae590d23687f25026e04d200571b54caf71682510673e97ae477e5be42",
+      "bytes": 3690,
+      "initial_copy_sha256": "d26608ae590d23687f25026e04d200571b54caf71682510673e97ae477e5be42"
+    },
+    {
+      "source": "docs/UBUNTU_AGENT_README.md",
+      "target": "docs/reference/v0_5_8/UBUNTU_AGENT_README.md",
+      "source_sha256": "56364128f5b0ad07c83e96ba29e5fdfbe60993dd1448ff68c5670a47774c8c11",
+      "bytes": 3485,
+      "initial_copy_sha256": "56364128f5b0ad07c83e96ba29e5fdfbe60993dd1448ff68c5670a47774c8c11"
+    },
+    {
+      "source": "docs/WINDOWS_AGENT_README.md",
+      "target": "docs/reference/v0_5_8/WINDOWS_AGENT_README.md",
+      "source_sha256": "a6a307f5e7d16e75fcd2cef8987ec2238428e6792edd5180c454cf00c797fc60",
+      "bytes": 3399,
+      "initial_copy_sha256": "a6a307f5e7d16e75fcd2cef8987ec2238428e6792edd5180c454cf00c797fc60"
+    },
+    {
+      "source": "docs/WINDOWS_FULL_DEPLOYMENT.md",
+      "target": "docs/reference/v0_5_8/WINDOWS_FULL_DEPLOYMENT.md",
+      "source_sha256": "f80b8775a9c5fb0aed26c28fa537ff4802e6334d22b2232d4a923db7e57a67aa",
+      "bytes": 8931,
+      "initial_copy_sha256": "f80b8775a9c5fb0aed26c28fa537ff4802e6334d22b2232d4a923db7e57a67aa"
+    },
+    {
+      "source": "tools/windows_save_uploader/Build-IAGHostBridge.ps1",
+      "target": "scripts/build/Build-IAGHostBridge.ps1",
+      "source_sha256": "1eeedf523330f3df8994172e796af6e71ad74688a8a51650fce94a94a3928490",
+      "bytes": 1364,
+      "initial_copy_sha256": "1eeedf523330f3df8994172e796af6e71ad74688a8a51650fce94a94a3928490"
+    },
+    {
+      "source": "tools/agent_runtime/Build-IAGWindowsAgent.ps1",
+      "target": "scripts/build/Build-IAGWindowsAgent.ps1",
+      "source_sha256": "f7b0a3800c7e6d30dac53de8bab41e451b715deda616ff3569c41c57b25ee025",
+      "bytes": 1330,
+      "initial_copy_sha256": "f7b0a3800c7e6d30dac53de8bab41e451b715deda616ff3569c41c57b25ee025"
+    },
+    {
+      "source": "tools/agent_runtime/install_systemd_service.sh",
+      "target": "scripts/deploy/install_systemd_service.sh",
+      "source_sha256": "78e5afadf48f213c6e25168bcb77532566d94f4428b3f6e60c94e3b79302bce9",
+      "bytes": 5162,
+      "initial_copy_sha256": "78e5afadf48f213c6e25168bcb77532566d94f4428b3f6e60c94e3b79302bce9"
+    },
+    {
+      "source": "tools/agent_runtime/install_ubuntu.sh",
+      "target": "scripts/deploy/install_ubuntu.sh",
+      "source_sha256": "01a5e00a2e42d2af44a366aaf121b02519e2ebed7ae8cc058bb21aa87cdd0d3c",
+      "bytes": 1884,
+      "initial_copy_sha256": "01a5e00a2e42d2af44a366aaf121b02519e2ebed7ae8cc058bb21aa87cdd0d3c"
+    },
+    {
+      "source": "tools/agent_runtime/start_console.sh",
+      "target": "scripts/deploy/start_console.sh",
+      "source_sha256": "80517a472d8bc4d19e80cbb85bb547681778c816dc795cca13f37678bc06ff16",
+      "bytes": 1261,
+      "initial_copy_sha256": "80517a472d8bc4d19e80cbb85bb547681778c816dc795cca13f37678bc06ff16"
+    },
+    {
+      "source": "tools/agent_runtime/deploy/systemd/iag-agent-console.service",
+      "target": "scripts/deploy/systemd/iag-agent-console.service",
+      "source_sha256": "550c214604621f9643fe3338582ac773a1b60dbec431456574c7463847d1ad50",
+      "bytes": 1170,
+      "initial_copy_sha256": "550c214604621f9643fe3338582ac773a1b60dbec431456574c7463847d1ad50"
+    },
+    {
+      "source": "tools/agent_runtime/deploy/systemd/iag-agent-network-observer.service",
+      "target": "scripts/deploy/systemd/iag-agent-network-observer.service",
+      "source_sha256": "4c165d0f012bcf68fc6a199a6383724f2c6355730799fc9fdcf07e197c9166a9",
+      "bytes": 1012,
+      "initial_copy_sha256": "4c165d0f012bcf68fc6a199a6383724f2c6355730799fc9fdcf07e197c9166a9"
+    },
+    {
+      "source": "tools/save_state/Export-IAGPlanetProfiles.ps1",
+      "target": "scripts/diagnostics/Export-IAGPlanetProfiles.ps1",
+      "source_sha256": "aec3e3a86988b1d786a5b40570f0e2e64742fa7fee99ef02069da19277d00027",
+      "bytes": 920,
+      "initial_copy_sha256": "aec3e3a86988b1d786a5b40570f0e2e64742fa7fee99ef02069da19277d00027"
+    },
+    {
+      "source": "tools/packet_interceptor/iag_udp_flow_analyzer.py",
+      "target": "scripts/diagnostics/iag_udp_flow_analyzer.py",
+      "source_sha256": "1f30a65202125953d7a88306f0de0a4c508bf8d8962016f5f61a10d1f5b7263b",
+      "bytes": 3207,
+      "initial_copy_sha256": "1f30a65202125953d7a88306f0de0a4c508bf8d8962016f5f61a10d1f5b7263b"
+    },
+    {
+      "source": "tools/research_services/Manage-IAGResearchServices.ps1",
+      "target": "services/research/Manage-IAGResearchServices.ps1",
+      "source_sha256": "c8a144076b4cabd1a7a38a41bdadeb11e7570689e2e210a0d31545ac6866903c",
+      "bytes": 10893,
+      "initial_copy_sha256": "c8a144076b4cabd1a7a38a41bdadeb11e7570689e2e210a0d31545ac6866903c"
+    },
+    {
+      "source": "tools/research_services/compose.yaml",
+      "target": "services/research/compose.yaml",
+      "source_sha256": "1694413d9ea2fe39964ff93320c5a33f80eed7747f6b4bad0359d8510a796903",
+      "bytes": 2129,
+      "initial_copy_sha256": "1694413d9ea2fe39964ff93320c5a33f80eed7747f6b4bad0359d8510a796903"
+    },
+    {
+      "source": "tools/research_services/searxng/settings.yml",
+      "target": "services/research/searxng/settings.yml",
+      "source_sha256": "e6641614058f79b16b59969edbcf3f2d84c07e9802e971e3c30e347239fd6c2f",
+      "bytes": 336,
+      "initial_copy_sha256": "e6641614058f79b16b59969edbcf3f2d84c07e9802e971e3c30e347239fd6c2f"
+    },
+    {
+      "source": "tools/agent_runtime/agent_tools.py",
+      "target": "src/iag/applications/economy_governance/agent_tools.py",
+      "source_sha256": "873ba63165e6ceadcdeb7e0e7e0984b7c1f4f254a9768764ab069a69001660ad",
+      "bytes": 63455,
+      "initial_copy_sha256": "873ba63165e6ceadcdeb7e0e7e0984b7c1f4f254a9768764ab069a69001660ad"
+    },
+    {
+      "source": "tools/agent_runtime/conversation_agent.py",
+      "target": "src/iag/applications/economy_governance/conversation_agent.py",
+      "source_sha256": "187dff9fa7ec08b6ae6f0e86d201f2ab15514ab8dc14ed317262beccd6236819",
+      "bytes": 19657,
+      "initial_copy_sha256": "187dff9fa7ec08b6ae6f0e86d201f2ab15514ab8dc14ed317262beccd6236819"
+    },
+    {
+      "source": "tools/agent_runtime/iag_agent.py",
+      "target": "src/iag/applications/economy_governance/iag_agent.py",
+      "source_sha256": "faaa3a6ca34b265cab29ec81dcb886b6dd5da4bbe4a7343789679b93b43c3c2b",
+      "bytes": 4408,
+      "initial_copy_sha256": "faaa3a6ca34b265cab29ec81dcb886b6dd5da4bbe4a7343789679b93b43c3c2b"
+    },
+    {
+      "source": "tools/agent_runtime/planner.py",
+      "target": "src/iag/applications/economy_governance/planner.py",
+      "source_sha256": "ca8718b21d646efadab81dac4b6a62a69308b053a3d5e59e19ba46ef5017d116",
+      "bytes": 44966,
+      "initial_copy_sha256": "ca8718b21d646efadab81dac4b6a62a69308b053a3d5e59e19ba46ef5017d116"
+    },
+    {
+      "source": "tools/agent_runtime/strategy/grey_tempest_conversation_zh.md",
+      "target": "src/iag/applications/economy_governance/prompts/grey_tempest_conversation_zh.md",
+      "source_sha256": "ed6a9770b0e4fd64bfb04270f4a79b625212105d547e5566fa43749eb52d5c5c",
+      "bytes": 16605,
+      "initial_copy_sha256": "ed6a9770b0e4fd64bfb04270f4a79b625212105d547e5566fa43749eb52d5c5c"
+    },
+    {
+      "source": "tools/agent_runtime/strategy/grey_tempest_governor_zh.md",
+      "target": "src/iag/applications/economy_governance/prompts/grey_tempest_governor_zh.md",
+      "source_sha256": "c7217b39435d3fd1a67954fcf88cb205a349278931e3ade0cef90312d002252e",
+      "bytes": 12876,
+      "initial_copy_sha256": "c7217b39435d3fd1a67954fcf88cb205a349278931e3ade0cef90312d002252e"
+    },
+    {
+      "source": "tools/agent_runtime/schemas/agent_plan.schema.json",
+      "target": "src/iag/applications/economy_governance/schemas/agent_plan.schema.json",
+      "source_sha256": "3254132b7cba6809d40f30977bd3c919952bc01bcb7505602363cf9396b8956e",
+      "bytes": 2279,
+      "initial_copy_sha256": "3254132b7cba6809d40f30977bd3c919952bc01bcb7505602363cf9396b8956e"
+    },
+    {
+      "source": "tools/agent_runtime/autonomy.py",
+      "target": "src/iag/core/autonomy.py",
+      "source_sha256": "e0990ec502721422c1616337412c36f2c3b9a5a68364a4292360f0bbffeaf44c",
+      "bytes": 5105,
+      "initial_copy_sha256": "e0990ec502721422c1616337412c36f2c3b9a5a68364a4292360f0bbffeaf44c"
+    },
+    {
+      "source": "tools/agent_runtime/campaign_strategy.py",
+      "target": "src/iag/core/campaign_strategy.py",
+      "source_sha256": "4bb05acd42b88b98cb39bbd81f13e3a4518cba19da50511a3dee5a8800d60996",
+      "bytes": 10387,
+      "initial_copy_sha256": "4bb05acd42b88b98cb39bbd81f13e3a4518cba19da50511a3dee5a8800d60996"
+    },
+    {
+      "source": "tools/agent_runtime/context_window.py",
+      "target": "src/iag/core/context_window.py",
+      "source_sha256": "4235f522271094f7279f38b9fe4060584d30bed01e77e49e29fb36419cfe4102",
+      "bytes": 10331,
+      "initial_copy_sha256": "4235f522271094f7279f38b9fe4060584d30bed01e77e49e29fb36419cfe4102"
+    },
+    {
+      "source": "tools/agent_runtime/conversation_store.py",
+      "target": "src/iag/core/conversation_store.py",
+      "source_sha256": "359a0a61d0c6643aa94ea2462d8d9acfd181c170c75677dce4dfe92ca6f5801d",
+      "bytes": 32797,
+      "initial_copy_sha256": "359a0a61d0c6643aa94ea2462d8d9acfd181c170c75677dce4dfe92ca6f5801d"
+    },
+    {
+      "source": "tools/agent_runtime/model_client.py",
+      "target": "src/iag/infrastructure/llm/model_client.py",
+      "source_sha256": "4a9afa0f4871c7b81899db19b8f0b047e399940665d11cf6e4015e90374a1262",
+      "bytes": 7956,
+      "initial_copy_sha256": "4a9afa0f4871c7b81899db19b8f0b047e399940665d11cf6e4015e90374a1262"
+    },
+    {
+      "source": "tools/agent_runtime/model_templates.json",
+      "target": "src/iag/infrastructure/llm/model_templates.json",
+      "source_sha256": "a0011beae40012e343b5ff84130047e1f683a15dc98d85d3e6a77237e5ea3be0",
+      "bytes": 1131,
+      "initial_copy_sha256": "a0011beae40012e343b5ff84130047e1f683a15dc98d85d3e6a77237e5ea3be0"
+    },
+    {
+      "source": "tools/agent_runtime/model_templates.py",
+      "target": "src/iag/infrastructure/llm/model_templates.py",
+      "source_sha256": "bb110a8b7712c396478024f2149e2c21fda5fb310456b5ba7d700180ea007aea",
+      "bytes": 1564,
+      "initial_copy_sha256": "bb110a8b7712c396478024f2149e2c21fda5fb310456b5ba7d700180ea007aea"
+    },
+    {
+      "source": "tools/agent_runtime/research_tools.py",
+      "target": "src/iag/infrastructure/research/research_tools.py",
+      "source_sha256": "b4799d848bc10600432e4d2c0b0177171832963fe1a452ebe78ff99d1f140d54",
+      "bytes": 17174,
+      "initial_copy_sha256": "b4799d848bc10600432e4d2c0b0177171832963fe1a452ebe78ff99d1f140d54"
+    },
+    {
+      "source": "tools/agent_runtime/web_research.py",
+      "target": "src/iag/infrastructure/research/web_research.py",
+      "source_sha256": "bf9c3bb38757922d36f7427ccf56e8a52a5503fa3c01bbc769c38733c07d06f5",
+      "bytes": 10693,
+      "initial_copy_sha256": "bf9c3bb38757922d36f7427ccf56e8a52a5503fa3c01bbc769c38733c07d06f5"
+    },
+    {
+      "source": "tools/agent_runtime/fixed_click.py",
+      "target": "src/iag/stellaris/execution/fixed_click.py",
+      "source_sha256": "71b562dcd70591f0a738e2cfe86de7f01628934d3f44c61a4d2843fed6c9245b",
+      "bytes": 683,
+      "initial_copy_sha256": "71b562dcd70591f0a738e2cfe86de7f01628934d3f44c61a4d2843fed6c9245b"
+    },
+    {
+      "source": "tools/agent_runtime/host_bridge_pairing.py",
+      "target": "src/iag/stellaris/execution/host_bridge_pairing.py",
+      "source_sha256": "4245de4982c1542f6b694af2d10ea3c5e0a19a55444c2d7e16cabad9c7f44e58",
+      "bytes": 6209,
+      "initial_copy_sha256": "4245de4982c1542f6b694af2d10ea3c5e0a19a55444c2d7e16cabad9c7f44e58"
+    },
+    {
+      "source": "tools/agent_runtime/host_executor_protocol.py",
+      "target": "src/iag/stellaris/execution/host_executor_protocol.py",
+      "source_sha256": "4967a68c63a64f2f70f63d0c601684b57379fedf54c811981529f70351d665f3",
+      "bytes": 17470,
+      "initial_copy_sha256": "4967a68c63a64f2f70f63d0c601684b57379fedf54c811981529f70351d665f3"
+    },
+    {
+      "source": "tools/agent_runtime/iag_linux_interceptor.py",
+      "target": "src/iag/stellaris/execution/iag_linux_interceptor.py",
+      "source_sha256": "67bf66e1df72c8350a808e40295235b2633bbc4b8940801584b3037b1b9f41f2",
+      "bytes": 16823,
+      "initial_copy_sha256": "67bf66e1df72c8350a808e40295235b2633bbc4b8940801584b3037b1b9f41f2"
+    },
+    {
+      "source": "tools/agent_runtime/iag_supervisor.py",
+      "target": "src/iag/stellaris/execution/iag_supervisor.py",
+      "source_sha256": "549a5fe40bfd2908f0077e4d4f9e547313c8ea4fb70fa663a7f02dbb63ac2f95",
+      "bytes": 31432,
+      "initial_copy_sha256": "549a5fe40bfd2908f0077e4d4f9e547313c8ea4fb70fa663a7f02dbb63ac2f95"
+    },
+    {
+      "source": "tools/agent_runtime/linux_packet.py",
+      "target": "src/iag/stellaris/execution/linux_packet.py",
+      "source_sha256": "ce7703fe19668df0f2fe7f81be8cd6e4bcdbaf4cd7364846c422d3310ec9353e",
+      "bytes": 5306,
+      "initial_copy_sha256": "ce7703fe19668df0f2fe7f81be8cd6e4bcdbaf4cd7364846c422d3310ec9353e"
+    },
+    {
+      "source": "tools/packet_interceptor/iag_building_replacement_rewriter.py",
+      "target": "src/iag/stellaris/execution/packet/iag_building_replacement_rewriter.py",
+      "source_sha256": "3c1af4761f6af71b148e3fa1b96434214475d1da2e8a1b49f603913e9d8b7f9b",
+      "bytes": 9144,
+      "initial_copy_sha256": "3c1af4761f6af71b148e3fa1b96434214475d1da2e8a1b49f603913e9d8b7f9b"
+    },
+    {
+      "source": "tools/packet_interceptor/iag_building_to_zone_replacer.py",
+      "target": "src/iag/stellaris/execution/packet/iag_building_to_zone_replacer.py",
+      "source_sha256": "2a3c7b550fe68763d96850e99fc41d44d2a7aa1ae68d2ca2030f78e99768373b",
+      "bytes": 19723,
+      "initial_copy_sha256": "2a3c7b550fe68763d96850e99fc41d44d2a7aa1ae68d2ca2030f78e99768373b"
+    },
+    {
+      "source": "tools/packet_interceptor/iag_building_upgrade_rewriter.py",
+      "target": "src/iag/stellaris/execution/packet/iag_building_upgrade_rewriter.py",
+      "source_sha256": "3b270a34e1781b148f47e541f46e8833c31446cf89dcc4a69391151d6e32d84f",
+      "bytes": 8650,
+      "initial_copy_sha256": "3b270a34e1781b148f47e541f46e8833c31446cf89dcc4a69391151d6e32d84f"
+    },
+    {
+      "source": "tools/packet_interceptor/iag_command_replacement_injector.py",
+      "target": "src/iag/stellaris/execution/packet/iag_command_replacement_injector.py",
+      "source_sha256": "61abaec779d19bf17a97a9e4ca9770ae8c9130db66a195338d3eca5f18cffdea",
+      "bytes": 10562,
+      "initial_copy_sha256": "61abaec779d19bf17a97a9e4ca9770ae8c9130db66a195338d3eca5f18cffdea"
+    },
+    {
+      "source": "tools/packet_interceptor/iag_packet_interceptor.py",
+      "target": "src/iag/stellaris/execution/packet/iag_packet_interceptor.py",
+      "source_sha256": "0756e0dfbe821c0c29ff3cc33845f9915f0f80dd532009a057c51a3265d7552b",
+      "bytes": 32927,
+      "initial_copy_sha256": "0756e0dfbe821c0c29ff3cc33845f9915f0f80dd532009a057c51a3265d7552b"
+    },
+    {
+      "source": "tools/packet_interceptor/iag_same_family_construction_rewriter.py",
+      "target": "src/iag/stellaris/execution/packet/iag_same_family_construction_rewriter.py",
+      "source_sha256": "64a743304f1101808969dd9bcada2f6d22667c1807859eb36741a36a48d64612",
+      "bytes": 9500,
+      "initial_copy_sha256": "64a743304f1101808969dd9bcada2f6d22667c1807859eb36741a36a48d64612"
+    },
+    {
+      "source": "tools/packet_interceptor/iag_stream_command_injector.py",
+      "target": "src/iag/stellaris/execution/packet/iag_stream_command_injector.py",
+      "source_sha256": "e40082a436b77e75fb9d372e1075ef7b14a6b881da84af9133c102a42eb324e2",
+      "bytes": 23976,
+      "initial_copy_sha256": "e40082a436b77e75fb9d372e1075ef7b14a6b881da84af9133c102a42eb324e2"
+    },
+    {
+      "source": "tools/agent_runtime/passive_network_observer.py",
+      "target": "src/iag/stellaris/execution/passive_network_observer.py",
+      "source_sha256": "22b7bf2964dce907d69f32d9b02c6f5445e84de172cd3997ac4c69861be1fd73",
+      "bytes": 24444,
+      "initial_copy_sha256": "22b7bf2964dce907d69f32d9b02c6f5445e84de172cd3997ac4c69861be1fd73"
+    },
+    {
+      "source": "tools/agent_runtime/port_discovery.py",
+      "target": "src/iag/stellaris/execution/port_discovery.py",
+      "source_sha256": "03cd17f64ee9d571a3e9be1cb54d745a55002b385413a9e6c1f3cf6ed61db465",
+      "bytes": 22481,
+      "initial_copy_sha256": "03cd17f64ee9d571a3e9be1cb54d745a55002b385413a9e6c1f3cf6ed61db465"
+    },
+    {
+      "source": "tools/agent_runtime/windows_fixed_click.py",
+      "target": "src/iag/stellaris/execution/windows_fixed_click.py",
+      "source_sha256": "fb69069929b0c39bebda77b1c399cd5821d768a03931f6eb6bfff9fe1538c89e",
+      "bytes": 20376,
+      "initial_copy_sha256": "fb69069929b0c39bebda77b1c399cd5821d768a03931f6eb6bfff9fe1538c89e"
+    },
+    {
+      "source": "tools/agent_runtime/x11_fixed_click.py",
+      "target": "src/iag/stellaris/execution/x11_fixed_click.py",
+      "source_sha256": "f1420f5340876845d1398b1789cc0e0a5cdd9fd435070d113f0b1ebdabc1624d",
+      "bytes": 19213,
+      "initial_copy_sha256": "f1420f5340876845d1398b1789cc0e0a5cdd9fd435070d113f0b1ebdabc1624d"
+    },
+    {
+      "source": "tools/agent_runtime/game_knowledge.py",
+      "target": "src/iag/stellaris/game_knowledge.py",
+      "source_sha256": "31da27c94f0752dc22e778c407091571730e0e6d9673dee1c36b0c40dc92c730",
+      "bytes": 58203,
+      "initial_copy_sha256": "31da27c94f0752dc22e778c407091571730e0e6d9673dee1c36b0c40dc92c730"
+    },
+    {
+      "source": "tools/agent_runtime/extract_game_state.py",
+      "target": "src/iag/stellaris/state/extract_game_state.py",
+      "source_sha256": "35772b6150b6f8045933b2626568a774131b8cc61989bb6233dc9ebab665622c",
+      "bytes": 22616,
+      "initial_copy_sha256": "35772b6150b6f8045933b2626568a774131b8cc61989bb6233dc9ebab665622c"
+    },
+    {
+      "source": "tools/save_state/extract_planet_profiles.py",
+      "target": "src/iag/stellaris/state/planet_profiles.py",
+      "source_sha256": "2f482350d96bc7458605770b43f9af810f30702f1ef12a16942d999eb1160ea4",
+      "bytes": 11778,
+      "initial_copy_sha256": "2f482350d96bc7458605770b43f9af810f30702f1ef12a16942d999eb1160ea4"
+    },
+    {
+      "source": "tools/agent_runtime/save_ingest.py",
+      "target": "src/iag/stellaris/state/save_ingest.py",
+      "source_sha256": "72aeb2e34df30bd56d169b787fde1a4e989ebf4aa2b85b397e10f33469632251",
+      "bytes": 13920,
+      "initial_copy_sha256": "72aeb2e34df30bd56d169b787fde1a4e989ebf4aa2b85b397e10f33469632251"
+    },
+    {
+      "source": "common/edicts/iag_edicts.txt",
+      "target": "stellaris_mod/common/edicts/iag_edicts.txt",
+      "source_sha256": "71308c08c314d0177655575b4456831c4f1b8afef9ce5f4ddfe6fd281e8cfbd7",
+      "bytes": 804,
+      "initial_copy_sha256": "71308c08c314d0177655575b4456831c4f1b8afef9ce5f4ddfe6fd281e8cfbd7"
+    },
+    {
+      "source": "common/on_actions/iag_on_actions.txt",
+      "target": "stellaris_mod/common/on_actions/iag_on_actions.txt",
+      "source_sha256": "7a11ee7eda2d275e48f545c59df64787ff6c668e18474b52a27ca4eaf2237321",
+      "bytes": 492,
+      "initial_copy_sha256": "7a11ee7eda2d275e48f545c59df64787ff6c668e18474b52a27ca4eaf2237321"
+    },
+    {
+      "source": "common/scripted_effects/iag_carrier_effects.txt",
+      "target": "stellaris_mod/common/scripted_effects/iag_carrier_effects.txt",
+      "source_sha256": "d375ecab1a83f1c8616a1d689c085f505eb8ff3523b815625d8197f26e50b558",
+      "bytes": 11011,
+      "initial_copy_sha256": "d375ecab1a83f1c8616a1d689c085f505eb8ff3523b815625d8197f26e50b558"
+    },
+    {
+      "source": "common/solar_system_initializers/iag_carrier_initializers.txt",
+      "target": "stellaris_mod/common/solar_system_initializers/iag_carrier_initializers.txt",
+      "source_sha256": "f65df5d8744630d8e7779604488b788af3e7e0c8e226167fdcbf4fbf74e4f49f",
+      "bytes": 1691,
+      "initial_copy_sha256": "f65df5d8744630d8e7779604488b788af3e7e0c8e226167fdcbf4fbf74e4f49f"
+    },
+    {
+      "source": "common/static_modifiers/iag_static_modifiers.txt",
+      "target": "stellaris_mod/common/static_modifiers/iag_static_modifiers.txt",
+      "source_sha256": "f911d876ac9aa3707323c2acee43555619eacacda3ef948e9449a8bac1ecd21a",
+      "bytes": 627,
+      "initial_copy_sha256": "f911d876ac9aa3707323c2acee43555619eacacda3ef948e9449a8bac1ecd21a"
+    },
+    {
+      "source": "descriptor.mod",
+      "target": "stellaris_mod/descriptor.mod",
+      "source_sha256": "f388910bede281c936aadf0d9d819672e1506d484830352cc0696457214df729",
+      "bytes": 138,
+      "initial_copy_sha256": "f388910bede281c936aadf0d9d819672e1506d484830352cc0696457214df729"
+    },
+    {
+      "source": "events/iag_carrier_events.txt",
+      "target": "stellaris_mod/events/iag_carrier_events.txt",
+      "source_sha256": "1882e8ae8a7106efcf7fd65dceedb14bef284fbe93d8f1f3d6c51b4f358ddeb6",
+      "bytes": 3487,
+      "initial_copy_sha256": "1882e8ae8a7106efcf7fd65dceedb14bef284fbe93d8f1f3d6c51b4f358ddeb6"
+    },
+    {
+      "source": "localisation/english/iag_l_english.yml",
+      "target": "stellaris_mod/localisation/english/iag_l_english.yml",
+      "source_sha256": "e6dacc4660157df509e9cac5dfd9ef983f8561a65a03e1366655ebf91f9b1fa7",
+      "bytes": 3216,
+      "initial_copy_sha256": "e6dacc4660157df509e9cac5dfd9ef983f8561a65a03e1366655ebf91f9b1fa7"
+    },
+    {
+      "source": "localisation/simp_chinese/iag_l_simp_chinese.yml",
+      "target": "stellaris_mod/localisation/simp_chinese/iag_l_simp_chinese.yml",
+      "source_sha256": "15b3b840bba84283f8c3328f4a6c7042f48feb07dcc8ba71e0ce9b4fc18c23d2",
+      "bytes": 3097,
+      "initial_copy_sha256": "15b3b840bba84283f8c3328f4a6c7042f48feb07dcc8ba71e0ce9b4fc18c23d2"
+    },
+    {
+      "source": "tools/agent_runtime/migrate_config_v2.py",
+      "target": "scripts/migration/migrate_runtime_config_v2.py",
+      "source_sha256": "577a1f582f1c809e5fa5b52601eb1e94817407c1e39ff778f663268bd70c0fd3",
+      "bytes": 4767,
+      "initial_copy_sha256": "577a1f582f1c809e5fa5b52601eb1e94817407c1e39ff778f663268bd70c0fd3"
+    }
+  ]
+}

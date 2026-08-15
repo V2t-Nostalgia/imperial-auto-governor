@@ -1,0 +1,28 @@
+{
+    "server_url":  "",
+    "server_certificate_sha256":  "REPLACE_WITH_SERVER_CERTIFICATE_SHA256",
+    "upload_token_file":  "secrets/save_upload_token",
+    "save_root":  "",
+    "poll_seconds":  2,
+    "stability_seconds":  5,
+    "maximum_initial_save_age_seconds":  7200,
+    "bootstrap_latest":  true,
+    "timeout_seconds":  180,
+    "state_file":  "state/uploader_state.json",
+    "log_file":  "logs/save_uploader.jsonl",
+    "heartbeat_seconds":  5,
+    "overlay":  {
+        "access_token_file":  "secrets/overlay_access_token",
+        "hotkey":  "Ctrl+Shift+Space",
+        "opacity":  0.78,
+        "font_size":  15,
+        "analysis_phrase_interval_seconds":  2.8,
+        "analysis_character_interval_ms":  65,
+        "geometry":  {
+            "x":  80,
+            "y":  120,
+            "width":  680,
+            "height":  430
+        }
+    }
+}

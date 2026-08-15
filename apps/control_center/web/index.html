@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>帝国内政代理控制台</title>
+  <link rel="stylesheet" href="styles.css?v=24">
+  <link rel="stylesheet" href="conversation.css?v=24">
+  <link rel="stylesheet" href="construction.css">
+</head>
+<body>
+  <div class="stars"></div>
+  <main class="shell">
+    <header class="masthead">
+      <div>
+        <p class="eyebrow">IMPERIAL AUTO GOVERNOR</p>
+        <h1>帝国内政代理控制台</h1>
+        <p class="subtitle">LLM 建设载体 · 联机权威链路</p>
+      </div>
+      <div class="connection-pill" id="connection-pill" data-state="offline">
+        <span class="signal"></span>
+        <div>
+          <small>联机状态</small>
+          <strong id="connection-label">等待 Stellaris</strong>
+        </div>
+      </div>
+    </header>
+
+    <section class="telemetry-grid">
+      <article class="panel network-panel">
+        <div class="panel-heading">
+          <div><span class="kicker">NETWORK TELEMETRY</span><h2>联机遥测</h2></div>
+          <span class="status-tag" id="network-confidence">OFFLINE</span>
+        </div>
+        <div class="port-map">
+          <div class="node"><span>合作端</span><strong id="local-port">--</strong><small>本机 UDP</small></div>
+          <div class="route"><i></i><span id="packet-count">0 ↔ 0</span><i></i></div>
+          <div class="node"><span>房主</span><strong id="host-ip">--</strong><small><b id="host-out-port">--</b> / <b id="host-in-port">--</b></small></div>
+        </div>
+        <dl class="kv-list">
+          <div><dt>Stellaris 进程</dt><dd id="process-state">未发现</dd></div>
+          <div><dt>本局端口判定</dt><dd id="port-verdict" class="port-verdict offline">未确认</dd></div>
+          <div><dt>拦截器阶段</dt><dd id="interceptor-phase">未武装</dd></div>
+          <div><dt>最近遥测</dt><dd id="telemetry-time">--</dd></div>
+        </dl>
+      </article>
+
+      <article class="panel">
+        <div class="panel-heading"><div><span class="kicker">EMPIRE STATE</span><h2>帝国快照</h2></div></div>
+        <div class="metric-row">
+          <div><small>游戏日期</small><strong id="game-date">--</strong></div>
+          <div><small>殖民地</small><strong id="planet-count">--</strong></div>
+          <div><small>风险</small><strong id="risk-level">--</strong></div>
+        </div>
+        <div class="resource-grid">
+          <div><small>能源</small><strong id="resource-energy">--</strong><span id="balance-energy">--/月</span></div>
+          <div><small>矿物</small><strong id="resource-minerals">--</strong><span id="balance-minerals">--/月</span></div>
+          <div><small>食物</small><strong id="resource-food">--</strong><span id="balance-food">--/月</span></div>
+          <div><small>消费品</small><strong id="resource-consumer-goods">--</strong><span id="balance-consumer-goods">--/月</span></div>
+          <div><small>合金</small><strong id="resource-alloys">--</strong><span id="balance-alloys">--/月</span></div>
+          <div><small>凝聚力</small><strong id="resource-unity">--</strong><span id="balance-unity">--/月</span></div>
+          <div><small>科研</small><strong id="resource-research">--</strong><span id="balance-research">--/月</span></div>
+        </div>
+        <dl class="kv-list">
+          <div><dt>最新同步存档</dt><dd id="save-name">--</dd></div>
+          <div><dt>房主上传状态</dt><dd id="save-upload-state">等待 GUI 客户端</dd></div>
+          <div><dt>Windows 房主桥</dt><dd id="save-client-connection">未连接</dd></div>
+          <div><dt>入站改写能力</dt><dd id="host-bridge-state">未就绪</dd></div>
+          <div><dt>当前战役</dt><dd id="save-campaign">--</dd></div>
+          <div><dt>存档时间</dt><dd id="save-time">--</dd></div>
+          <div><dt>数值新鲜度</dt><dd id="save-freshness">--</dd></div>
+          <div><dt>本地规则版本</dt><dd id="rules-version">--</dd></div>
+          <div><dt>联网检索</dt><dd id="web-research-state">--</dd></div>
+          <div><dt>当前任务</dt><dd id="job-state">空闲</dd></div>
+        </dl>
+        <div class="button-row">
+          <a class="button-link" href="/downloads/IAGHostBridge-paired-windows-x64.zip" download>下载已配对 Windows 房主执行桥</a>
+        </div>
+        <p class="hint">新版需要接受一次管理员权限提示，以便在房主机打开 WinDivert；窗口关闭即停止，不会开机自启。</p>
+      </article>
+
+      <article class="panel decision-panel">
+        <div class="panel-heading"><div><span class="kicker">CURRENT DIRECTIVE</span><h2>本轮决策</h2></div></div>
+        <p class="action-title" id="plan-action">尚未生成规划</p>
+        <p class="reason" id="plan-reason">读取同步存档后，代理会按经济承受能力逐项执行有界建设批次。</p>
+        <div class="button-row">
+          <button class="primary" id="plan-button">分析并规划</button>
+          <button class="danger-outline" id="execute-button">执行最新规划</button>
+        </div>
+      </article>
+    </section>
+
+    <section class="panel construction-catalog-panel">
+      <div class="panel-heading">
+        <div><span class="kicker">UNIFIED CONSTRUCTION CATALOG</span><h2>统一建设目录</h2></div>
+        <span id="catalog-ready-state" class="status-tag warn">等待校准</span>
+      </div>
+      <div class="catalog-overview">
+        <div>
+          <small>本轮目标</small>
+          <strong id="catalog-current-target">尚未选择建设</strong>
+          <span id="catalog-current-location">运行规划后，目标会自动置顶。</span>
+        </div>
+        <div>
+          <small>合法载体</small>
+          <strong id="catalog-carrier-source">--</strong>
+          <span id="catalog-carrier-route">--</span>
+        </div>
+      </div>
+      <div class="catalog-tabs" role="tablist" aria-label="建设类型">
+        <button class="catalog-tab active" data-catalog-action="build_building" type="button">建筑 <b id="catalog-count-build-building">0</b></button>
+        <button class="catalog-tab" data-catalog-action="build_district" type="button">主区划 <b id="catalog-count-build-district">0</b></button>
+        <button class="catalog-tab" data-catalog-action="build_zone" type="button">区划特化 <b id="catalog-count-build-zone">0</b></button>
+        <button class="catalog-tab" data-catalog-action="upgrade_building" type="button">建筑升级 <b id="catalog-count-upgrade-building">0</b></button>
+        <button class="catalog-tab" data-catalog-action="replace_building" type="button">建筑替换 <b id="catalog-count-replace-building">0</b></button>
+      </div>
+      <div id="construction-catalog-list" class="construction-catalog-list" aria-live="polite"></div>
+      <p class="hint">这里列出模型可用的真实目标；游戏内不逐次寻找目标条目。执行器始终点击川陀上的固定载体首项，再由房主入站桥等长改写为置顶目标。</p>
+    </section>
+
+    <section class="workspace-grid conversation-workspace">
+      <aside class="panel campaign-list-panel">
+        <div class="panel-heading">
+          <div><span class="kicker">CAMPAIGN ARCHIVE</span><h2>战役会话</h2></div>
+          <span id="campaign-count" class="status-tag">1 局</span>
+        </div>
+        <button class="primary campaign-new-button" id="new-campaign">新建战役会话</button>
+        <div class="campaign-binding-card" id="campaign-binding-card" data-state="unbound">
+          <small>CURRENT SAVE · MANUAL BINDING</small>
+          <strong id="campaign-binding-label">等待存档绑定</strong>
+          <p id="campaign-binding-message">每局游戏使用独立的上下文、规划与审计记录。</p>
+          <label class="campaign-binding-target">将当前存档绑定到
+            <select id="campaign-binding-target">
+              <option value="">暂不绑定任何会话</option>
+            </select>
+          </label>
+          <div class="campaign-binding-actions">
+            <button id="apply-campaign-binding">应用绑定</button>
+            <button id="open-bound-campaign" type="button" hidden>打开已绑定会话</button>
+          </div>
+        </div>
+        <form class="campaign-editor" id="campaign-editor" hidden>
+          <label>会话名称
+            <input id="campaign-title-input" maxlength="80" autocomplete="off" placeholder="例如：地联 2200">
+          </label>
+          <label class="campaign-bind-check" id="campaign-bind-option">
+            <input id="campaign-bind-current" type="checkbox">
+            创建后绑定当前上传存档
+          </label>
+          <div class="campaign-editor-actions">
+            <button class="primary" id="campaign-editor-save" type="submit">建立会话</button>
+            <button id="campaign-editor-cancel" type="button">取消</button>
+          </div>
+        </form>
+        <div class="campaign-list" id="campaign-list" aria-live="polite"></div>
+        <label class="campaign-archive-toggle">
+          <input id="show-archived-campaigns" type="checkbox">
+          显示已归档会话
+        </label>
+        <p class="hint">上传新存档不会创建、绑定或切换会话。当前存档与上下文的对应关系完全由你在上方选择。</p>
+      </aside>
+
+      <article class="panel command-panel conversation-panel">
+        <div class="panel-heading">
+          <div><span class="kicker">CAMPAIGN CONVERSATION</span><h2 id="conversation-title">灰风 · 本局上下文</h2></div>
+          <span id="autonomy-state" class="status-tag">自动巡检已暂停</span>
+        </div>
+        <div class="conversation-toolbar">
+          <label>运行策略
+            <select id="autonomy-mode">
+              <option value="paused">暂停自动巡检</option>
+              <option value="advisory">自主分析，只准备规划</option>
+              <option value="execute">自主分析并执行建设</option>
+            </select>
+          </label>
+          <label>读取存档周期
+            <select id="save-review-interval">
+              <option value="1">每月</option>
+              <option value="3">每季</option>
+              <option value="6">每半年</option>
+              <option value="12">每年</option>
+            </select>
+          </label>
+          <button id="save-autonomy">应用策略</button>
+          <button id="review-button">立即巡检</button>
+        </div>
+        <div class="conversation-status-row">
+          <span>本地完整记录 <b id="conversation-count">0</b> 条</span>
+          <span id="next-review">尚未安排复查</span>
+        </div>
+        <details class="strategy-console" id="strategy-console">
+          <summary>
+            <span>十年计划与紧急状态</span>
+            <span id="strategy-state" class="status-tag">等待建立计划</span>
+          </summary>
+          <div class="strategy-grid">
+            <section class="strategy-block">
+              <div class="strategy-block-heading">
+                <strong>当前十年计划</strong>
+                <span id="decade-period">日期未知</span>
+              </div>
+              <textarea id="decade-plan" rows="6" maxlength="12000" placeholder="写下本十年的扩张、人口、科研、合金与殖民地分工目标。"></textarea>
+              <div class="button-row"><button id="save-decade-plan">保存当前计划</button></div>
+            </section>
+            <section class="strategy-block" id="next-decade-block" hidden>
+              <div class="strategy-block-heading">
+                <strong>下一十年计划草案</strong>
+                <span id="next-decade-period">编写窗口已开放</span>
+              </div>
+              <textarea id="next-decade-plan" rows="6" maxlength="12000" placeholder="当前周期接近结束。提前写下下一周期目标。"></textarea>
+              <div class="button-row"><button id="save-next-decade-plan">保存下一周期草案</button></div>
+            </section>
+            <section class="strategy-block emergency-block" id="strategic-emergency-block">
+              <div class="strategy-block-heading">
+                <strong>紧急事件</strong>
+                <span id="strategic-emergency-state">未启用</span>
+              </div>
+              <label>事件名称<input id="strategic-emergency-title" maxlength="120" placeholder="例如：全面战争动员"></label>
+              <label>临时最高优先指令<textarea id="strategic-emergency-directive" rows="4" maxlength="8000" placeholder="启用后暂停执行十年计划，直到你明确结束紧急状态。"></textarea></label>
+              <div class="button-row">
+                <button class="danger" id="activate-strategic-emergency">启用紧急状态</button>
+                <button id="end-strategic-emergency" disabled>结束并恢复十年计划</button>
+              </div>
+            </section>
+          </div>
+        </details>
+        <div id="conversation-log" class="conversation-log" aria-live="polite">
+          <p class="conversation-empty" id="conversation-empty">会话尚未建立。</p>
+        </div>
+        <div class="conversation-composer">
+          <textarea id="chat-input" rows="3" placeholder="告诉灰风新的战略要求，或询问当前帝国状态。Enter 发送，Shift+Enter 换行。"></textarea>
+          <div class="button-row">
+            <button class="primary" id="send-message">发送</button>
+            <button class="danger" id="stop-button">紧急停止</button>
+            <button id="clear-stop-button" disabled>解除紧急停止</button>
+            <span id="execution-interlock-state" class="status-tag good">执行锁未启用</span>
+          </div>
+        </div>
+        <p class="hint">完整记录保存在本地数据库；模型调用会在所选上下文上限内重放历史。实际建设仍受一发式、存档哈希、等长改写和房主确认约束。</p>
+      </article>
+
+      <article class="panel prompt-panel">
+        <div class="panel-heading">
+          <div><span class="kicker">STRATEGIC PROMPT</span><h2>战略 Prompt</h2></div>
+          <span id="prompt-version-count" class="status-tag">0 历史版本</span>
+        </div>
+        <textarea id="prompt" rows="15"></textarea>
+        <div class="button-row"><button id="save-prompt">保存并建立版本</button></div>
+        <p class="hint">等长、一发式、合法候选和房主确认等安全规则位于 Prompt 外，不能被提示词覆盖。</p>
+      </article>
+    </section>
+
+    <section class="workspace-grid lower">
+      <article class="panel calibration-panel">
+        <div class="panel-heading">
+          <div><span class="kicker">CARRIER CALIBRATION</span><h2>载体点击校准</h2></div>
+          <span id="calibration-state" class="status-tag">未校准</span>
+        </div>
+        <label>载体类型<select id="calibration-action"><option value="build_building">建筑（川陀）：建设指令中继</option><option value="build_district">主区划（川陀）：发电区划载体</option><option value="build_zone">区划特化（川陀）：工程学研究特化唯一载体</option><option value="upgrade_building">建筑升级（川陀）：升级指令中继</option><option value="replace_building">建筑替换（川陀）：替换指令中继</option></select></label>
+        <label id="calibration-stage-label">点击阶段<select id="calibration-stage"><option value="open">第 1 步：打开候选面板</option><option value="replace">第 2 步：点击替换按钮</option><option value="command">最后一步：点击载体候选</option></select></label>
+        <div class="calibration-frame" id="calibration-frame">
+          <p id="calibration-placeholder">让川陀保持统一建设控制台基础画面，然后捕获建筑入口。</p>
+          <img id="calibration-image" alt="Stellaris 校准截图">
+          <span id="calibration-marker"></span>
+        </div>
+        <div class="button-row">
+          <button id="capture-button">捕获当前窗口</button>
+          <button id="commit-button" disabled>保存点击位置</button>
+          <button id="test-button">仅移动鼠标测试</button>
+        </div>
+        <p class="hint" id="calibration-hint">在截图中的研究实验室按钮上单击。系统保存相对窗口坐标，不调用视觉模型。</p>
+      </article>
+
+      <article class="panel settings-panel application-model-panel">
+        <div class="panel-heading">
+          <div><span class="kicker">APPLICATION MODEL PROFILE</span><h2>Application 模型配置</h2></div>
+          <span id="key-state" class="status-tag">未配置模型</span>
+        </div>
+        <p class="hint">这里决定每个 Application 使用哪一个模型池中的逻辑模型。供应商地址、密钥与回退顺序在独立的模型配置面板中维护。</p>
+        <div class="application-binding-grid">
+          <label>Application<select id="application-select"></select></label>
+          <label>已保存配置<select id="application-profile-select"></select></label>
+          <label class="application-profile-name">配置名称<input id="application-profile-name" type="text" maxlength="120" placeholder="例如：经济治理 · DeepSeek 低成本"></label>
+          <label>使用模型池<select id="application-pool-select"></select></label>
+          <label>池内逻辑模型<select id="application-model-select"></select></label>
+        </div>
+        <div id="application-model-route" class="application-model-route" data-state="ready">
+          <div><span>当前路由</span><strong id="application-model-route-title">尚未选择模型</strong></div>
+          <p id="application-model-route-detail">请先在模型配置面板中建立模型池和端点。</p>
+        </div>
+        <div class="model-feature-row"><span id="thinking-state" class="status-tag">标准模式</span><span id="tool-state" class="status-tag">工具待配置</span><span id="research-tool-state" class="status-tag">联网研究已关闭</span></div>
+        <details class="application-profile-settings" open>
+          <summary>本配置的请求与上下文参数</summary>
+          <div class="compact-setting-grid">
+            <label>Temperature<input id="temperature" type="number" min="0" max="2" step="0.05"></label>
+            <label>推理强度<select id="reasoning-effort"><option value="high">high</option><option value="max">max</option></select></label>
+          </div>
+          <label class="check-row"><input id="thinking-enabled" type="checkbox">启用思考模式参数</label>
+          <label class="check-row"><input id="context-compression-enabled" type="checkbox">到达阈值后自动生成概况版上文</label>
+          <div class="compact-setting-grid">
+            <label>触发占最大上下文 %<input id="context-compression-trigger" type="number" min="30" max="98" step="1"></label>
+            <label>压缩后目标占比 %<input id="context-compression-target" type="number" min="10" max="93" step="1"></label>
+          </div>
+          <label>附加请求参数（Raw JSON）<textarea id="request-body-overrides" rows="6" spellcheck="false" placeholder='{"top_p":0.9,"max_tokens":8192}'></textarea></label>
+        </details>
+        <label class="check-row"><input id="web-research-enabled" type="checkbox">允许此 Application 联网检索</label>
+        <details class="research-settings">
+          <summary>联网研究服务设置</summary>
+          <label>SearXNG URL<input id="searxng-url" type="url" placeholder="http://127.0.0.1:8080"></label>
+          <label>Crawl4AI URL<input id="crawl4ai-url" type="url" placeholder="http://127.0.0.1:11235"></label>
+          <label>Crawl4AI Token<input id="crawl4ai-token" type="password" placeholder="留空则保留现有 Token" autocomplete="new-password"></label>
+          <label>Stellaris Wiki API<input id="stellaris-wiki-api-url" type="url"></label>
+          <label>来源域名白名单<textarea id="web-allowed-domains" rows="5" spellcheck="false" placeholder="stellaris.paradoxwikis.com&#10;forum.paradoxplaza.com"></textarea></label>
+          <label class="check-row"><input id="web-direct-fallback-enabled" type="checkbox">Crawl4AI 不可用时允许直接提取静态 HTML</label>
+          <p class="hint">网页内容只作不可信参考，不能创建合法候选或直接控制建设。</p>
+        </details>
+        <div class="button-row application-profile-actions">
+          <button id="save-application-profile" class="primary">保存并启用配置</button>
+          <button id="new-application-profile" type="button">新建配置</button>
+          <button id="delete-application-profile" type="button" class="danger-outline">删除配置</button>
+          <button id="open-model-catalog" type="button">模型配置面板</button>
+        </div>
+      </article>
+
+      <article class="panel settings-panel execution-settings-panel">
+        <div class="panel-heading">
+          <div><span class="kicker">EXECUTION LEDGER</span><h2>执行与确认</h2></div>
+          <span id="pending-confirmation-state" class="status-tag">无待核验动作</span>
+        </div>
+        <label>执行方式<select id="execution-mode"><option value="carrier_click">点击载体（稳定）</option><option value="session_proxy">会话代理（实验）</option></select></label>
+        <label class="check-line"><input id="fixed-click-guard-enabled" type="checkbox">启用固定点击界面校验</label>
+        <div id="session-proxy-settings" class="session-proxy-settings" hidden>
+          <div class="subpanel-heading"><strong>会话代理</strong><span id="session-proxy-state" class="status-tag">未启动</span></div>
+          <p class="hint">Windows Agent 必须以管理员身份运行，并在合作端加入房间前启动代理；一旦本局插入过命令，必须先退出房间再停止代理。</p>
+          <div class="proxy-address-grid">
+            <label>合作端本地 IP（留空自动）<input id="session-proxy-local-ip" type="text" placeholder="自动发现"></label>
+            <label>房主 IP（必填）<input id="session-proxy-host-ip" type="text" placeholder="&lt;HOST_IP&gt;"></label>
+            <label>合作端 actor（0 自动）<input id="session-proxy-source-actor" type="number" min="0" step="1"></label>
+            <label>房主 actor<input id="session-proxy-host-actor" type="number" min="1" step="1"></label>
+          </div>
+          <label class="check-line"><input id="session-proxy-acknowledged" type="checkbox">我理解这是实验功能，并会在退出房间前保持代理运行</label>
+          <div class="proxy-runtime-detail" id="session-proxy-detail">尚未建立代理进程。</div>
+          <div class="button-row"><button id="start-session-proxy" type="button">进房前启动代理</button><button id="stop-session-proxy" type="button" class="danger-outline">退房后停止代理</button></div>
+        </div>
+        <label>规划存档最多落后（上传版本数）<input id="maximum-source-save-lag-versions" type="number" min="0" max="24" step="1"></label>
+        <label>规划到点击的存档时效（秒）<input id="fresh-save-seconds" type="number" min="0" max="86400" step="30"></label>
+        <label>自主巡检存档时效（秒）<input id="autonomy-fresh-save-seconds" type="number" min="0" max="86400" step="30"></label>
+        <label>单轮串行建设上限<select id="maximum-constructions"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option></select></label>
+        <label>回包没有可识别明文时<select id="inconclusive-rewrite-policy"><option value="block_until_save">严格：等待新存档后再继续</option><option value="allow_serial_provisional">宽松：记为暂定并允许继续串行</option></select></label>
+          <label class="check-line"><input id="experimental-fleet-tools-enabled" type="checkbox">向模型开放实验性舰队移动工具（仅会话代理模式）</label>
+        <label class="check-line"><input id="experimental-fleet-attack-enabled" type="checkbox">显示攻击工具（协议尚未完成成对验证，v0.5.9 仍会拒绝发包）</label>
+        <p class="hint">存档版本容差填 0 表示只接受最新上传版本；默认 2 表示一轮分析期间即使又上传两份新档，原批次仍可继续。关闭界面校验会保留截图和匹配分数，但不再因分数不足阻止点击，需自行承担误点风险。时效填 0 只关闭墙钟年龄限制；存档哈希和战役绑定仍然有效。</p>
+        <div class="button-row"><button id="save-execution-settings">保存执行设置</button></div>
+      </article>
+
+      <article class="panel settings-panel fleet-permission-panel">
+        <div class="panel-heading">
+          <div><span class="kicker">FLEET AUTHORIZATION</span><h2>舰队调用权限</h2></div>
+          <span id="fleet-summary-state" class="status-tag">等待存档</span>
+        </div>
+        <p class="hint">舰队由最新同步存档识别。每支新舰队默认禁止调用；移动与攻击权限互相独立。</p>
+        <div id="fleet-permission-list" class="fleet-permission-list"></div>
+      </article>
+    </section>
+
+    <footer><span id="footer-message">控制台已就绪</span><span id="last-refresh">--</span></footer>
+  </main>
+
+  <dialog id="model-catalog-dialog" class="model-catalog-dialog">
+    <div class="model-catalog-shell">
+      <header class="model-catalog-header">
+        <div><span class="kicker">MODEL CONFIGURATION</span><h2>模型配置面板</h2><p>维护玩家命名的模型池、供应端点与低成本优先顺序。</p></div>
+        <button id="close-model-catalog" type="button" class="icon-button" aria-label="关闭模型配置面板">×</button>
+      </header>
+      <div class="model-catalog-layout">
+        <aside class="model-pool-sidebar">
+          <div class="model-sidebar-heading"><span>已保存模型池</span><b id="model-pool-count">0</b></div>
+          <div id="model-pool-list" class="model-pool-list"></div>
+          <button id="create-model-pool" type="button" class="model-sidebar-create">+ 创建模型池</button>
+        </aside>
+
+        <section class="model-catalog-workspace">
+          <div id="model-pool-overview">
+            <div class="model-workspace-heading">
+              <div><span class="kicker">SELECTED POOL</span><h3 id="selected-pool-title">模型池</h3></div>
+              <span id="selected-pool-health" class="status-tag">尚未检测</span>
+            </div>
+            <div class="pool-identity-grid">
+              <label>玩家可见名称<input id="catalog-pool-name" type="text" maxlength="120" placeholder="例如：DeepSeek 低成本池"></label>
+              <label>技术标识<input id="catalog-pool-id" type="text" maxlength="96" placeholder="deepseek-economy"></label>
+            </div>
+            <p class="hint">同一逻辑模型可以配置多个供应端点。端点按数字优先级从小到大尝试，只有可安全换源的错误才会回退。</p>
+            <div class="endpoint-list-heading"><span>池内端点</span><button id="create-model-endpoint" type="button">+ 添加端点</button></div>
+            <div id="catalog-endpoint-list" class="catalog-endpoint-list"></div>
+            <div class="button-row model-pool-actions">
+              <button id="save-model-pools" class="primary" type="button">保存全部模型池</button>
+              <button id="probe-selected-pool" type="button">检测此池端点</button>
+              <button id="delete-model-pool" type="button" class="danger-outline">删除模型池</button>
+            </div>
+          </div>
+
+          <div id="model-endpoint-editor" class="model-endpoint-editor" hidden>
+            <div class="endpoint-editor-heading">
+              <button id="back-to-model-pool" type="button" class="back-button">← 返回模型池</button>
+              <div><span class="kicker">ENDPOINT EDITOR</span><h3 id="endpoint-editor-title">配置端点</h3></div>
+            </div>
+            <div id="model-endpoint-health" class="endpoint-health" data-state="unknown">
+              <strong>尚未检测</strong><span>保存后可读取 /models 验证可达性。</span>
+            </div>
+            <div class="endpoint-editor-grid">
+              <label>端点名称<input id="model-endpoint-display-name" type="text" maxlength="120" placeholder="例如：DeepSeek 官方"></label>
+              <label>端点技术标识（创建后固定）<input id="model-endpoint-id" type="text" maxlength="96" placeholder="deepseek-official"></label>
+              <label>逻辑模型标识<input id="endpoint-logical-model-id" type="text" maxlength="120" placeholder="deepseek-chat"></label>
+              <label>供应商模型名<input id="model" type="text" placeholder="deepseek-chat"></label>
+              <label>使用顺序（越小越优先）<input id="model-endpoint-priority" type="number" min="0" max="100000" step="1"></label>
+              <label>配置模板<select id="model-template"></select></label>
+            </div>
+            <p class="template-description" id="template-description">模板只负责预填默认值，应用后所有运行参数仍可修改。</p>
+            <div class="model-endpoint-flags">
+              <label class="check-row"><input id="model-endpoint-enabled" type="checkbox">启用此端点</label>
+              <label class="check-row"><input id="supports-tools" type="checkbox">支持工具调用</label>
+              <label class="check-row"><input id="supports-reasoning" type="checkbox">支持推理</label>
+            </div>
+            <div class="endpoint-editor-grid">
+              <label>传输实现<select id="model-transport"><option value="openai_sdk">OpenAI SDK（推荐）</option><option value="raw_http">原始 HTTP（兼容/诊断）</option></select></label>
+              <label>协议<select id="provider"><option value="responses_compatible">Responses Compatible</option><option value="chat_completions_compatible">Chat Completions Compatible</option></select></label>
+              <label class="wide-field">Base URL<input id="base-url" type="url" placeholder="https://api.example.com/v1"></label>
+              <label>鉴权<select id="auth-mode"><option value="bearer">Bearer API Key</option><option value="none">无需鉴权</option></select></label>
+              <label>API Key<input id="api-key" type="password" placeholder="留空则保留当前端点密钥" autocomplete="new-password"></label>
+              <label>最大上下文（tokens）<input id="context-window-tokens" type="number" min="1024" max="2000000" step="1024"></label>
+              <label>最大输出（tokens）<input id="context-output-reserve" type="number" min="1" max="1000000" step="512"></label>
+              <label>API 超时（秒）<input id="timeout-seconds" type="number" min="1" max="900" step="1"></label>
+              <label>SDK 自动重试次数<input id="sdk-max-retries" type="number" min="0" max="10" step="1"></label>
+              <label>模型列表路径<input id="models-path" type="text" placeholder="/models；留空则不检测"></label>
+              <label>探测超时（秒）<input id="probe-timeout-seconds" type="number" min="1" max="120" step="1"></label>
+              <label>429 默认冷却（秒）<input id="rate-limit-cooldown-seconds" type="number" min="1" max="86400" step="1"></label>
+            </div>
+            <label class="check-row"><input id="clear-api-key" type="checkbox">保存模型池时清除此端点已有密钥</label>
+            <details class="research-settings endpoint-advanced-settings">
+              <summary>端点协议高级设置</summary>
+              <div class="endpoint-editor-grid">
+                <label>Chat Completions 路径<input id="chat-completions-path" type="text" placeholder="/chat/completions"></label>
+                <label>Responses 路径<input id="responses-path" type="text" placeholder="/responses"></label>
+                <label>API Key Header<input id="api-key-header" type="text" placeholder="Authorization"></label>
+                <label>API Key Prefix<input id="api-key-prefix" type="text" placeholder="Bearer "></label>
+              </div>
+              <label>端点附加 Headers（Raw JSON）<textarea id="endpoint-extra-headers" rows="5" spellcheck="false" placeholder='{"HTTP-Referer":"https://example.invalid"}'></textarea></label>
+            </details>
+            <div class="button-row endpoint-editor-actions">
+              <button id="commit-model-endpoint" class="primary" type="button">应用到当前模型池</button>
+              <button id="save-and-probe-model-endpoint" type="button">保存并检测端点</button>
+              <button id="delete-model-endpoint" type="button" class="danger-outline">删除此端点</button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </dialog>
+
+  <script src="app_v2.js?v=24"></script>
+</body>
+</html>

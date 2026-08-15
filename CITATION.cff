@@ -2,15 +2,15 @@ cff-version: 1.2.0
 message: "If you use this software or its documented method, please cite it using this metadata."
 title: "Imperial Auto Governor"
 type: software
-version: 0.5.8
-date-released: 2026-08-03
+version: 0.5.9
+date-released: 2026-08-15
 authors:
   - name: "Nostalgia"
   - name: "Imperial Auto Governor contributors"
 abstract: >-
-  A save-driven, tool-using Stellaris co-op construction agent with a
-  constrained candidate engine, guarded carrier clicks, host-side command
-  rewriting, and explicit execution confirmation.
+  A save-driven, tool-using Stellaris co-op agent with constrained economic
+  planning, guarded carrier execution, an experimental reliable-stream session
+  proxy, per-fleet authorization, and explicit machine execution evidence.
 keywords:
   - Stellaris
   - game AI

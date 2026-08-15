@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "imperial-auto-governor-platform"
+version = "0.5.9"
+description = "A multi-agent Stellaris governance platform built from Imperial Auto Governor."
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "GPL-3.0-only"}
+authors = [{name = "Nostalgia"}]
+dependencies = [
+  "pydantic>=2.9,<3",
+  "openai>=2.0,<3",
+  "cryptography>=45.0,<47",
+  "numpy>=2.1,<3",
+  "psutil>=6.1,<8",
+  "opencv-python-headless==5.0.0.93; platform_system == 'Linux'",
+  "opencv-python-headless>=4.10,<5; platform_system == 'Windows'",
+  "NetfilterQueue==1.1.0; platform_system == 'Linux'",
+  "pydivert==3.1.3; platform_system == 'Windows'",
+]
+
+[project.optional-dependencies]
+overlay = ["PySide6>=6.8,<7"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["iag*"]
+
+[tool.setuptools.package-data]
+"iag.applications.economy_governance" = ["*.toml", "prompts/*.md", "schemas/*.json"]
+"iag.applications.fleet_operations" = ["*.toml", "*.md"]
+"iag.infrastructure.llm" = ["*.json"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+include = ["src", "apps"]

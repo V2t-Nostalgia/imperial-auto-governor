@@ -8,17 +8,28 @@ permissions:
   contents: read
 
 jobs:
-  agent-runtime:
+  platform:
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python: ["3.11", "3.13"]
+        python: ["3.11"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: python -m pip install --disable-pip-version-check -r tools/agent_runtime/requirements-test.txt
-      - run: python -m unittest discover -s tools/agent_runtime/tests -v
+      - name: Install Linux packet dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libnetfilter-queue-dev
+      - name: Install project and validation tools
+        run: python -m pip install --disable-pip-version-check -e ".[overlay]" "ruff>=0.12,<1"
+      - name: Compile Python
+        run: python -m compileall -q src apps scripts
+      - name: Run repository tests
+        run: python scripts/validation/run_tests.py --quiet
+      - name: Check fatal Python diagnostics
+        run: ruff check --select E9,F src apps scripts
+      - name: Check browser JavaScript
+        run: node --check apps/control_center/web/app.js && node --check apps/control_center/web/app_v2.js

@@ -1,0 +1,36 @@
+[Unit]
+Description=Imperial Auto Governor web console
+Documentation=file:@PROJECT_ROOT@/README.md
+Wants=network-online.target
+After=network-online.target display-manager.service
+ConditionPathExists=@RUNTIME_ROOT@/agent_config.json
+ConditionPathExists=@VENV_ROOT@/bin/python
+
+[Service]
+Type=simple
+User=@SERVICE_USER@
+Group=@SERVICE_GROUP@
+WorkingDirectory=@PROJECT_ROOT@
+Environment=HOME=@SERVICE_HOME@
+Environment=IAG_PROJECT_ROOT=@PROJECT_ROOT@
+Environment=PYTHONUNBUFFERED=1
+Environment=DISPLAY=@DISPLAY@
+Environment=XAUTHORITY=@XAUTHORITY@
+ExecStart=@VENV_ROOT@/bin/python -m apps.control_center.web_console --config @RUNTIME_ROOT@/agent_config.json --host 0.0.0.0 --port 8765 --allow-lan --tls-cert @RUNTIME_ROOT@/secrets/frontend_tls.crt --tls-key @RUNTIME_ROOT@/secrets/frontend_tls.key
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=10s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@RUNTIME_ROOT@
+ProtectKernelTunables=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

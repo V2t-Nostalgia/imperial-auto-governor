@@ -1,0 +1,11 @@
+# Imperial Auto Governor 平台运行依赖。
+# Python 3.11+；平台专属抓包依赖通过环境标记隔离。
+pydantic>=2.9,<3
+openai>=2.0,<3
+cryptography>=45.0,<47
+numpy>=2.1,<3
+psutil>=6.1,<8
+opencv-python-headless==5.0.0.93; platform_system == "Linux"
+opencv-python-headless>=4.10,<5; platform_system == "Windows"
+NetfilterQueue==1.1.0; platform_system == "Linux"
+pydivert==3.1.3; platform_system == "Windows"

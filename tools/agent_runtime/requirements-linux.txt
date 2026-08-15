@@ -1,2 +1,0 @@
-NetfilterQueue==1.1.0
-opencv-python-headless==5.0.0.93
