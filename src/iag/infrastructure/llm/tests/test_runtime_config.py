@@ -49,6 +49,26 @@ def legacy_config_document() -> dict[str, object]:
     }
 
 
+def flat_legacy_config_document() -> dict[str, object]:
+    return {
+        "base_url": "https://legacy.example/v1",
+        "model": "legacy-model",
+        "provider": "chat_completions_compatible",
+        "auth_mode": "bearer",
+        "api_key_env": "IAG_TEST_LEGACY_API_KEY",
+        "api_key_file": "legacy_api_key",
+        "model_context_window_tokens": 131_024,
+        "context_output_reserve_tokens": 32_768,
+        "timeout_seconds": 240,
+        "temperature": 0.25,
+        "thinking": {"type": "enabled"},
+        "reasoning_effort": "high",
+        "request_body_overrides": {"top_p": 0.9},
+        "tool_calling_enabled": True,
+        "runtime_root": "runtime",
+    }
+
+
 class RuntimeConfigTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -78,6 +98,47 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(
             persisted["application_model_bindings"]["economy_governance"],
             "economy-default",
+        )
+
+    def test_flat_v058_config_loads_without_rewriting_source(self) -> None:
+        key_path = self.path.parent / "legacy_api_key"
+        key_path.write_text("legacy-local-secret\n", encoding="utf-8")
+        document = flat_legacy_config_document()
+        original = json.dumps(document, ensure_ascii=False, indent=2) + "\n"
+        self.path.write_text(original, encoding="utf-8")
+
+        runtime = RuntimeConfig.load(self.path)
+        snapshot = runtime.snapshot()
+
+        self.assertEqual(snapshot.endpoint.model, "legacy-model")
+        self.assertEqual(
+            snapshot.endpoint.api_key.get_secret_value(),
+            "legacy-local-secret",
+        )
+        self.assertEqual(snapshot.endpoint.max_output_tokens, 32_768)
+        self.assertTrue(snapshot.endpoint.supports_reasoning)
+        self.assertEqual(snapshot.request_options["temperature"], 0.25)
+        self.assertEqual(
+            snapshot.request_options["thinking"],
+            {"type": "enabled"},
+        )
+        self.assertEqual(snapshot.request_options["reasoning_effort"], "high")
+        self.assertEqual(
+            snapshot.request_options["request_body_overrides"],
+            {"top_p": 0.9},
+        )
+        self.assertNotIn("base_url", snapshot.settings)
+        self.assertEqual(self.path.read_text(encoding="utf-8"), original)
+
+        runtime.save()
+        persisted = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertIn("model_pools", persisted)
+        self.assertNotIn("base_url", persisted)
+        self.assertNotIn("api_key_file", persisted)
+        self.assertNotIn("temperature", persisted)
+        self.assertEqual(
+            persisted["model_pools"][0]["endpoints"][0]["api_key"],
+            "legacy-local-secret",
         )
 
     def test_pool_update_is_live_but_persistence_is_explicit(self) -> None:

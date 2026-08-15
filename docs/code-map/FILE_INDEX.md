@@ -173,7 +173,7 @@
 | `src/iag/infrastructure/llm/tests/test_endpoint_probe.py` | 模型供应商协议和请求模板适配。 | Tests for no-completion endpoint reachability probes. | `endpoint`, `FakeResponse`, `EndpointProbeTests` | `新工程文件` |
 | `src/iag/infrastructure/llm/tests/test_model_client.py` | 模型供应商协议和请求模板适配。 | Contract tests for the OpenAI SDK and raw HTTP LLM transports. | `base_endpoint`, `base_options`, `ApiKeyResolutionTests`, `StubTransport`, `ModelClientTests` | `新工程文件` |
 | `src/iag/infrastructure/llm/tests/test_model_pool_runtime.py` | 模型供应商协议和请求模板适配。 | Routing tests for cheap-first model endpoints and conservative replay. | `endpoint`, `ModelPoolRuntimeTests` | `新工程文件` |
-| `src/iag/infrastructure/llm/tests/test_runtime_config.py` | 模型供应商协议和请求模板适配。 | Contract tests for model-pool configuration and explicit persistence. | `endpoint_document`, `legacy_config_document`, `RuntimeConfigTests` | `新工程文件` |
+| `src/iag/infrastructure/llm/tests/test_runtime_config.py` | 模型供应商协议和请求模板适配。 | Contract tests for model-pool configuration and explicit persistence. | `endpoint_document`, `legacy_config_document`, `flat_legacy_config_document`, `RuntimeConfigTests` | `新工程文件` |
 | `src/iag/infrastructure/research/README.md` | 不可信网页资料的检索与正文提取适配。 | 该目录的职责、边界、主要文件和开发注意事项。 | - | `新工程文件` |
 | `src/iag/infrastructure/research/__init__.py` | 不可信网页资料的检索与正文提取适配。 | 受域名、长度和权限约束的不可信网页研究工具。 | - | `新工程文件` |
 | `src/iag/infrastructure/research/research_tools.py` | 不可信网页资料的检索与正文提取适配。 | Read-only, bounded web research tools for the persistent governor. | `ResearchToolError`, `VisibleTextParser`, `ResearchClient` | `tools/agent_runtime/research_tools.py` |

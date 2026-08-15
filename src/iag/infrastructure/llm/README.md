@@ -27,4 +27,4 @@ python -m unittest discover -s src/iag/infrastructure/llm/tests -p "test_*.py" -
 
 `RuntimeConfig` 只在程序组合边界读取本地 JSON。运行代码使用相互隔离的一致快照；每份快照包含完整模型资产目录、Application 配置目录、当前 Application 绑定，以及只含所选逻辑模型端点的运行池。网页端修改会立即更新内存，只有显式调用 `save()` 才写回磁盘。
 
-持久化配置将连接信息放在 `model_pools[].endpoints`，将玩家命名的运行方案放在 `application_model_profiles`，并通过 `application_model_bindings` 指定每个 Application 当前启用的方案。旧版 `endpoint`、`model_pool` 与根级 `request_options` 仍可读取，并在下一次显式保存时迁移。API Key 保存在玩家本机未跟踪的 `agent_config.json` 中，进入内存后由 `SecretStr` 包装，且不会通过控制台公开接口返回。该文件必须保持在 Git 跟踪范围之外并限制为当前用户可读。
+持久化配置将连接信息放在 `model_pools[].endpoints`，将玩家命名的运行方案放在 `application_model_profiles`，并通过 `application_model_bindings` 指定每个 Application 当前启用的方案。旧版 `endpoint`、`model_pool`、根级 `request_options`，以及 v0.5.8 的根级 `base_url`/`model`/API Key 文件配置仍可读取，并在下一次显式保存时迁移。API Key 保存在玩家本机未跟踪的 `agent_config.json` 中，进入内存后由 `SecretStr` 包装，且不会通过控制台公开接口返回。该文件必须保持在 Git 跟踪范围之外并限制为当前用户可读。

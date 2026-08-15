@@ -37,6 +37,43 @@ APPLICATION_OPTION_KEYS = {
     "web_search_allowed_domains",
 }
 
+LEGACY_REQUEST_OPTION_KEYS = {
+    "reasoning_effort",
+    "request_body_overrides",
+    "temperature",
+    "thinking",
+}
+
+LEGACY_ENDPOINT_KEYS = {
+    "api_key",
+    "api_key_env",
+    "api_key_file",
+    "api_key_header",
+    "api_key_prefix",
+    "auth_mode",
+    "base_url",
+    "chat_completions_path",
+    "context_output_reserve_tokens",
+    "enabled",
+    "endpoint_id",
+    "extra_headers",
+    "max_output_tokens",
+    "model",
+    "model_context_window_tokens",
+    "model_id",
+    "model_transport",
+    "models_path",
+    "priority",
+    "probe_timeout_seconds",
+    "provider",
+    "rate_limit_cooldown_seconds",
+    "responses_path",
+    "sdk_max_retries",
+    "supports_reasoning",
+    "supports_tools",
+    "timeout_seconds",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class RuntimeSnapshot:
@@ -101,7 +138,7 @@ class RuntimeConfig:
         "request_options",
         "application_model_profiles",
         "application_model_bindings",
-    }
+    } | LEGACY_ENDPOINT_KEYS | LEGACY_REQUEST_OPTION_KEYS
 
     def __init__(self, source_path: Path, document: Mapping[str, Any]) -> None:
         self.source_path = source_path.resolve()
@@ -116,18 +153,128 @@ class RuntimeConfig:
             raise ValueError("Runtime configuration must be a JSON object.")
         return cls(path, value)
 
-    @staticmethod
-    def _legacy_pool(document: Mapping[str, Any]) -> ModelPool:
+    def _legacy_api_key(self, document: Mapping[str, Any]) -> str | None:
+        direct = str(document.get("api_key", "")).strip()
+        if direct:
+            return direct
+
+        environment_name = str(
+            document.get("api_key_env", "IAG_LLM_API_KEY")
+        ).strip()
+        if environment_name:
+            environment_value = os.environ.get(environment_name, "").strip()
+            if environment_value:
+                return environment_value
+
+        raw_path = str(document.get("api_key_file", "")).strip()
+        if not raw_path:
+            return None
+        expanded = Path(os.path.expandvars(raw_path)).expanduser()
+        candidates = (
+            (expanded,)
+            if expanded.is_absolute()
+            else (self.source_path.parent / expanded, expanded)
+        )
+        for candidate in candidates:
+            if candidate.is_file():
+                value = candidate.read_text(encoding="utf-8").strip()
+                return value or None
+        return None
+
+    def _legacy_flat_endpoint(
+        self,
+        document: Mapping[str, Any],
+    ) -> ModelEndpoint:
+        model = str(document.get("model", "")).strip()
+        base_url = str(document.get("base_url", "")).strip()
+        if not model or not base_url:
+            raise ValueError(
+                "Legacy runtime configuration requires both model and base_url."
+            )
+
+        context_window = int(
+            document.get("model_context_window_tokens", 128_000)
+        )
+        output_reserve = int(
+            document.get(
+                "max_output_tokens",
+                document.get("context_output_reserve_tokens", 8_192),
+            )
+        )
+        auth_mode = str(document.get("auth_mode", "bearer"))
+        api_key = None if auth_mode == "none" else self._legacy_api_key(document)
+        if auth_mode == "bearer" and not api_key:
+            raise ValueError(
+                "Legacy runtime configuration could not resolve its API key "
+                "from api_key, api_key_env, or api_key_file."
+            )
+
+        return ModelEndpoint(
+            endpoint_id=str(
+                document.get("endpoint_id", "legacy-default")
+            ).strip()
+            or "legacy-default",
+            display_name=str(document.get("display_name", model)).strip()
+            or model,
+            model_id=str(document.get("model_id", model)).strip() or model,
+            model=model,
+            model_transport=str(document.get("model_transport", "openai_sdk")),
+            provider=str(
+                document.get("provider", "responses_compatible")
+            ),
+            base_url=base_url,
+            supports_reasoning=bool(
+                document.get(
+                    "supports_reasoning",
+                    document.get("thinking") or document.get("reasoning_effort"),
+                )
+            ),
+            model_context_window_tokens=context_window,
+            auth_mode=auth_mode,
+            api_key=api_key,
+            max_output_tokens=min(max(output_reserve, 1), context_window),
+            priority=int(document.get("priority", 0)),
+            enabled=bool(document.get("enabled", True)),
+            supports_tools=bool(
+                document.get(
+                    "supports_tools",
+                    document.get("tool_calling_enabled", True),
+                )
+            ),
+            chat_completions_path=str(
+                document.get("chat_completions_path", "/chat/completions")
+            ),
+            responses_path=str(document.get("responses_path", "/responses")),
+            models_path=document.get("models_path", "/models"),
+            timeout_seconds=int(document.get("timeout_seconds", 120)),
+            probe_timeout_seconds=int(
+                document.get("probe_timeout_seconds", 10)
+            ),
+            rate_limit_cooldown_seconds=int(
+                document.get("rate_limit_cooldown_seconds", 300)
+            ),
+            sdk_max_retries=int(document.get("sdk_max_retries", 2)),
+            extra_headers=dict(document.get("extra_headers", {})),
+            api_key_header=str(
+                document.get("api_key_header", "Authorization")
+            ),
+            api_key_prefix=str(document.get("api_key_prefix", "Bearer ")),
+        )
+
+    def _legacy_pool(self, document: Mapping[str, Any]) -> ModelPool:
         pool_value = document.get("model_pool")
         if isinstance(pool_value, Mapping):
             return ModelPool.model_validate(pool_value)
         endpoint_value = document.get("endpoint")
-        if not isinstance(endpoint_value, Mapping):
+        if isinstance(endpoint_value, Mapping):
+            endpoint = ModelEndpoint.model_validate(endpoint_value)
+        elif "model" in document or "base_url" in document:
+            endpoint = self._legacy_flat_endpoint(document)
+        else:
             raise ValueError(
                 "Runtime configuration requires model_pools, model_pool, "
-                "or a legacy endpoint object."
+                "a legacy endpoint object, or legacy root model fields."
             )
-        endpoint = ModelEndpoint.model_validate(endpoint_value)
         pool_id = str(document.get("model_pool_id", "default")).strip() or "default"
         return ModelPool(
             pool_id=pool_id,
@@ -135,14 +282,13 @@ class RuntimeConfig:
             endpoints=[endpoint],
         )
 
-    @classmethod
     def _pools_from_document(
-        cls,
+        self,
         document: Mapping[str, Any],
     ) -> list[ModelPool]:
         value = document.get("model_pools")
         if value is None:
-            return [cls._legacy_pool(document)]
+            return [self._legacy_pool(document)]
         if not isinstance(value, list) or not value:
             raise ValueError("model_pools must be a non-empty JSON array.")
         return [ModelPool.model_validate(item) for item in value]
@@ -174,6 +320,10 @@ class RuntimeConfig:
         request_options = document.get("request_options", {})
         if not isinstance(request_options, Mapping):
             raise ValueError("request_options must be a JSON object.")
+        request_options = copy.deepcopy(dict(request_options))
+        for key in LEGACY_REQUEST_OPTION_KEYS:
+            if key in document and key not in request_options:
+                request_options[key] = copy.deepcopy(document[key])
         application_options = {
             key: copy.deepcopy(document[key])
             for key in APPLICATION_OPTION_KEYS
@@ -187,7 +337,7 @@ class RuntimeConfig:
                 application_id=DEFAULT_APPLICATION_ID,
                 pool_id=initial_pool.pool_id,
                 model_id=cls._default_model_id(initial_pool),
-                request_options=dict(request_options),
+                request_options=request_options,
                 application_options=application_options,
             )
         ]

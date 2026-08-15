@@ -14,6 +14,7 @@ import secrets
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import webbrowser
@@ -249,6 +250,7 @@ def run_health_check() -> int:
     """Verify bundled resources and the save parser import graph without starting UI."""
     from iag.core.paths import economy_governance_root, vanilla_content_pack_root
     from iag.infrastructure.llm.model_templates import TEMPLATES_PATH
+    from iag.infrastructure.llm.runtime_config import RuntimeConfig
 
     required_resources = (
         resource_path("agent_config.windows.example.json"),
@@ -276,6 +278,35 @@ def run_health_check() -> int:
     from iag.stellaris.state import extract_game_state  # noqa: F401
     from iag.stellaris.execution import session_proxy  # noqa: F401
     from iag.stellaris.state import planet_profiles  # noqa: F401
+
+    RuntimeConfig.load(resource_path("agent_config.windows.example.json")).snapshot()
+    with tempfile.TemporaryDirectory(prefix="iag-legacy-config-health-") as value:
+        root = Path(value)
+        (root / "legacy_api_key").write_text(
+            "packaged-health-secret\n",
+            encoding="utf-8",
+        )
+        config_path = root / "agent_config.json"
+        atomic_write_json(
+            config_path,
+            {
+                "base_url": "https://legacy.example/v1",
+                "model": "legacy-model",
+                "provider": "chat_completions_compatible",
+                "auth_mode": "bearer",
+                "api_key_file": "legacy_api_key",
+                "model_context_window_tokens": 128_000,
+                "context_output_reserve_tokens": 8_192,
+                "temperature": 0.2,
+                "thinking": {"type": "enabled"},
+                "runtime_root": str(root),
+            },
+        )
+        legacy = RuntimeConfig.load(config_path).snapshot()
+        if legacy.endpoint.model != "legacy-model":
+            raise RuntimeError("Legacy runtime configuration migration failed.")
+        if legacy.request_options.get("temperature") != 0.2:
+            raise RuntimeError("Legacy request options were not migrated.")
 
     return 0
 

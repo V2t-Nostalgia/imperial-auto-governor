@@ -1,6 +1,6 @@
 {
   "schema": "iag.engineering_manifest.v1",
-  "generated_at": "2026-08-15T19:14:06+08:00",
+  "generated_at": "2026-08-15T19:48:18+08:00",
   "project_root": ".",
   "migration_source_commit": "81bb66d2609c42136fdae35b6538dea28d4ba9d7",
   "policy": {
@@ -304,8 +304,8 @@
     },
     {
       "path": "apps/control_center/windows_agent_gui.py",
-      "sha256": "ffa7012babdf52d9168a81f450cda530695cc87a93b50743d79fefe98713f90d",
-      "bytes": 24271,
+      "sha256": "c33b748d30daf58c2602fe106476dc5cded9392df35be9462f26fb88acb88882",
+      "bytes": 25634,
       "origin": "migrated_then_engineered",
       "legacy_source": "tools/agent_runtime/windows_agent_gui.py"
     },
@@ -605,15 +605,15 @@
     },
     {
       "path": "docs/VERIFICATION.md",
-      "sha256": "9c7b08dd4ca853cc567b57d333f4b36251a4eca329607b9423fdef7ad581ce79",
-      "bytes": 4285,
+      "sha256": "70f269ce46b506e9e3bbb87e15f45f1fb379a52398b05559427b04799458cd99",
+      "bytes": 4478,
       "origin": "new_engineering_file",
       "legacy_source": null
     },
     {
       "path": "docs/code-map/FILE_INDEX.md",
-      "sha256": "44a573b48d2444f67762308705a75e1f67d54905f707bda321b6ac2d19c93a84",
-      "bytes": 48380,
+      "sha256": "34df467f62b20be5b27dbb864447f60de3338ad156abe88bef1a5f34c631ddef",
+      "bytes": 48411,
       "origin": "new_engineering_file",
       "legacy_source": null
     },
@@ -696,8 +696,8 @@
     },
     {
       "path": "docs/releases/v0.5.9.md",
-      "sha256": "7c01643da99b5069ffcc5ba1d2275ccce302fb2347dc85cb7dc92a8d9dcf7db6",
-      "bytes": 1356,
+      "sha256": "49dff8820eccdb0e9ccc95a878d10e6d4ef6489f90ec5ae8ddb8d63790ade15d",
+      "bytes": 1713,
       "origin": "new_engineering_file",
       "legacy_source": null
     },
@@ -1074,8 +1074,8 @@
     },
     {
       "path": "src/iag/infrastructure/llm/README.md",
-      "sha256": "92f7e50465451092f3b6c33eecbc023ad55dce8936def1b75dadd74aca9c850b",
-      "bytes": 3230,
+      "sha256": "9f8f1a03c4b8673db158008ca3cfaa83e88d7ce289c7a8d703f2671f77c6f27e",
+      "bytes": 3294,
       "origin": "new_engineering_file",
       "legacy_source": null
     },
@@ -1151,8 +1151,8 @@
     },
     {
       "path": "src/iag/infrastructure/llm/runtime_config.py",
-      "sha256": "1f3810612d3f54bb8cd5d8419f4025bd619ad0a13d66e7534c518c157816b857",
-      "bytes": 19937,
+      "sha256": "8be202f511f9e00c6a41af47df9c2c7c061b7e0cb40e6d86ffce887afdabbe28",
+      "bytes": 25398,
       "origin": "new_engineering_file",
       "legacy_source": null
     },
@@ -1193,8 +1193,8 @@
     },
     {
       "path": "src/iag/infrastructure/llm/tests/test_runtime_config.py",
-      "sha256": "e780ca552c5ef369e245c743be28d57f60eaea922aa7ca45327345e180dcf0ca",
-      "bytes": 4675,
+      "sha256": "8b1a9a2611e472e3f1d237c7e4b6ab405faa55b3a8483f5f7e87b9bbe26f5331",
+      "bytes": 7127,
       "origin": "new_engineering_file",
       "legacy_source": null
     },

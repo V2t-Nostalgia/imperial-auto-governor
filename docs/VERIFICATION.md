@@ -48,14 +48,15 @@ PyInstaller 会提示 WinDivert 驱动依赖的 `NDIS.SYS`、`fwpkclnt.sys`、`W
 
 ## v0.5.9 Draft 源码验收（2026-08-15）
 
-- 仓库递归测试入口发现 20 个模块、83 项测试：全部通过。
+- 仓库递归测试入口发现 20 个模块、84 项测试：全部通过。
 - `python -m compileall -q src apps scripts`：通过。
 - 非测试 Python 模块导入：78/78 通过。
 - JSON/TOML/PyInstaller spec 解析：9/5/4 通过。
-- PowerShell AST 与浏览器 JavaScript 语法：2/2 通过。
+- PowerShell AST 与浏览器 JavaScript 语法：5/2 通过。
 - Ruff `E9,F` 运行错误级检查：通过。
 - 新增代理回归覆盖动态长度建筑标识符、采矿区划、跨科研特化、两种舰队目的地字段、精确权威回包关联、多次插入坐标组合和 session ID 隔离。
 - 舰队工具回归覆盖总开关、逐舰队默认拒绝、准备/执行双重权限校验、机器事实账本和未验证攻击硬拒绝。
+- Windows 运行配置回归覆盖 v0.5.8 根级扁平模型字段、相对 API Key 文件、请求参数保留、只在显式保存时迁移，以及真实 `ConsoleService` 初始化链路。
 
 真实联机实验已经闭环验证建设命令、区域特化与 `d32c` 舰队移动。`6b33` 攻击仍缺少非房主请求和房主权威回包的成对样本，因此 v0.5.9 只提供攻击授权预检，不发送猜测命令。
 
