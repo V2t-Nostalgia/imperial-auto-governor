@@ -68,6 +68,13 @@ FLEET_DESTINATION_TAGS = {
 }
 MAX_STELLARIS_UDP_PORTS = 96
 DISCOVERY_FILTER = "ip and udp"
+PROCESS_OWNED_ROUTES = frozenset(
+    {
+        "direct_peer_ip_owned_port",
+        "steam_brokered_udp_port",
+        "stellaris_process_udp_port",
+    }
+)
 
 DISTRICT_GENERATOR_RECORD = bytes.fromhex(
     "890004000000b43d01000300f30101000300400201000c0002000000"
@@ -182,6 +189,50 @@ class FlowDiscovery:
         self.provisional: FlowKey | None = None
         self.provisional_since = 0.0
 
+    def _eligible_candidates(self, observed_at: float) -> list[FlowKey]:
+        eligible: list[FlowKey] = []
+        for candidate, evidence in self.candidates.items():
+            minimum_packets = (
+                1
+                if candidate.route in PROCESS_OWNED_ROUTES
+                else self.minimum_each_direction
+            )
+            if (
+                observed_at - evidence.last_seen
+                <= self.candidate_window_seconds
+                and observed_at - evidence.last_outbound_seen
+                <= self.candidate_window_seconds
+                and observed_at - evidence.last_inbound_seen
+                <= self.candidate_window_seconds
+                and evidence.outbound_packets >= minimum_packets
+                and evidence.inbound_packets >= minimum_packets
+                and (
+                    evidence.reliable_outbound_packets
+                    or evidence.reliable_inbound_packets
+                )
+            ):
+                eligible.append(candidate)
+        return eligible
+
+    def _consider_lock(self, observed_at: float) -> FlowKey | None:
+        eligible = self._eligible_candidates(observed_at)
+        direct = [
+            candidate
+            for candidate in eligible
+            if candidate.route.startswith("direct_peer_ip")
+        ]
+        if len(direct) == 1:
+            self.locked = direct[0]
+        elif len(eligible) != 1:
+            self.provisional = None
+            self.provisional_since = 0.0
+        elif self.provisional != eligible[0]:
+            self.provisional = eligible[0]
+            self.provisional_since = observed_at
+        elif observed_at - self.provisional_since >= self.relay_settle_seconds:
+            self.locked = eligible[0]
+        return self.locked
+
     def observe(
         self,
         *,
@@ -200,6 +251,8 @@ class FlowDiscovery:
     ) -> FlowKey | None:
         if self.locked is not None or not game_process_present:
             return self.locked
+        if self._consider_lock(observed_at) is not None:
+            return self.locked
 
         direct_outbound = is_outbound and src_ip == local_ip and dst_ip == host_ip
         direct_inbound = is_inbound and src_ip == host_ip and dst_ip == local_ip
@@ -215,7 +268,11 @@ class FlowDiscovery:
                 host_ip=dst_ip,
                 host_port=dst_port,
                 route=(
-                    "direct_peer_ip"
+                    (
+                        "direct_peer_ip_owned_port"
+                        if owner_names
+                        else "direct_peer_ip"
+                    )
                     if direct_outbound
                     else _brokered_route(owner_names)
                 ),
@@ -229,14 +286,18 @@ class FlowDiscovery:
                 host_ip=src_ip,
                 host_port=src_port,
                 route=(
-                    "direct_peer_ip"
+                    (
+                        "direct_peer_ip_owned_port"
+                        if owner_names
+                        else "direct_peer_ip"
+                    )
                     if direct_inbound
                     else _brokered_route(owner_names)
                 ),
             )
             direction = "inbound"
         else:
-            return None
+            return self._consider_lock(observed_at)
 
         try:
             peer = ipaddress.ip_address(key.host_ip)
@@ -281,36 +342,7 @@ class FlowDiscovery:
             evidence.last_inbound_seen = observed_at
             if is_reliable_packet(payload):
                 evidence.reliable_inbound_packets += 1
-        eligible = [
-            candidate
-            for candidate, candidate_evidence in self.candidates.items()
-            if observed_at - candidate_evidence.last_seen
-            <= self.candidate_window_seconds
-            and observed_at - candidate_evidence.last_outbound_seen
-            <= self.candidate_window_seconds
-            and observed_at - candidate_evidence.last_inbound_seen
-            <= self.candidate_window_seconds
-            and candidate_evidence.outbound_packets
-            >= self.minimum_each_direction
-            and candidate_evidence.inbound_packets
-            >= self.minimum_each_direction
-            and (
-                candidate_evidence.reliable_outbound_packets
-                or candidate_evidence.reliable_inbound_packets
-            )
-        ]
-        direct = [candidate for candidate in eligible if candidate.route == "direct_peer_ip"]
-        if len(direct) == 1:
-            self.locked = direct[0]
-        elif len(eligible) != 1:
-            self.provisional = None
-            self.provisional_since = 0.0
-        elif self.provisional != eligible[0]:
-            self.provisional = eligible[0]
-            self.provisional_since = observed_at
-        elif observed_at - self.provisional_since >= self.relay_settle_seconds:
-            self.locked = eligible[0]
-        return self.locked
+        return self._consider_lock(observed_at)
 
     def candidate_payload(self) -> list[dict[str, object]]:
         """Expose bounded route evidence without logging packet contents."""

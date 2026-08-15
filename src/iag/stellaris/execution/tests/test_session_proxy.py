@@ -98,7 +98,7 @@ class SessionProxyTests(unittest.TestCase):
                     dst_port=51000,
                     local_ip="192.0.2.10",
                     host_ip="192.0.2.20",
-                    port_owners={50000: {"stellaris.exe"}},
+                    port_owners={},
                     game_process_present=True,
                     is_outbound=True,
                     is_inbound=False,
@@ -115,7 +115,7 @@ class SessionProxyTests(unittest.TestCase):
                 dst_port=50000,
                 local_ip="192.0.2.10",
                 host_ip="192.0.2.20",
-                port_owners={50000: {"stellaris.exe"}},
+                port_owners={},
                 game_process_present=True,
                 is_outbound=False,
                 is_inbound=True,
@@ -130,7 +130,7 @@ class SessionProxyTests(unittest.TestCase):
             dst_port=50000,
             local_ip="192.0.2.10",
             host_ip="192.0.2.20",
-            port_owners={50000: {"stellaris.exe"}},
+            port_owners={},
             game_process_present=True,
             is_outbound=False,
             is_inbound=True,
@@ -143,6 +143,42 @@ class SessionProxyTests(unittest.TestCase):
         self.assertEqual(locked.host_port, 51000)
         self.assertEqual(locked.host_ip, "192.0.2.20")
         self.assertEqual(locked.route, "direct_peer_ip")
+
+    def test_owned_direct_flow_uses_v058_bidirectional_threshold(self) -> None:
+        discovery = FlowDiscovery(minimum_each_direction=3)
+        common = {
+            "local_ip": "192.0.2.10",
+            "host_ip": "192.0.2.20",
+            "port_owners": {58778: {"steam.exe"}},
+            "game_process_present": True,
+        }
+        discovery.observe(
+            src_ip="192.0.2.10",
+            src_port=58778,
+            dst_ip="192.0.2.20",
+            dst_port=52489,
+            is_outbound=True,
+            is_inbound=False,
+            payload=header(),
+            observed_at=1.0,
+            **common,
+        )
+        locked = discovery.observe(
+            src_ip="192.0.2.20",
+            src_port=52489,
+            dst_ip="192.0.2.10",
+            dst_port=58778,
+            is_outbound=False,
+            is_inbound=True,
+            payload=b"ordinary-inbound-frame",
+            observed_at=2.0,
+            **common,
+        )
+        self.assertIsNotNone(locked)
+        assert locked is not None
+        self.assertEqual(locked.local_port, 58778)
+        self.assertEqual(locked.host_port, 52489)
+        self.assertEqual(locked.route, "direct_peer_ip_owned_port")
 
     def test_flow_discovery_locks_steam_relay_by_transport_port(self) -> None:
         discovery = FlowDiscovery(minimum_each_direction=2)
@@ -177,21 +213,6 @@ class SessionProxyTests(unittest.TestCase):
                 payload=b"steam-inbound-frame",
                 observed_at=float(index + 3),
             )
-        self.assertIsNone(locked)
-        locked = discovery.observe(
-            src_ip="198.51.100.45",
-            src_port=61000,
-            dst_ip="192.0.2.10",
-            dst_port=52000,
-            local_ip="192.0.2.10",
-            host_ip="192.0.2.20",
-            port_owners={52000: {"steam.exe"}},
-            game_process_present=True,
-            is_outbound=False,
-            is_inbound=True,
-            payload=b"steam-inbound-frame",
-            observed_at=4.6,
-        )
         self.assertIsNotNone(locked)
         assert locked is not None
         self.assertEqual(locked.host_ip, "198.51.100.45")

@@ -1,6 +1,6 @@
 {
   "schema": "iag.engineering_manifest.v1",
-  "generated_at": "2026-08-15T21:04:26+08:00",
+  "generated_at": "2026-08-15T21:59:49+08:00",
   "project_root": ".",
   "migration_source_commit": "81bb66d2609c42136fdae35b6538dea28d4ba9d7",
   "policy": {
@@ -598,8 +598,8 @@
     },
     {
       "path": "docs/SESSION_PROXY_MODE.md",
-      "sha256": "b99d2f759f19095a755ce2e51592acbb3b4ba16bdb9b580844894bae1002d886",
-      "bytes": 3082,
+      "sha256": "ae6597d6f55da330ab1018862cee4d8dc8a10ed84acdfa5734a93a2ea1b79ef2",
+      "bytes": 3175,
       "origin": "new_engineering_file",
       "legacy_source": null
     },
@@ -696,8 +696,8 @@
     },
     {
       "path": "docs/releases/v0.5.9.md",
-      "sha256": "009a29f4779113f35d27263f11e561c56f98778ccf679c3a3277cb44ccdd42f2",
-      "bytes": 1984,
+      "sha256": "85f811dfbfd311f500137f8b0e0047cac4194eee875966d4ea83e7f0778e1652",
+      "bytes": 2130,
       "origin": "new_engineering_file",
       "legacy_source": null
     },
@@ -1396,8 +1396,8 @@
     },
     {
       "path": "src/iag/stellaris/execution/session_proxy.py",
-      "sha256": "d52b33f60364ebff675bf4292ac2f34eb7720247b70b144e61ff3becf254f66a",
-      "bytes": 67572,
+      "sha256": "b676305a00bc43432713c6e64337db4462b3db74feb46422944864ec02433b8b",
+      "bytes": 68607,
       "origin": "new_engineering_file",
       "legacy_source": null
     },
@@ -1424,8 +1424,8 @@
     },
     {
       "path": "src/iag/stellaris/execution/tests/test_session_proxy.py",
-      "sha256": "8323e8d192269100be8d5064943cf025d6acad146c8717c320d62487cf9de22e",
-      "bytes": 27287,
+      "sha256": "f535731fc493d3ade188c4a55c45adbc0cf6d4e33ec3d3a44bc53b6ddc599611",
+      "bytes": 27925,
       "origin": "new_engineering_file",
       "legacy_source": null
     },
