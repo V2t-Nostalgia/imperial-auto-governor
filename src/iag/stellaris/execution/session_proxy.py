@@ -254,50 +254,78 @@ class FlowDiscovery:
         if self._consider_lock(observed_at) is not None:
             return self.locked
 
-        direct_outbound = is_outbound and src_ip == local_ip and dst_ip == host_ip
-        direct_inbound = is_inbound and src_ip == host_ip and dst_ip == local_ip
+        for candidate in self.candidates:
+            direction = flow_packet_direction(
+                candidate,
+                src_ip=src_ip,
+                src_port=src_port,
+                dst_ip=dst_ip,
+                dst_port=dst_port,
+            )
+            if direction is not None:
+                key = candidate
+                break
+        else:
+            key = None
+            direction = None
+
+        direct_outbound = src_ip == local_ip and dst_ip == host_ip
+        direct_inbound = src_ip == host_ip and dst_ip == local_ip
         outbound_owners = port_owners.get(src_port, set())
         inbound_owners = port_owners.get(dst_port, set())
-        relay_outbound = is_outbound and bool(outbound_owners)
-        relay_inbound = is_inbound and bool(inbound_owners)
-        if direct_outbound or relay_outbound:
-            owner_names = outbound_owners
-            key = FlowKey(
-                local_ip=src_ip,
-                local_port=src_port,
-                host_ip=dst_ip,
-                host_port=dst_port,
-                route=(
-                    (
-                        "direct_peer_ip_owned_port"
-                        if owner_names
-                        else "direct_peer_ip"
-                    )
-                    if direct_outbound
-                    else _brokered_route(owner_names)
-                ),
-            )
-            direction = "outbound"
-        elif direct_inbound or relay_inbound:
-            owner_names = inbound_owners
-            key = FlowKey(
-                local_ip=dst_ip,
-                local_port=dst_port,
-                host_ip=src_ip,
-                host_port=src_port,
-                route=(
-                    (
-                        "direct_peer_ip_owned_port"
-                        if owner_names
-                        else "direct_peer_ip"
-                    )
-                    if direct_inbound
-                    else _brokered_route(owner_names)
-                ),
-            )
-            direction = "inbound"
-        else:
-            return self._consider_lock(observed_at)
+        relay_outbound = bool(outbound_owners) and not inbound_owners
+        relay_inbound = bool(inbound_owners) and not outbound_owners
+        if key is None:
+            if direct_outbound or relay_outbound:
+                owner_names = outbound_owners
+                key = FlowKey(
+                    local_ip=src_ip,
+                    local_port=src_port,
+                    host_ip=dst_ip,
+                    host_port=dst_port,
+                    route=(
+                        (
+                            "direct_peer_ip_owned_port"
+                            if owner_names
+                            else "direct_peer_ip"
+                        )
+                        if direct_outbound
+                        else _brokered_route(owner_names)
+                    ),
+                )
+                direction = "outbound"
+            elif direct_inbound or relay_inbound:
+                owner_names = inbound_owners
+                key = FlowKey(
+                    local_ip=dst_ip,
+                    local_port=dst_port,
+                    host_ip=src_ip,
+                    host_port=src_port,
+                    route=(
+                        (
+                            "direct_peer_ip_owned_port"
+                            if owner_names
+                            else "direct_peer_ip"
+                        )
+                        if direct_inbound
+                        else _brokered_route(owner_names)
+                    ),
+                )
+                direction = "inbound"
+            elif outbound_owners and inbound_owners and is_outbound != is_inbound:
+                # Use driver direction only to break the rare tie where both
+                # ports belong to local game transport processes.
+                owner_names = outbound_owners if is_outbound else inbound_owners
+                key = FlowKey(
+                    local_ip=src_ip if is_outbound else dst_ip,
+                    local_port=src_port if is_outbound else dst_port,
+                    host_ip=dst_ip if is_outbound else src_ip,
+                    host_port=dst_port if is_outbound else src_port,
+                    route=_brokered_route(owner_names),
+                )
+                direction = "outbound" if is_outbound else "inbound"
+            else:
+                return self._consider_lock(observed_at)
 
         try:
             peer = ipaddress.ip_address(key.host_ip)
@@ -355,6 +383,9 @@ class FlowDiscovery:
                     evidence.reliable_outbound_packets
                 ),
                 "reliable_inbound_packets": evidence.reliable_inbound_packets,
+                "bidirectional": bool(
+                    evidence.outbound_packets and evidence.inbound_packets
+                ),
             }
             for key, evidence in sorted(
                 self.candidates.items(),
@@ -397,17 +428,43 @@ def session_udp_port_owners(
 
 
 def packet_filter_for_flow(flow: FlowKey) -> str:
-    """Build the modifying filter only after the actual peer tuple is known."""
+    """Match both tuple directions even when a TUN reinjects them as outbound."""
     return (
         "udp and ("
-        f"(outbound and ip.SrcAddr == {flow.local_ip} and "
+        f"(ip.SrcAddr == {flow.local_ip} and "
         f"ip.DstAddr == {flow.host_ip} and udp.SrcPort == {flow.local_port} "
         f"and udp.DstPort == {flow.host_port}) or "
-        f"(inbound and ip.SrcAddr == {flow.host_ip} and "
+        f"(ip.SrcAddr == {flow.host_ip} and "
         f"ip.DstAddr == {flow.local_ip} and udp.SrcPort == {flow.host_port} "
         f"and udp.DstPort == {flow.local_port})"
         ")"
     )
+
+
+def flow_packet_direction(
+    flow: FlowKey,
+    *,
+    src_ip: str,
+    src_port: int,
+    dst_ip: str,
+    dst_port: int,
+) -> str | None:
+    """Classify direction from the verified tuple, not driver metadata."""
+    if (
+        src_ip == flow.local_ip
+        and src_port == flow.local_port
+        and dst_ip == flow.host_ip
+        and dst_port == flow.host_port
+    ):
+        return "outbound"
+    if (
+        src_ip == flow.host_ip
+        and src_port == flow.host_port
+        and dst_ip == flow.local_ip
+        and dst_port == flow.local_port
+    ):
+        return "inbound"
+    return None
 
 
 @dataclass(frozen=True)
@@ -1384,25 +1441,19 @@ def run() -> int:
                 now = time.monotonic()
                 src_ip = str(packet.src_addr)
                 dst_ip = str(packet.dst_addr)
-                is_outbound_flow = (
-                    bool(packet.is_outbound)
-                    and src_ip == locked.local_ip
-                    and dst_ip == locked.host_ip
-                    and int(packet.src_port) == locked.local_port
-                    and int(packet.dst_port) == locked.host_port
+                direction = flow_packet_direction(
+                    locked,
+                    src_ip=src_ip,
+                    src_port=int(packet.src_port),
+                    dst_ip=dst_ip,
+                    dst_port=int(packet.dst_port),
                 )
-                is_inbound_flow = (
-                    bool(packet.is_inbound)
-                    and src_ip == locked.host_ip
-                    and dst_ip == locked.local_ip
-                    and int(packet.src_port) == locked.host_port
-                    and int(packet.dst_port) == locked.local_port
-                )
-                if not is_outbound_flow and not is_inbound_flow:
+                if direction is None:
                     divert.send(packet, recalculate_checksum=True)
                     continue
 
-                direction = "outbound" if is_outbound_flow else "inbound"
+                is_outbound_flow = direction == "outbound"
+                is_inbound_flow = direction == "inbound"
                 observations = observe_command_serials(
                     original,
                     last_serials,

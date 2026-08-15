@@ -1014,9 +1014,23 @@ function renderExecutionSettings(settings, proxy = {}, running = false) {
   const flowCandidates = Array.isArray(proxy.flow_candidates)
     ? proxy.flow_candidates
     : [];
+  const bidirectionalCandidates = flowCandidates.filter((candidate) =>
+    candidate.bidirectional === true ||
+    (Number(candidate.outbound_packets || 0) > 0 &&
+      Number(candidate.inbound_packets || 0) > 0));
+  const oneWayReliableCandidates = flowCandidates.filter((candidate) =>
+    Number(candidate.reliable_outbound_packets || 0) +
+      Number(candidate.reliable_inbound_packets || 0) > 0 &&
+    !(candidate.bidirectional === true ||
+      (Number(candidate.outbound_packets || 0) > 0 &&
+        Number(candidate.inbound_packets || 0) > 0)));
   $("session-proxy-state").textContent = !proxyRunning
     ? "未启动"
-    : (proxy.flow ? "可靠流已锁定" : "已启动 · 发现直连/中继流");
+    : (proxy.flow
+      ? "可靠流已锁定"
+      : (flowCandidates.length
+        ? "已启动 · 正在确认双向流"
+        : "已启动 · 等待游戏流量"));
   $("session-proxy-state").className =
     "status-tag " + (!proxyRunning ? "" : (proxy.flow ? "good" : "warn"));
   $("session-proxy-detail").textContent = proxyRunning
@@ -1028,7 +1042,8 @@ function renderExecutionSettings(settings, proxy = {}, running = false) {
         " · actor " + (proxy.source_actor || "等待自然命令") +
         " · 已注入 " + Number(proxy.insertion_count || 0) + " 条"
       : "PID " + (proxy.pid || "--") +
-        " · 可靠流候选 " + flowCandidates.length +
+        " · 双向候选 " + bidirectionalCandidates.length +
+        " · 单向可靠 " + oneWayReliableCandidates.length +
         " · 游戏/Steam UDP 端口 " +
         Number((proxy.stellaris_udp_ports || []).length || 0))
     : "尚未建立代理进程。";

@@ -29,6 +29,7 @@ from iag.stellaris.execution.session_proxy import (
     build_district_record,
     build_fleet_move_record,
     build_zone_specialization_record,
+    flow_packet_direction,
     inject_at_packet_boundary,
     next_actor_serial,
     observe_command_serials,
@@ -219,6 +220,78 @@ class SessionProxyTests(unittest.TestCase):
         self.assertEqual(locked.host_port, 61000)
         self.assertEqual(locked.route, "steam_brokered_udp_port")
 
+    def test_tun_reinjected_reverse_packet_ignores_direction_flag(self) -> None:
+        discovery = FlowDiscovery(
+            minimum_each_direction=3,
+            relay_settle_seconds=0.0,
+        )
+        common = {
+            "local_ip": "192.0.2.10",
+            "host_ip": "192.0.2.20",
+            "port_owners": {64436: {"steam.exe"}},
+            "game_process_present": True,
+        }
+        discovery.observe(
+            src_ip="192.0.2.30",
+            src_port=64436,
+            dst_ip="198.51.100.45",
+            dst_port=11115,
+            is_outbound=True,
+            is_inbound=False,
+            payload=header(),
+            observed_at=1.0,
+            **common,
+        )
+        discovery.observe(
+            src_ip="198.51.100.45",
+            src_port=11115,
+            dst_ip="192.0.2.30",
+            dst_port=64436,
+            # Wintun/sing-box can reinject the reverse tuple as outbound.
+            is_outbound=True,
+            is_inbound=False,
+            payload=b"ordinary-inbound-frame",
+            observed_at=2.0,
+            **common,
+        )
+        locked = discovery.observe(
+            src_ip="192.0.2.30",
+            src_port=64436,
+            dst_ip="198.51.100.45",
+            dst_port=11115,
+            is_outbound=True,
+            is_inbound=False,
+            payload=header(),
+            observed_at=2.1,
+            **common,
+        )
+        self.assertIsNotNone(locked)
+        assert locked is not None
+        self.assertEqual(locked.local_ip, "192.0.2.30")
+        self.assertEqual(locked.local_port, 64436)
+        evidence = discovery.candidate_payload()[0]
+        self.assertTrue(evidence["bidirectional"])
+        self.assertEqual(evidence["inbound_packets"], 1)
+
+    def test_flow_direction_comes_from_tuple_not_windivert_flag(self) -> None:
+        flow = FlowKey(
+            local_ip="192.0.2.30",
+            local_port=64436,
+            host_ip="198.51.100.45",
+            host_port=11115,
+            route="steam_brokered_udp_port",
+        )
+        self.assertEqual(
+            flow_packet_direction(
+                flow,
+                src_ip="198.51.100.45",
+                src_port=11115,
+                dst_ip="192.0.2.30",
+                dst_port=64436,
+            ),
+            "inbound",
+        )
+
     def test_flow_discovery_refuses_ambiguous_relay_candidates(self) -> None:
         discovery = FlowDiscovery(
             minimum_each_direction=1,
@@ -352,6 +425,8 @@ class SessionProxyTests(unittest.TestCase):
         self.assertIn("udp.SrcPort == 52000", packet_filter)
         self.assertIn("udp.DstPort == 61000", packet_filter)
         self.assertNotIn("192.0.2.20", packet_filter)
+        self.assertNotIn("outbound", packet_filter)
+        self.assertNotIn("inbound", packet_filter)
 
     def test_session_udp_ports_include_game_and_steam_owners(self) -> None:
         with patch(
