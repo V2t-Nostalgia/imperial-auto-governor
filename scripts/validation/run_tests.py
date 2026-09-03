@@ -24,10 +24,11 @@ IGNORED_PARTS = {
 
 def test_modules(root: Path = ROOT) -> list[Path]:
     """Return maintained test modules in stable path order."""
+    root = root.resolve()
     return sorted(
         path
         for path in root.rglob("test_*.py")
-        if not any(part in IGNORED_PARTS for part in path.parts)
+        if not any(part in IGNORED_PARTS for part in path.relative_to(root).parts)
     )
 
 
