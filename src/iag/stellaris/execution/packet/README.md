@@ -9,5 +9,7 @@
 - `iag_building_to_zone_replacer.py`：建筑载体到区域/区划命令转换。
 - `iag_building_upgrade_rewriter.py`：建筑升级命令改写。
 - `iag_building_replacement_rewriter.py`：已有建筑替换命令改写。
+- `ship_commands.py`：`fb2d` 舰船设计和直接船坞记录的解析与精确构造；直接船坞记录不作为公开定量增援接口。
+- `fleet_reinforcement_commands.py`：Fleet Manager 目标编制增减、模板创建样本和两阶段增援请求的解析与精确构造。
 
 生产链依赖“非房主协作端发出合法载体、房主入站前改写、房主成为最终权威”。未知包、长度变化或无法确认方向时必须放行或失败，不得尝试猜测性注入。

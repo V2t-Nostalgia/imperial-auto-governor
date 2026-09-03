@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>帝国内政代理控制台</title>
-  <link rel="stylesheet" href="styles.css?v=24">
-  <link rel="stylesheet" href="conversation.css?v=24">
+  <link rel="stylesheet" href="styles.css?v=25">
+  <link rel="stylesheet" href="conversation.css?v=25">
   <link rel="stylesheet" href="construction.css">
 </head>
 <body>
@@ -340,15 +340,24 @@
           </div>
           <label class="check-line"><input id="session-proxy-acknowledged" type="checkbox">我理解这是实验功能，并会在退出房间前保持代理运行</label>
           <div class="proxy-runtime-detail" id="session-proxy-detail">尚未建立代理进程。</div>
-          <div class="button-row"><button id="start-session-proxy" type="button">进房前启动代理</button><button id="stop-session-proxy" type="button" class="danger-outline">退房后停止代理</button></div>
+          <div class="button-row"><button id="start-session-proxy" type="button">进房前启动代理</button><button id="stop-session-proxy" type="button" class="danger-outline">退房后停止代理</button><button id="open-protocol-suite" type="button">协议兼容性验收</button></div>
         </div>
         <label>规划存档最多落后（上传版本数）<input id="maximum-source-save-lag-versions" type="number" min="0" max="24" step="1"></label>
         <label>规划到点击的存档时效（秒）<input id="fresh-save-seconds" type="number" min="0" max="86400" step="30"></label>
         <label>自主巡检存档时效（秒）<input id="autonomy-fresh-save-seconds" type="number" min="0" max="86400" step="30"></label>
         <label>单轮串行建设上限<select id="maximum-constructions"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option></select></label>
         <label>回包没有可识别明文时<select id="inconclusive-rewrite-policy"><option value="block_until_save">严格：等待新存档后再继续</option><option value="allow_serial_provisional">宽松：记为暂定并允许继续串行</option></select></label>
-          <label class="check-line"><input id="experimental-fleet-tools-enabled" type="checkbox">向模型开放实验性舰队移动工具（仅会话代理模式）</label>
+        <label class="check-line"><input id="experimental-fleet-tools-enabled" type="checkbox">向模型开放实验性舰队移动工具（仅会话代理模式）</label>
+        <label class="check-line"><input id="experimental-fleet-coordinate-tools-enabled" type="checkbox">允许 4f2c 星系内坐标移动（实验）</label>
+        <label>星系内坐标绝对值上限<input id="fleet-coordinate-max-abs" type="number" min="10" max="100000" step="10"></label>
         <label class="check-line"><input id="experimental-fleet-attack-enabled" type="checkbox">显示攻击工具（协议尚未完成成对验证，v0.5.9 仍会拒绝发包）</label>
+        <label class="check-line"><input id="experimental-ship-design-tools-enabled" type="checkbox">向模型开放实验性舰船设计工具（克隆现有设计后修改）</label>
+        <label class="check-line"><input id="experimental-fleet-reinforcement-tools-enabled" type="checkbox">向模型开放实验性舰队编制与增援工具</label>
+        <label>单次目标编制增量上限<input id="maximum-fleet-reinforcement-increase" type="number" min="1" max="20" step="1"></label>
+        <label class="check-line"><input id="experimental-new-fleet-tools-enabled" type="checkbox">允许模型从零创建新舰队（分两次存档确认）</label>
+        <label>新舰队初始舰数上限<input id="maximum-new-fleet-initial-ships" type="number" min="1" max="20" step="1"></label>
+        <label class="check-line"><input id="experimental-research-tools-enabled" type="checkbox">向模型开放 062d 科技选择工具（实验）</label>
+        <label class="check-line"><input id="experimental-research-reselection-enabled" type="checkbox">允许停止当前科技并中途换题（高影响）</label>
         <p class="hint">存档版本容差填 0 表示只接受最新上传版本；默认 2 表示一轮分析期间即使又上传两份新档，原批次仍可继续。关闭界面校验会保留截图和匹配分数，但不再因分数不足阻止点击，需自行承担误点风险。时效填 0 只关闭墙钟年龄限制；存档哈希和战役绑定仍然有效。</p>
         <div class="button-row"><button id="save-execution-settings">保存执行设置</button></div>
       </article>
@@ -358,7 +367,7 @@
           <div><span class="kicker">FLEET AUTHORIZATION</span><h2>舰队调用权限</h2></div>
           <span id="fleet-summary-state" class="status-tag">等待存档</span>
         </div>
-        <p class="hint">舰队由最新同步存档识别。每支新舰队默认禁止调用；移动与攻击权限互相独立。</p>
+        <p class="hint">舰队由最新同步存档识别。每支新舰队默认禁止调用；移动、攻击与编制增援权限互相独立。增援工具调整的是舰队目标总数，不是立即生成舰船。</p>
         <div id="fleet-permission-list" class="fleet-permission-list"></div>
       </article>
     </section>
@@ -457,6 +466,97 @@
     </div>
   </dialog>
 
-  <script src="app_v2.js?v=24"></script>
+  <dialog id="protocol-suite-dialog" class="protocol-suite-dialog">
+    <div class="protocol-suite-shell">
+      <header class="protocol-suite-header">
+        <div>
+          <span class="kicker">PROTOCOL ACCEPTANCE</span>
+          <h2>协议兼容性验收</h2>
+          <p>控制台直接运行确定性构包与会话代理，不调用 LLM。联机阶段始终逐项执行。</p>
+        </div>
+        <button id="close-protocol-suite" type="button" class="icon-button" aria-label="关闭协议兼容性验收">×</button>
+      </header>
+
+      <section class="protocol-suite-toolbar">
+        <label>目标游戏版本<input id="protocol-game-version" type="text" placeholder="例如 4.4.6"></label>
+        <label>目标 Build（可选）<input id="protocol-game-build" type="text" placeholder="发布者标识"></label>
+        <div class="protocol-install-identity">
+          <small>本机检测</small>
+          <strong id="protocol-detected-version">--</strong>
+          <span id="protocol-plan-integrity">尚未创建计划</span>
+        </div>
+        <div class="button-row protocol-plan-actions">
+          <button id="new-protocol-plan" type="button">新建计划</button>
+          <button id="save-protocol-plan" type="button">保存计划</button>
+          <button id="enable-all-protocol-scenarios" type="button">启用并确认全部</button>
+          <button id="run-protocol-offline-check" type="button">离线全量检查</button>
+        </div>
+      </section>
+
+      <div class="protocol-suite-layout">
+        <aside class="protocol-command-sidebar">
+          <div class="protocol-sidebar-heading">
+            <span>已登记命令族</span>
+            <b id="protocol-enabled-count">0 / 0</b>
+          </div>
+          <div id="protocol-command-list" class="protocol-command-list"></div>
+        </aside>
+
+        <section class="protocol-scenario-editor">
+          <div class="protocol-scenario-heading">
+            <div><span class="kicker" id="protocol-scenario-group">COMMAND</span><h3 id="protocol-scenario-title">请选择一个命令</h3></div>
+            <span id="protocol-scenario-status" class="status-tag">未配置</span>
+          </div>
+          <div class="protocol-command-meta">
+            <span>动作 <code id="protocol-scenario-action">--</code></span>
+            <span>命令族 <code id="protocol-scenario-wire-family">--</code></span>
+            <span>验证级别 <code id="protocol-scenario-verification">--</code></span>
+          </div>
+          <p class="protocol-copy"><strong>准备条件</strong><span id="protocol-scenario-setup">--</span></p>
+          <p class="protocol-copy"><strong>游戏内核对</strong><span id="protocol-scenario-check">--</span></p>
+          <div class="protocol-scenario-switches">
+            <label class="check-line"><input id="protocol-scenario-enabled" type="checkbox">纳入本轮联机验收</label>
+            <label class="check-line"><input id="protocol-scenario-ack" type="checkbox">我确认该动作会真实修改可丢弃存档</label>
+          </div>
+          <label class="protocol-target-label">当前会话结构化目标（JSON）
+            <textarea id="protocol-scenario-target" rows="12" spellcheck="false" placeholder='{"field":"value"}'></textarea>
+          </label>
+          <details class="protocol-template-record">
+            <summary>高级：已验证模板记录（通常留空）</summary>
+            <textarea id="protocol-template-record-hex" rows="4" spellcheck="false" placeholder="仅在命令构造器明确要求时填写十六进制模板"></textarea>
+          </details>
+        </section>
+      </div>
+
+      <footer class="protocol-workflow-panel">
+        <div class="protocol-workflow-summary">
+          <div><span class="kicker">WORKFLOW</span><strong id="protocol-phase-label">尚未开始</strong></div>
+          <p id="protocol-workflow-message">创建计划后，填写当前测试存档中的真实目标。</p>
+          <code id="protocol-proxy-summary">代理未由验收接管</code>
+        </div>
+        <label class="protocol-disposable-confirmation check-line"><input id="protocol-disposable-authorized" type="checkbox">我确认这是所有参与者已授权的可丢弃测试房间；任何异常都立即停止</label>
+        <div class="button-row protocol-workflow-actions">
+          <button id="start-protocol-suite" type="button" class="primary">一键开始验收（进房前）</button>
+          <button id="confirm-protocol-room" type="button">已进房，确认锁流</button>
+          <button id="execute-protocol-action" type="button">执行当前一项</button>
+          <button id="skip-protocol-action" type="button" class="danger-outline">跳过当前项</button>
+        </div>
+        <div id="protocol-verdict-actions" class="button-row protocol-verdict-actions" hidden>
+          <button type="button" data-protocol-verdict="passed">结果符合预期</button>
+          <button type="button" data-protocol-verdict="action_not_applied">动作未发生</button>
+          <button type="button" data-protocol-verdict="unexpected_result" class="danger-outline">结果异常</button>
+          <button type="button" data-protocol-verdict="desync_or_stalled_clock" class="danger">不同步 / 时间停滞</button>
+        </div>
+        <div class="button-row protocol-finish-actions">
+          <button id="finish-protocol-suite" type="button" class="danger-outline">已退出房间，结束验收</button>
+          <button id="reset-protocol-suite" type="button">重置工作流</button>
+          <a id="download-protocol-json" class="button-link" href="/api/protocol-compatibility/report?format=json">下载 JSON 报告</a>
+          <a id="download-protocol-markdown" class="button-link" href="/api/protocol-compatibility/report?format=markdown">下载 Markdown 报告</a>
+        </div>
+      </footer>
+    </div>
+  </dialog>
+
+  <script src="app_v2.js?v=25"></script>
 </body>
 </html>

@@ -56,6 +56,30 @@ class ModelConfigurationFrontendTests(unittest.TestCase):
         ):
             self.assertIn(route, self.javascript)
 
+    def test_protocol_suite_has_a_non_llm_control_surface(self) -> None:
+        required = {
+            "open-protocol-suite",
+            "protocol-suite-dialog",
+            "protocol-command-list",
+            "protocol-scenario-target",
+            "start-protocol-suite",
+            "confirm-protocol-room",
+            "execute-protocol-action",
+            "protocol-verdict-actions",
+            "finish-protocol-suite",
+        }
+        html_ids = set(re.findall(r'\bid="([^"]+)"', self.html))
+        self.assertEqual(required - html_ids, set())
+        for route in (
+            "/api/protocol-compatibility/plan/save",
+            "/api/protocol-compatibility/offline-check",
+            "/api/protocol-compatibility/live/start",
+            "/api/protocol-compatibility/action/execute",
+            "/api/protocol-compatibility/action/verdict",
+            "/api/protocol-compatibility/finish",
+        ):
+            self.assertIn(route, self.javascript)
+
 
 if __name__ == "__main__":
     unittest.main()

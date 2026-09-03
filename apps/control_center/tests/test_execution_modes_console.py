@@ -27,6 +27,15 @@ def settings_payload(**overrides: object) -> dict[str, object]:
         "session_proxy_acknowledged": False,
         "experimental_fleet_tools_enabled": False,
         "experimental_fleet_attack_enabled": False,
+        "experimental_fleet_coordinate_tools_enabled": False,
+        "fleet_coordinate_max_abs": 1000,
+        "experimental_ship_design_tools_enabled": False,
+        "experimental_fleet_reinforcement_tools_enabled": False,
+        "maximum_fleet_reinforcement_increase": 5,
+        "experimental_new_fleet_tools_enabled": False,
+        "maximum_new_fleet_initial_ships": 5,
+        "experimental_research_tools_enabled": False,
+        "experimental_research_reselection_enabled": False,
     }
     value.update(overrides)
     return value
@@ -100,12 +109,98 @@ class ExecutionModeConsoleTests(unittest.TestCase):
                 session_proxy_acknowledged=True,
                 experimental_fleet_tools_enabled=True,
                 experimental_fleet_attack_enabled=True,
+                experimental_fleet_coordinate_tools_enabled=True,
+                experimental_ship_design_tools_enabled=True,
+                experimental_fleet_reinforcement_tools_enabled=True,
+                maximum_fleet_reinforcement_increase=7,
+                experimental_new_fleet_tools_enabled=True,
+                maximum_new_fleet_initial_ships=4,
+                experimental_research_tools_enabled=True,
             )
         )
         self.assertEqual(result["execution_mode"], "session_proxy")
         self.assertTrue(result["experimental_fleet_tools_enabled"])
+        self.assertTrue(result["experimental_fleet_coordinate_tools_enabled"])
+        self.assertTrue(result["experimental_ship_design_tools_enabled"])
+        self.assertTrue(
+            result["experimental_fleet_reinforcement_tools_enabled"]
+        )
+        self.assertEqual(result["maximum_fleet_reinforcement_increase"], 7)
+        self.assertTrue(result["experimental_new_fleet_tools_enabled"])
+        self.assertEqual(result["maximum_new_fleet_initial_ships"], 4)
+        self.assertTrue(result["experimental_research_tools_enabled"])
         reloaded = RuntimeConfig.load(self.path).snapshot().settings
         self.assertEqual(reloaded["execution_mode"], "session_proxy")
+
+    def test_reinforcement_limit_is_bounded(self) -> None:
+        with self.assertRaisesRegex(ConsoleError, "目标编制增量"):
+            self.service.save_execution_settings(
+                settings_payload(maximum_fleet_reinforcement_increase=21)
+            )
+
+    def test_reinforcement_requires_session_proxy_mode(self) -> None:
+        with self.assertRaisesRegex(ConsoleError, "舰队增援工具"):
+            self.service.save_execution_settings(
+                settings_payload(
+                    experimental_fleet_reinforcement_tools_enabled=True,
+                )
+            )
+
+    def test_new_fleet_requires_session_proxy_mode(self) -> None:
+        with self.assertRaisesRegex(ConsoleError, "新建舰队工具"):
+            self.service.save_execution_settings(
+                settings_payload(experimental_new_fleet_tools_enabled=True)
+            )
+
+    def test_new_fleet_limit_is_bounded(self) -> None:
+        with self.assertRaisesRegex(ConsoleError, "初始舰数"):
+            self.service.save_execution_settings(
+                settings_payload(maximum_new_fleet_initial_ships=21)
+            )
+
+    def test_reinforcement_permission_is_saved_per_fleet(self) -> None:
+        self.service.fleet_payload = lambda: {"fleets": [{"fleet_id": 7}]}
+        result = self.service.save_fleet_permission(
+            {
+                "fleet_id": 7,
+                "allow_move": False,
+                "allow_attack": False,
+                "allow_reinforce": True,
+            }
+        )
+        self.assertTrue(result["saved"])
+        permissions = self.service.conversation_store.get_state(
+            "fleet_permissions",
+            {},
+        )
+        self.assertTrue(permissions["7"]["allow_reinforce"])
+
+    def test_research_reselection_requires_research_tools(self) -> None:
+        with self.assertRaisesRegex(ConsoleError, "科研工具"):
+            self.service.save_execution_settings(
+                settings_payload(
+                    execution_mode="session_proxy",
+                    experimental_research_reselection_enabled=True,
+                )
+            )
+
+    def test_coordinate_move_requires_master_fleet_switch(self) -> None:
+        with self.assertRaisesRegex(ConsoleError, "舰队工具"):
+            self.service.save_execution_settings(
+                settings_payload(
+                    execution_mode="session_proxy",
+                    experimental_fleet_coordinate_tools_enabled=True,
+                )
+            )
+
+    def test_live_protocol_suite_freezes_execution_settings(self) -> None:
+        self.service.protocol_compatibility = type(
+            "ActiveProtocolSuite",
+            (),
+            {"live_active": lambda _self: True},
+        )()
+        with self.assertRaisesRegex(ConsoleError, "协议兼容性验收"):
+            self.service.save_execution_settings(settings_payload())
 
 
 if __name__ == "__main__":

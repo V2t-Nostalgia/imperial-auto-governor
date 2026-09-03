@@ -35,6 +35,7 @@ include = ["iag*"]
 [tool.setuptools.package-data]
 "iag.applications.economy_governance" = ["*.toml", "prompts/*.md", "schemas/*.json"]
 "iag.applications.fleet_operations" = ["*.toml", "*.md"]
+"iag.applications.research_strategy" = ["*.toml", "*.md"]
 "iag.infrastructure.llm" = ["*.json"]
 
 [tool.ruff]

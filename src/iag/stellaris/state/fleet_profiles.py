@@ -17,7 +17,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
+from collections import Counter
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -27,10 +30,10 @@ from iag.stellaris.state.planet_profiles import (
     parse_numeric_map,
 )
 
-
 INVALID_OBJECT_ID = 0xFFFFFFFF
 STARBASE_DESTINATION_TAG_HEX = "0c3a01001400"
 STELLAR_DESTINATION_TAG_HEX = "132a01001400"
+COORDINATE_SCALE = 100_000
 
 
 def optional_section(text: str, name: str) -> str:
@@ -149,6 +152,37 @@ def coordinate_origin(block: str, section_name: str) -> int | None:
     return None if value in (None, INVALID_OBJECT_ID) else value
 
 
+def coordinate_profile(block: str, section_name: str) -> dict[str, Any] | None:
+    """Read one local-system coordinate, preserving its galactic origin."""
+    section = optional_section(block, section_name)
+    if not section:
+        return None
+    origin = integer_scalar(section, "origin")
+    x = float_scalar(section, "x")
+    y = float_scalar(section, "y")
+    if origin in (None, INVALID_OBJECT_ID) or x is None or y is None:
+        return None
+    return {"x": x, "y": y, "origin": origin}
+
+
+def coordinate_to_fixed(value: float | str, field: str) -> int:
+    """Convert a displayed save coordinate to the protocol's signed i64 unit."""
+    try:
+        decimal_value = Decimal(str(value))
+    except (InvalidOperation, ValueError) as error:
+        raise ValueError(f"{field} must be a finite decimal coordinate.") from error
+    if not decimal_value.is_finite():
+        raise ValueError(f"{field} must be a finite decimal coordinate.")
+    quantized = decimal_value.quantize(
+        Decimal("0.00001"),
+        rounding=ROUND_HALF_UP,
+    )
+    fixed = int(quantized * COORDINATE_SCALE)
+    if not -(1 << 63) <= fixed < (1 << 63):
+        raise ValueError(f"{field} exceeds the signed 64-bit protocol range.")
+    return fixed
+
+
 def player_countries(text: str) -> list[int]:
     players = optional_section(text, "player")
     return sorted({int(value) for value in re.findall(r"\bcountry=(\d+)", players)})
@@ -176,17 +210,137 @@ def owned_fleet_ids(country_block: str) -> list[int]:
     return [int(value) for value in re.findall(r"\bfleet=(\d+)", owned)]
 
 
+def owned_fleet_template_ids(country_block: str) -> list[int]:
+    """Return the save-backed fleet templates owned by one country."""
+    manager = optional_section(country_block, "fleet_template_manager")
+    return integer_values(manager, "fleet_template")
+
+
+def anonymous_sections(text: str) -> list[str]:
+    """Return anonymous direct-child objects from a Clausewitz list."""
+    output: list[str] = []
+    index = 0
+    quoted = False
+    escaped = False
+    while index < len(text):
+        char = text[index]
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+            index += 1
+            continue
+        if char == '"':
+            quoted = True
+            index += 1
+            continue
+        if char != "{":
+            index += 1
+            continue
+
+        depth = 0
+        child_start = index + 1
+        child_quoted = False
+        child_escaped = False
+        while index < len(text):
+            nested = text[index]
+            if child_quoted:
+                if child_escaped:
+                    child_escaped = False
+                elif nested == "\\":
+                    child_escaped = True
+                elif nested == '"':
+                    child_quoted = False
+            elif nested == '"':
+                child_quoted = True
+            elif nested == "{":
+                depth += 1
+            elif nested == "}":
+                depth -= 1
+                if depth == 0:
+                    output.append(text[child_start:index])
+                    index += 1
+                    break
+            index += 1
+        else:
+            raise ValueError("Unclosed anonymous Clausewitz object.")
+    return output
+
+
+def fleet_template_profile(template_id: int, block: str) -> dict[str, Any]:
+    """Parse desired fleet composition without inferring missing counts."""
+    designs: list[dict[str, Any]] = []
+    design_list = optional_section(block, "fleet_template_design")
+    for entry in anonymous_sections(design_list):
+        implementation = optional_section(entry, "ship_design_implementation")
+        design_id = integer_scalar(implementation, "design")
+        if design_id is None:
+            continue
+        serialized_count = integer_scalar(entry, "count")
+        designs.append(
+            {
+                "design_id": design_id,
+                "upgrade_id": integer_scalar(implementation, "upgrade"),
+                "growth_stage": integer_scalar(implementation, "growth_stage"),
+                # Clausewitz omits the default integer value of one.
+                "target_count": (
+                    serialized_count if serialized_count is not None else 1
+                ),
+                "target_count_was_omitted": serialized_count is None,
+            }
+        )
+
+    home_base = optional_section(block, "home_base")
+    orbitable = optional_section(home_base, "orbitable")
+    return {
+        "fleet_template_id": template_id,
+        "fleet_id": integer_scalar(block, "fleet"),
+        "home_starbase_index": integer_scalar(orbitable, "starbase"),
+        "design_targets": designs,
+        "queued_item_handles": integer_values(block, "all_queued"),
+        "fleet_size": integer_scalar(block, "fleet_size"),
+        "is_edited_by_human": bare_scalar(block, "is_edited_by_human") == "yes",
+    }
+
+
+def actual_design_counts(
+    ship_ids: list[int],
+    ships: dict[int, str | None],
+) -> dict[int, int]:
+    """Count currently existing ships by their save-backed design ID."""
+    counts: Counter[int] = Counter()
+    for ship_id in ship_ids:
+        ship = ships.get(ship_id) or ""
+        implementation = optional_section(ship, "ship_design_implementation")
+        design_id = integer_scalar(implementation, "design")
+        if design_id is not None:
+            counts[design_id] += 1
+    return dict(sorted(counts.items()))
+
+
 def movement_profile(fleet_block: str) -> dict[str, Any]:
     manager = optional_section(fleet_block, "movement_manager")
     coordinate = optional_section(manager, "coordinate")
     target = optional_section(manager, "target")
-    target_coordinate = optional_section(target, "coordinate")
+    current_coordinate = coordinate_profile(manager, "coordinate")
+    target_coordinate = coordinate_profile(manager, "target_coordinate")
+    if target_coordinate is None:
+        target_coordinate = coordinate_profile(target, "coordinate")
     orbit = optional_section(manager, "orbit")
     orbitable = optional_section(orbit, "orbitable")
     current_system = integer_scalar(coordinate, "origin")
-    target_system = integer_scalar(target_coordinate, "origin")
+    target_system = (
+        int(target_coordinate["origin"])
+        if target_coordinate is not None
+        else None
+    )
     return {
         "state": bare_scalar(manager, "state"),
+        "current_coordinate": current_coordinate,
+        "target_coordinate": target_coordinate,
         "current_system_id": (
             None if current_system in (None, INVALID_OBJECT_ID) else current_system
         ),
@@ -289,6 +443,18 @@ def extract_fleet_profiles(text: str, owner: int | None = None) -> dict[str, Any
         raise ValueError(f"Country {owner} does not exist in this save.")
 
     fleets = parse_numeric_map(find_braced_section(text, "fleet").strip())
+    ships = parse_numeric_map(find_braced_section(text, "ships").strip())
+    template_blocks = parse_numeric_map(
+        find_braced_section(text, "fleet_template").strip()
+    )
+    templates = [
+        fleet_template_profile(template_id, block)
+        for template_id in owned_fleet_template_ids(country)
+        if (block := template_blocks.get(template_id)) is not None
+    ]
+    templates_by_id = {
+        int(template["fleet_template_id"]): template for template in templates
+    }
     systems = parse_numeric_map(find_braced_section(text, "galactic_object").strip())
     planets = planet_map(text)
     starbases = starbase_map(text)
@@ -304,6 +470,46 @@ def extract_fleet_profiles(text: str, owner: int | None = None) -> dict[str, Any
         valid_for_combat = bare_scalar(settings, "valid_for_combat") == "yes"
         stationary_installation = bare_scalar(settings, "station") == "yes"
         ship_ids = integer_values(block, "ships")
+        fleet_template_id = integer_scalar(block, "fleet_template")
+        template = (
+            templates_by_id.get(fleet_template_id)
+            if fleet_template_id is not None
+            else None
+        )
+        existing_counts = actual_design_counts(ship_ids, ships)
+        composition: list[dict[str, Any]] = []
+        if template is not None:
+            for target in template["design_targets"]:
+                design_id = int(target["design_id"])
+                target_count = target["target_count"]
+                current_count = existing_counts.get(design_id, 0)
+                composition.append(
+                    {
+                        **target,
+                        "current_count": current_count,
+                        "missing_count": (
+                            max(0, int(target_count) - current_count)
+                            if target_count is not None
+                            else None
+                        ),
+                    }
+                )
+        targeted_design_ids = {
+            int(item["design_id"]) for item in composition
+        }
+        composition.extend(
+            {
+                "design_id": design_id,
+                "upgrade_id": None,
+                "growth_stage": None,
+                "target_count": None,
+                "target_count_was_omitted": False,
+                "current_count": current_count,
+                "missing_count": None,
+            }
+            for design_id, current_count in existing_counts.items()
+            if design_id not in targeted_design_ids
+        )
         movement = movement_profile(block)
         mia_origin = coordinate_origin(block, "mia_from")
         combat_fleet_ids = integer_values(block, "in_combat_with")
@@ -321,7 +527,13 @@ def extract_fleet_profiles(text: str, owner: int | None = None) -> dict[str, Any
                 "fleet_id": fleet_id,
                 "name_key": name_key(block),
                 "display_name_hint": name_hint(block),
-                "fleet_template_id": integer_scalar(block, "fleet_template"),
+                "fleet_template_id": fleet_template_id,
+                "fleet_composition": composition,
+                "reinforcement_queue_item_handles": (
+                    list(template["queued_item_handles"])
+                    if template is not None
+                    else []
+                ),
                 "ship_class": ship_class,
                 "ship_ids": ship_ids,
                 "ship_count": len(ship_ids),
@@ -333,6 +545,9 @@ def extract_fleet_profiles(text: str, owner: int | None = None) -> dict[str, Any
                 "d32c_move_verified_family": (
                     mobile and ship_class == "shipclass_military"
                 ),
+                "coordinate_move_verified_family": (
+                    mobile and ship_class == "shipclass_military"
+                ),
                 "movement": movement,
                 "mia_from_system_id": mia_origin,
                 "in_combat_with": combat_fleet_ids,
@@ -342,6 +557,16 @@ def extract_fleet_profiles(text: str, owner: int | None = None) -> dict[str, Any
             }
         )
 
+    # 4f2c cannot target a different system. Retaining coordinates for every
+    # object in the galaxy would only enlarge the model context and expose
+    # destinations that the validator must reject, so keep targets for systems
+    # currently occupied by an owned fleet.
+    coordinate_system_ids = {
+        int(system_id)
+        for fleet in fleet_output
+        if fleet.get("coordinate_move_verified_family", False)
+        and (system_id := fleet["movement"].get("current_system_id")) is not None
+    }
     system_output: list[dict[str, Any]] = []
     for system_id, block in sorted(systems.items()):
         if block is None:
@@ -357,6 +582,28 @@ def extract_fleet_profiles(text: str, owner: int | None = None) -> dict[str, Any
                 "starbase_indices": integer_values(block, "starbases"),
                 "discovered_by_owner": owner in discovery,
                 "move_destination": system_destination(block, planets, starbases),
+                "coordinate_targets": [
+                    {
+                        "kind": "planet",
+                        "object_id": planet_id,
+                        "name_key": name_key(planets.get(planet_id) or ""),
+                        "planet_class": quoted_value(
+                            planets.get(planet_id) or "",
+                            "planet_class",
+                        ),
+                        "coordinate": coordinate_profile(
+                            planets.get(planet_id) or "",
+                            "coordinate",
+                        ),
+                    }
+                    for planet_id in planet_ids
+                    if system_id in coordinate_system_ids
+                    and coordinate_profile(
+                        planets.get(planet_id) or "",
+                        "coordinate",
+                    )
+                    is not None
+                ],
             }
         )
 
@@ -366,8 +613,269 @@ def extract_fleet_profiles(text: str, owner: int | None = None) -> dict[str, Any
         "game_date": quoted_value(text, "date"),
         "owner_country_id": owner,
         "player_country_ids": players,
+        "player_ship_design_ids": integer_values(
+            optional_section(country, "ship_design_collection"),
+            "ship_design",
+        ),
         "fleets": fleet_output,
+        "fleet_templates": templates,
         "systems": system_output,
+    }
+
+
+def selected_fleet_reinforcement(
+    profile: dict[str, Any],
+    *,
+    fleet_id: int,
+    design_id: int,
+    target_count: int,
+    maximum_target_increase: int,
+) -> dict[str, Any]:
+    """Validate one exact Fleet Manager target and reinforcement operation."""
+    fleet = next(
+        (item for item in profile["fleets"] if item["fleet_id"] == fleet_id),
+        None,
+    )
+    if fleet is None:
+        raise ValueError(f"Fleet {fleet_id} is not owned by the selected country.")
+    if fleet.get("ship_class") != "shipclass_military" or not fleet.get(
+        "player_controllable", False
+    ):
+        raise ValueError(f"Fleet {fleet_id} is not a controllable military fleet.")
+    fleet_template_id = fleet.get("fleet_template_id")
+    if fleet_template_id is None:
+        raise ValueError(f"Fleet {fleet_id} has no save-backed fleet template.")
+    if design_id not in profile.get("player_ship_design_ids", []):
+        raise ValueError(f"Ship design {design_id} is not player-owned.")
+    if not 1 <= target_count <= 999:
+        raise ValueError("target_count must be between 1 and 999.")
+    if not 1 <= maximum_target_increase <= 999:
+        raise ValueError("maximum_target_increase must be between 1 and 999.")
+    if fleet.get("reinforcement_queue_item_handles"):
+        raise ValueError(
+            f"Fleet {fleet_id} already has save-backed reinforcement items queued."
+        )
+
+    row = next(
+        (
+            item
+            for item in fleet.get("fleet_composition", [])
+            if int(item["design_id"]) == design_id
+        ),
+        None,
+    )
+    previous_target = int(row["target_count"]) if row is not None else 0
+    current_count = int(row["current_count"]) if row is not None else 0
+    if target_count < previous_target:
+        raise ValueError(
+            "The first reinforcement release only permits increasing a template target."
+        )
+    increase = target_count - previous_target
+    if increase > maximum_target_increase:
+        raise ValueError(
+            "The requested target increase exceeds the player-configured limit."
+        )
+    if increase == 0 and current_count >= target_count:
+        raise ValueError("The fleet already meets the requested target count.")
+
+    target = {
+        "context_822c": int(profile["owner_country_id"]),
+        "fleet_template_id": int(fleet_template_id),
+        "design_id": design_id,
+        "upgrade_id": (
+            int(row["upgrade_id"])
+            if row is not None and row.get("upgrade_id") is not None
+            else 0xFFFFFFFF
+        ),
+        "growth_stage": (
+            int(row["growth_stage"])
+            if row is not None and row.get("growth_stage") is not None
+            else 0
+        ),
+    }
+    return {
+        "action": "reinforce_fleet_to_target",
+        "fleet": {
+            "fleet_id": fleet_id,
+            "name_key": fleet.get("name_key"),
+            "fleet_template_id": int(fleet_template_id),
+        },
+        "design_id": design_id,
+        "previous_target_count": previous_target,
+        "requested_target_count": target_count,
+        "current_count": current_count,
+        "target_increase": increase,
+        "expected_ship_shortfall": max(0, target_count - current_count),
+        "template_edit_target": target,
+        "reinforcement_target": {
+            "context_822c": target["context_822c"],
+            "fleet_template_id": target["fleet_template_id"],
+        },
+        "protocol_sequence": [
+            *(["add_fleet_template_ship"] * increase),
+            *(
+                ["reinforce_fleet_stage_1", "reinforce_fleet_stage_2"]
+                if current_count < target_count
+                else []
+            ),
+        ],
+    }
+
+
+def resolve_created_fleet_template(
+    profile: dict[str, Any],
+    *,
+    baseline_template_ids: list[int],
+    expected_template_id: int | None = None,
+) -> dict[str, Any]:
+    """Resolve one newly created owned template without predicting its ID."""
+    baseline = {int(value) for value in baseline_template_ids}
+    templates = {
+        int(item["fleet_template_id"]): item
+        for item in profile.get("fleet_templates", [])
+    }
+    if expected_template_id is not None:
+        template_id = int(expected_template_id)
+        if template_id in baseline:
+            raise ValueError("The resolved fleet template existed before creation.")
+        template = templates.get(template_id)
+        if template is None:
+            raise ValueError(
+                f"Fleet template {template_id} is absent from the fresh save."
+            )
+        return template
+
+    created = [
+        template
+        for template_id, template in sorted(templates.items())
+        if template_id not in baseline
+    ]
+    if len(created) != 1:
+        raise ValueError(
+            "A fresh save must contain exactly one newly owned fleet template; "
+            f"found {len(created)}."
+        )
+    return created[0]
+
+
+def selected_new_fleet_reinforcement(
+    profile: dict[str, Any],
+    *,
+    fleet_template_id: int,
+    design_id: int,
+    target_count: int,
+    maximum_target_increase: int,
+) -> dict[str, Any]:
+    """Validate composition and reinforcement for a newly created template."""
+    template = next(
+        (
+            item
+            for item in profile.get("fleet_templates", [])
+            if int(item["fleet_template_id"]) == fleet_template_id
+        ),
+        None,
+    )
+    if template is None:
+        raise ValueError(
+            f"Fleet template {fleet_template_id} is not owned by the selected country."
+        )
+    if design_id not in profile.get("player_ship_design_ids", []):
+        raise ValueError(f"Ship design {design_id} is not player-owned.")
+    if not 1 <= target_count <= 999:
+        raise ValueError("target_count must be between 1 and 999.")
+    if not 1 <= maximum_target_increase <= 999:
+        raise ValueError("maximum_target_increase must be between 1 and 999.")
+    if template.get("queued_item_handles"):
+        raise ValueError(
+            f"Fleet template {fleet_template_id} already has reinforcement items queued."
+        )
+
+    design_targets = list(template.get("design_targets", []))
+    foreign_targets = [
+        item
+        for item in design_targets
+        if int(item["design_id"]) != design_id
+    ]
+    if foreign_targets:
+        raise ValueError(
+            "The newly created fleet template contains an unexpected ship design."
+        )
+    matching_targets = [
+        item for item in design_targets if int(item["design_id"]) == design_id
+    ]
+    if len(matching_targets) > 1:
+        raise ValueError("The new template contains duplicate design targets.")
+    row = matching_targets[0] if matching_targets else None
+    previous_target = int(row["target_count"]) if row is not None else 0
+    if target_count < previous_target:
+        raise ValueError(
+            "The requested initial target is below the save-backed template target."
+        )
+    increase = target_count - previous_target
+    if increase > maximum_target_increase:
+        raise ValueError(
+            "The requested initial fleet size exceeds the player-configured limit."
+        )
+
+    fleet = next(
+        (
+            item
+            for item in profile.get("fleets", [])
+            if item.get("fleet_template_id") == fleet_template_id
+        ),
+        None,
+    )
+    composition = list(fleet.get("fleet_composition", [])) if fleet else []
+    current_row = next(
+        (
+            item
+            for item in composition
+            if int(item["design_id"]) == design_id
+        ),
+        None,
+    )
+    current_count = int(current_row["current_count"]) if current_row else 0
+    if increase == 0 and current_count >= target_count:
+        raise ValueError("The new fleet already meets the requested target count.")
+
+    target = {
+        "context_822c": int(profile["owner_country_id"]),
+        "fleet_template_id": int(fleet_template_id),
+        "design_id": int(design_id),
+        "upgrade_id": (
+            int(row["upgrade_id"])
+            if row is not None and row.get("upgrade_id") is not None
+            else 0xFFFFFFFF
+        ),
+        "growth_stage": (
+            int(row["growth_stage"])
+            if row is not None and row.get("growth_stage") is not None
+            else 0
+        ),
+    }
+    return {
+        "action": "configure_new_fleet",
+        "fleet_template_id": int(fleet_template_id),
+        "fleet_id": int(fleet["fleet_id"]) if fleet is not None else None,
+        "design_id": int(design_id),
+        "previous_target_count": previous_target,
+        "requested_target_count": target_count,
+        "current_count": current_count,
+        "target_increase": increase,
+        "expected_ship_shortfall": max(0, target_count - current_count),
+        "template_edit_target": target,
+        "reinforcement_target": {
+            "context_822c": target["context_822c"],
+            "fleet_template_id": target["fleet_template_id"],
+        },
+        "protocol_sequence": [
+            *(["add_fleet_template_ship"] * increase),
+            *(
+                ["reinforce_fleet_stage_1", "reinforce_fleet_stage_2"]
+                if current_count < target_count
+                else []
+            ),
+        ],
     }
 
 
@@ -418,6 +926,62 @@ def selected_move(
             "source_fleet_object": source_fleet,
             "destination_tag_hex": destination["destination_tag_hex"],
             "destination_object": destination["destination_object"],
+        },
+    }
+
+
+def selected_coordinate_move(
+    profile: dict[str, Any],
+    source_fleet: int,
+    x: float | str,
+    y: float | str,
+    *,
+    maximum_abs_coordinate: float = 1000.0,
+) -> dict[str, Any]:
+    """Validate one 4f2c move within the fleet's current star system."""
+    if not math.isfinite(maximum_abs_coordinate) or maximum_abs_coordinate <= 0:
+        raise ValueError("maximum_abs_coordinate must be a positive finite value.")
+    fleet = next(
+        (item for item in profile["fleets"] if item["fleet_id"] == source_fleet),
+        None,
+    )
+    if fleet is None:
+        raise ValueError(f"Fleet {source_fleet} is not owned by the selected country.")
+    if not fleet.get("coordinate_move_verified_family", False):
+        raise ValueError(f"Fleet {source_fleet} is not in the verified 4f2c family.")
+    if not fleet["ai_callable_now"]:
+        raise ValueError(
+            f"Fleet {source_fleet} is not callable: {fleet['availability']}."
+        )
+    system_origin = fleet["movement"].get("current_system_id")
+    if system_origin is None:
+        raise ValueError(f"Fleet {source_fleet} has no valid current system origin.")
+
+    x_fixed = coordinate_to_fixed(x, "x")
+    y_fixed = coordinate_to_fixed(y, "y")
+    maximum_fixed = coordinate_to_fixed(maximum_abs_coordinate, "maximum_abs_coordinate")
+    if abs(x_fixed) > maximum_fixed or abs(y_fixed) > maximum_fixed:
+        raise ValueError(
+            "The requested coordinate exceeds the player-configured in-system bound."
+        )
+    return {
+        "action": "move_fleet_to_coordinate",
+        "source_fleet": {
+            "fleet_id": source_fleet,
+            "name_key": fleet["name_key"],
+            "current_system_id": system_origin,
+            "current_coordinate": fleet["movement"].get("current_coordinate"),
+        },
+        "destination_coordinate": {
+            "x": x_fixed / COORDINATE_SCALE,
+            "y": y_fixed / COORDINATE_SCALE,
+            "system_origin": system_origin,
+        },
+        "target": {
+            "source_fleet_object": source_fleet,
+            "x_fixed": x_fixed,
+            "y_fixed": y_fixed,
+            "system_origin": system_origin,
         },
     }
 

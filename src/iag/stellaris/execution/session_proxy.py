@@ -17,9 +17,11 @@ until the co-op client has left the room.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import ipaddress
 import json
 import os
+import re
 import time
 import uuid
 from collections import defaultdict
@@ -41,6 +43,18 @@ from iag.stellaris.execution.packet.autonomous_commands import (
     build_building_record,
     retag_matching_host_response,
 )
+from iag.stellaris.execution.packet.fleet_reinforcement_commands import (
+    FleetReinforcementTarget,
+    FleetTemplateAddTarget,
+    FleetTemplateCreationTarget,
+    FleetTemplateRemoveTarget,
+    build_reinforcement_stage_record,
+    build_template_creation_record,
+    build_template_edit_record,
+    parse_reinforcement_stage,
+    parse_template_creation,
+    parse_template_edit,
+)
 from iag.stellaris.execution.packet.iag_same_family_construction_rewriter import (
     rewrite_district_carrier,
     rewrite_zone_carrier,
@@ -55,7 +69,23 @@ from iag.stellaris.execution.packet.iag_stream_command_injector import (
     is_reliable_packet,
     read_uint24_be,
 )
+from iag.stellaris.execution.packet.ship_commands import (
+    ShipBuildTarget,
+    ShipDesignTarget,
+    application_prefix_for_record,
+    build_ship_design_record,
+    build_ship_record,
+    command_identity,
+    extended_record_from_application,
+    parse_ship_record,
+    retag_actor,
+    ship_design_name,
+    ship_design_record_matches,
+)
 from iag.stellaris.execution.passive_network_observer import owned_udp_ports
+from iag.stellaris.execution.protocol_compatibility import (
+    SUPPORTED_SESSION_PROXY_ACTIONS,
+)
 
 APPLICATION_COMMAND_PREFIX = b"\x00\x00\x00"
 COMMAND_RECORD_LENGTH = len(RESEARCH_LAB_RECORD_TEMPLATE)
@@ -66,6 +96,19 @@ FLEET_DESTINATION_TAGS = {
     "0c3a01001400",
     "132a01001400",
 }
+FLEET_COORDINATE_FAMILY = bytes.fromhex("4f2c01000300")
+FLEET_COORDINATE_CONTAINER = bytes.fromhex("6b0001000300")
+FLEET_X_TAG = bytes.fromhex("200001001404")
+FLEET_Y_TAG = bytes.fromhex("210001001404")
+FLEET_SYSTEM_TAG = bytes.fromhex("a72c01001400")
+FLEET_FLAG_6340_TAG = bytes.fromhex("634001000e00")
+FLEET_FLAG_DE35_TAG = bytes.fromhex("de3501000e00")
+RESEARCH_START_FAMILY = bytes.fromhex("062d01000300")
+RESEARCH_STOP_FAMILY = bytes.fromhex("453301000300")
+RESEARCH_CONTEXT_TAG = bytes.fromhex("822c01001400")
+RESEARCH_TECHNOLOGY_TAG = bytes.fromhex("072d01000f00")
+COMMAND_TRAILER = bytes.fromhex("04000400")
+TECHNOLOGY_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 MAX_STELLARIS_UDP_PORTS = 96
 DISCOVERY_FILTER = "ip and udp"
 PROCESS_OWNED_ROUTES = frozenset(
@@ -107,10 +150,30 @@ FLEET_MOVE_RECORDS = {
         "04000400"
     ),
 }
+FLEET_COORDINATE_RECORD = bytes.fromhex(
+    "8f00040000004f2c01000300f30101000300400201000c0002000000"
+    "c70001000c00ff7f0000cc0001000e0000130401000e0000db000100"
+    "14001a0000000400410001000300502c01001400030000006b000100"
+    "03002000010014041cc40400000000002100010014043a2746feffffff"
+    "ffa72c01001400810100000400634001000e0000de3501000e000004"
+    "000400"
+)
+RESEARCH_START_RECORD = bytes.fromhex(
+    "690004000000062d01000300f30101000300400201000c0002000000"
+    "c70001000c00ff7f0000cc0001000e0000130401000e0000db000100"
+    "1400110000000400410001000300822c0100140000000000072d0100"
+    "0f000e00746563685f736869656c64735f3204000400"
+)
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="milliseconds")
+
+
+def _validate_i64(value: int, field: str) -> int:
+    if not -(1 << 63) <= value < (1 << 63):
+        raise ValueError(f"{field} must be a signed 64-bit integer.")
+    return value
 
 
 def append_jsonl(path: Path, event: dict[str, object]) -> None:
@@ -480,6 +543,14 @@ class ArmRequest:
         | DistrictConstructionTarget
         | ZoneSpecializationTarget
         | FleetMoveTarget
+        | FleetCoordinateMoveTarget
+        | ResearchTarget
+        | ShipBuildTarget
+        | ShipDesignTarget
+        | FleetTemplateAddTarget
+        | FleetTemplateCreationTarget
+        | FleetTemplateRemoveTarget
+        | FleetReinforcementTarget
     )
     template_record: bytes | None = None
     previous_serial_floor: int = 0
@@ -510,8 +581,22 @@ class FleetMoveTarget:
     destination_object: int
 
 
-def parse_arm_request(path: Path, expected_session_id: str) -> ArmRequest:
-    raw = json.loads(path.read_text(encoding="utf-8"))
+@dataclass(frozen=True)
+class FleetCoordinateMoveTarget:
+    source_fleet_object: int
+    x_fixed: int
+    y_fixed: int
+    system_origin: int
+
+
+@dataclass(frozen=True)
+class ResearchTarget:
+    context_822c: int
+    technology_id: str
+
+
+def parse_arm_document(raw: Any, expected_session_id: str) -> ArmRequest:
+    """Validate one in-memory arm document using the worker's exact contract."""
     if not isinstance(raw, dict):
         raise ValueError("The arm file root must be an object.")
     if raw.get("session_id") != expected_session_id:
@@ -524,12 +609,7 @@ def parse_arm_request(path: Path, expected_session_id: str) -> ArmRequest:
     action = str(raw.get("action", ""))
     if action == "specialize_zone":
         action = "build_zone"
-    if action not in (
-        "build_building",
-        "build_district",
-        "build_zone",
-        "move_fleet",
-    ):
+    if action not in SUPPORTED_SESSION_PROXY_ACTIONS:
         raise ValueError("Unsupported session-proxy action.")
     target_raw = raw.get("target")
     if not isinstance(target_raw, dict):
@@ -541,6 +621,14 @@ def parse_arm_request(path: Path, expected_session_id: str) -> ArmRequest:
             | DistrictConstructionTarget
             | ZoneSpecializationTarget
             | FleetMoveTarget
+            | FleetCoordinateMoveTarget
+            | ResearchTarget
+            | ShipBuildTarget
+            | ShipDesignTarget
+            | FleetTemplateAddTarget
+            | FleetTemplateCreationTarget
+            | FleetTemplateRemoveTarget
+            | FleetReinforcementTarget
         ) = BuildingTarget(
             context_822c=int(target_raw.get("context_822c", 0)),
             build_queue_id=int(target_raw["build_queue_id"]),
@@ -566,7 +654,7 @@ def parse_arm_request(path: Path, expected_session_id: str) -> ArmRequest:
             slot_selector=int(target_raw["slot_selector"]),
             zone_type=str(target_raw["zone_type"]),
         )
-    else:
+    elif action == "move_fleet":
         destination_tag_hex = str(target_raw["destination_tag_hex"]).lower()
         if destination_tag_hex not in FLEET_DESTINATION_TAGS:
             raise ValueError("move_fleet has an unsupported destination tag.")
@@ -581,6 +669,119 @@ def parse_arm_request(path: Path, expected_session_id: str) -> ArmRequest:
                 "destination_object",
             ),
         )
+    elif action == "move_fleet_to_coordinate":
+        target = FleetCoordinateMoveTarget(
+            source_fleet_object=_validate_u32(
+                int(target_raw["source_fleet_object"]),
+                "source_fleet_object",
+            ),
+            x_fixed=_validate_i64(int(target_raw["x_fixed"]), "x_fixed"),
+            y_fixed=_validate_i64(int(target_raw["y_fixed"]), "y_fixed"),
+            system_origin=_validate_u32(
+                int(target_raw["system_origin"]),
+                "system_origin",
+            ),
+        )
+    elif action in {"start_research", "stop_research"}:
+        technology_id = str(target_raw["technology_id"])
+        if len(technology_id) > 160 or not TECHNOLOGY_ID_RE.fullmatch(
+            technology_id
+        ):
+            raise ValueError("technology_id contains unsupported characters.")
+        target = ResearchTarget(
+            context_822c=_validate_u32(
+                int(target_raw.get("context_822c", 0)),
+                "context_822c",
+            ),
+            technology_id=technology_id,
+        )
+    elif action == "create_fleet_template":
+        target = FleetTemplateCreationTarget(
+            context_822c=_validate_u32(
+                int(target_raw.get("context_822c", 0)),
+                "context_822c",
+            ),
+        )
+    elif action == "add_fleet_template_ship":
+        target = FleetTemplateAddTarget(
+            context_822c=_validate_u32(
+                int(target_raw.get("context_822c", 0)),
+                "context_822c",
+            ),
+            fleet_template_id=_validate_u32(
+                int(target_raw["fleet_template_id"]),
+                "fleet_template_id",
+            ),
+            design_id=_validate_u32(int(target_raw["design_id"]), "design_id"),
+            upgrade_id=_validate_u32(
+                int(target_raw.get("upgrade_id", 0xFFFFFFFF)),
+                "upgrade_id",
+            ),
+            growth_stage=_validate_u32(
+                int(target_raw.get("growth_stage", 0)),
+                "growth_stage",
+            ),
+        )
+    elif action == "remove_fleet_template_ship":
+        target = FleetTemplateRemoveTarget(
+            fleet_template_id=_validate_u32(
+                int(target_raw["fleet_template_id"]),
+                "fleet_template_id",
+            ),
+            design_id=_validate_u32(int(target_raw["design_id"]), "design_id"),
+            upgrade_id=_validate_u32(
+                int(target_raw.get("upgrade_id", 0xFFFFFFFF)),
+                "upgrade_id",
+            ),
+            growth_stage=_validate_u32(
+                int(target_raw.get("growth_stage", 0)),
+                "growth_stage",
+            ),
+        )
+    elif action in {"reinforce_fleet_stage_1", "reinforce_fleet_stage_2"}:
+        target = FleetReinforcementTarget(
+            context_822c=_validate_u32(
+                int(target_raw.get("context_822c", 0)),
+                "context_822c",
+            ),
+            fleet_template_id=_validate_u32(
+                int(target_raw["fleet_template_id"]),
+                "fleet_template_id",
+            ),
+        )
+    elif action == "build_ship":
+        if str(target_raw.get("destination_tag_hex", "")).lower() != (
+            "0c3a01001400"
+        ):
+            raise ValueError("build_ship requires the verified starbase destination tag.")
+        target = ShipBuildTarget(
+            context_822c=_validate_u32(
+                int(target_raw.get("context_822c", 0)),
+                "context_822c",
+            ),
+            build_queue_id=_validate_u32(
+                int(target_raw["build_queue_id"]),
+                "build_queue_id",
+            ),
+            design_id=_validate_u32(int(target_raw["design_id"]), "design_id"),
+            upgrade_id=_validate_u32(
+                int(target_raw.get("upgrade_id", 0xFFFFFFFF)),
+                "upgrade_id",
+            ),
+            growth_stage=_validate_u32(
+                int(target_raw.get("growth_stage", 0)),
+                "growth_stage",
+            ),
+            destination_object=_validate_u32(
+                int(target_raw["destination_object"]),
+                "destination_object",
+            ),
+        )
+    else:
+        blueprint = target_raw.get("blueprint")
+        if not isinstance(blueprint, dict):
+            raise ValueError("create_ship_design requires a blueprint object.")
+        target = ShipDesignTarget(blueprint=dict(blueprint))
     if raw.get("template_record_hex"):
         template_hex = str(raw.get("template_record_hex", ""))
         try:
@@ -605,6 +806,14 @@ def parse_arm_request(path: Path, expected_session_id: str) -> ArmRequest:
         target=target,
         template_record=template_record,
         previous_serial_floor=previous_serial_floor,
+    )
+
+
+def parse_arm_request(path: Path, expected_session_id: str) -> ArmRequest:
+    """Read and validate one arm-file request."""
+    return parse_arm_document(
+        json.loads(path.read_text(encoding="utf-8")),
+        expected_session_id,
     )
 
 
@@ -988,6 +1197,221 @@ def build_fleet_move_record(
     return result
 
 
+def _parse_fleet_coordinate_target(
+    record: bytes,
+) -> FleetCoordinateMoveTarget | None:
+    """Read the verified fixed-width 4f2c coordinate-move body."""
+    if len(record) < 12 or record[6:12] != FLEET_COORDINATE_FAMILY:
+        return None
+    if len(record) != 144 or int.from_bytes(record[:2], "little") + 1 != 144:
+        raise ValueError("The 4f2c coordinate record has an invalid length.")
+    if record[-4:] != COMMAND_TRAILER:
+        raise ValueError("The 4f2c coordinate record has an invalid trailer.")
+    source_offset = _unique_value_offset(
+        record,
+        FLEET_SOURCE_TAG,
+        4,
+        "source_fleet_object",
+    )
+    x_offset = _unique_value_offset(record, FLEET_X_TAG, 8, "x_fixed")
+    y_offset = _unique_value_offset(record, FLEET_Y_TAG, 8, "y_fixed")
+    system_offset = _unique_value_offset(
+        record,
+        FLEET_SYSTEM_TAG,
+        4,
+        "system_origin",
+    )
+    flag_6340 = _unique_value_offset(record, FLEET_FLAG_6340_TAG, 1, "flag_6340")
+    flag_de35 = _unique_value_offset(record, FLEET_FLAG_DE35_TAG, 1, "flag_de35")
+    if record[flag_6340] != 0 or record[flag_de35] != 0:
+        raise ValueError("The unverified 4f2c boolean fields are not zero.")
+    return FleetCoordinateMoveTarget(
+        source_fleet_object=int.from_bytes(
+            record[source_offset : source_offset + 4],
+            "little",
+        ),
+        x_fixed=int.from_bytes(
+            record[x_offset : x_offset + 8],
+            "little",
+            signed=True,
+        ),
+        y_fixed=int.from_bytes(
+            record[y_offset : y_offset + 8],
+            "little",
+            signed=True,
+        ),
+        system_origin=int.from_bytes(
+            record[system_offset : system_offset + 4],
+            "little",
+        ),
+    )
+
+
+def build_fleet_coordinate_record(
+    *,
+    command_serial: int,
+    actor: int,
+    origin: int,
+    target: FleetCoordinateMoveTarget,
+    template_record: bytes = FLEET_COORDINATE_RECORD,
+) -> bytes:
+    """Build one same-system move while preserving both unknown zero flags."""
+    if _parse_fleet_coordinate_target(template_record) is None:
+        raise ValueError("The fleet coordinate fixture is not a 4f2c record.")
+    record = bytearray(template_record)
+    actor_offset = _unique_value_offset(bytes(record), ACTOR_TAG, 4, "actor")
+    origin_offset = _unique_value_offset(bytes(record), ORIGIN_TAG, 1, "origin")
+    source_offset = _unique_value_offset(
+        bytes(record),
+        FLEET_SOURCE_TAG,
+        4,
+        "source_fleet_object",
+    )
+    x_offset = _unique_value_offset(bytes(record), FLEET_X_TAG, 8, "x_fixed")
+    y_offset = _unique_value_offset(bytes(record), FLEET_Y_TAG, 8, "y_fixed")
+    system_offset = _unique_value_offset(
+        bytes(record),
+        FLEET_SYSTEM_TAG,
+        4,
+        "system_origin",
+    )
+    record[actor_offset : actor_offset + 4] = _validate_u32(
+        actor,
+        "actor",
+    ).to_bytes(4, "little")
+    record[origin_offset] = origin
+    record[
+        COMMAND_SERIAL_OFFSET : COMMAND_SERIAL_OFFSET + SERIAL_WIDTH
+    ] = _validate_u32(command_serial, "command_serial").to_bytes(4, "little")
+    record[source_offset : source_offset + 4] = _validate_u32(
+        target.source_fleet_object,
+        "source_fleet_object",
+    ).to_bytes(4, "little")
+    record[x_offset : x_offset + 8] = _validate_i64(
+        target.x_fixed,
+        "x_fixed",
+    ).to_bytes(8, "little", signed=True)
+    record[y_offset : y_offset + 8] = _validate_i64(
+        target.y_fixed,
+        "y_fixed",
+    ).to_bytes(8, "little", signed=True)
+    record[system_offset : system_offset + 4] = _validate_u32(
+        target.system_origin,
+        "system_origin",
+    ).to_bytes(4, "little")
+    result = bytes(record)
+    if _parse_fleet_coordinate_target(result) != target:
+        raise RuntimeError("The fleet coordinate target changed during construction.")
+    return result
+
+
+def _research_action(record: bytes) -> str | None:
+    family = record[6:12]
+    if family == RESEARCH_START_FAMILY:
+        return "start_research"
+    if family == RESEARCH_STOP_FAMILY:
+        return "stop_research"
+    return None
+
+
+def _parse_research_target(record: bytes) -> ResearchTarget | None:
+    """Parse the shared variable-width 062d/4533 research layout."""
+    if len(record) < 92 or _research_action(record) is None:
+        return None
+    if int.from_bytes(record[:2], "little") + 1 != len(record):
+        raise ValueError("The research record declared length is invalid.")
+    if record[-4:] != COMMAND_TRAILER:
+        raise ValueError("The research record trailer is invalid.")
+    context_offset = _unique_value_offset(
+        record,
+        RESEARCH_CONTEXT_TAG,
+        4,
+        "context_822c",
+    )
+    technology_offset = _unique_value_offset(
+        record,
+        RESEARCH_TECHNOLOGY_TAG,
+        2,
+        "technology_length",
+    )
+    technology_length = int.from_bytes(
+        record[technology_offset : technology_offset + 2],
+        "little",
+    )
+    start = technology_offset + 2
+    end = start + technology_length
+    if end + len(COMMAND_TRAILER) != len(record):
+        raise ValueError("The research technology string length is invalid.")
+    try:
+        technology_id = record[start:end].decode("ascii")
+    except UnicodeDecodeError as error:
+        raise ValueError("The research technology ID is not ASCII.") from error
+    if not TECHNOLOGY_ID_RE.fullmatch(technology_id):
+        raise ValueError("The research technology ID has an invalid format.")
+    return ResearchTarget(
+        context_822c=int.from_bytes(
+            record[context_offset : context_offset + 4],
+            "little",
+        ),
+        technology_id=technology_id,
+    )
+
+
+def build_research_record(
+    *,
+    action: str,
+    command_serial: int,
+    actor: int,
+    origin: int,
+    target: ResearchTarget,
+) -> bytes:
+    """Build one variable-width start/stop research command."""
+    if action not in {"start_research", "stop_research"}:
+        raise ValueError("Research action must start or stop research.")
+    if len(target.technology_id) > 160 or not TECHNOLOGY_ID_RE.fullmatch(
+        target.technology_id
+    ):
+        raise ValueError("technology_id contains unsupported characters.")
+    technology = target.technology_id.encode("ascii")
+    if len(technology) > 0xFFFF:
+        raise ValueError("technology_id is too long for the protocol field.")
+
+    record = bytearray(RESEARCH_START_RECORD[:86])
+    record.extend(len(technology).to_bytes(2, "little"))
+    record.extend(technology)
+    record.extend(COMMAND_TRAILER)
+    record[6:12] = (
+        RESEARCH_START_FAMILY
+        if action == "start_research"
+        else RESEARCH_STOP_FAMILY
+    )
+    record[:2] = (len(record) - 1).to_bytes(2, "little")
+    actor_offset = _unique_value_offset(bytes(record), ACTOR_TAG, 4, "actor")
+    origin_offset = _unique_value_offset(bytes(record), ORIGIN_TAG, 1, "origin")
+    context_offset = _unique_value_offset(
+        bytes(record),
+        RESEARCH_CONTEXT_TAG,
+        4,
+        "context_822c",
+    )
+    record[actor_offset : actor_offset + 4] = _validate_u32(
+        actor,
+        "actor",
+    ).to_bytes(4, "little")
+    record[origin_offset] = origin
+    record[
+        COMMAND_SERIAL_OFFSET : COMMAND_SERIAL_OFFSET + SERIAL_WIDTH
+    ] = _validate_u32(command_serial, "command_serial").to_bytes(4, "little")
+    record[context_offset : context_offset + 4] = _validate_u32(
+        target.context_822c,
+        "context_822c",
+    ).to_bytes(4, "little")
+    result = bytes(record)
+    if _research_action(result) != action or _parse_research_target(result) != target:
+        raise RuntimeError("The research target changed during construction.")
+    return result
+
+
 def _build_request_record(request: ArmRequest, command_serial: int) -> bytes:
     if request.action == "build_building":
         if not isinstance(request.target, BuildingTarget):
@@ -1027,7 +1451,128 @@ def _build_request_record(request: ArmRequest, command_serial: int) -> bytes:
             target=request.target,
             template_record=request.template_record,
         )
+    if request.action == "move_fleet_to_coordinate":
+        if not isinstance(request.target, FleetCoordinateMoveTarget):
+            raise RuntimeError("The fleet coordinate action has the wrong target type.")
+        return build_fleet_coordinate_record(
+            command_serial=command_serial,
+            actor=request.source_actor,
+            origin=request.request_origin,
+            target=request.target,
+            template_record=request.template_record or FLEET_COORDINATE_RECORD,
+        )
+    if request.action in {"start_research", "stop_research"}:
+        if not isinstance(request.target, ResearchTarget):
+            raise RuntimeError("The research action has the wrong target type.")
+        return build_research_record(
+            action=request.action,
+            command_serial=command_serial,
+            actor=request.source_actor,
+            origin=request.request_origin,
+            target=request.target,
+        )
+    if request.action == "build_ship":
+        if not isinstance(request.target, ShipBuildTarget):
+            raise RuntimeError("The ship-build action has the wrong target type.")
+        return build_ship_record(
+            command_serial=command_serial,
+            actor=request.source_actor,
+            origin=request.request_origin,
+            target=request.target,
+        )
+    if request.action == "create_ship_design":
+        if not isinstance(request.target, ShipDesignTarget):
+            raise RuntimeError("The ship-design action has the wrong target type.")
+        return build_ship_design_record(
+            command_serial=command_serial,
+            actor=request.source_actor,
+            origin=request.request_origin,
+            target=request.target,
+        )
+    if request.action == "create_fleet_template":
+        if not isinstance(request.target, FleetTemplateCreationTarget):
+            raise RuntimeError("The fleet-template creation has the wrong target type.")
+        return build_template_creation_record(
+            command_serial=command_serial,
+            actor=request.source_actor,
+            origin=request.request_origin,
+            target=request.target,
+        )
+    if request.action in {
+        "add_fleet_template_ship",
+        "remove_fleet_template_ship",
+    }:
+        action = (
+            "add"
+            if request.action == "add_fleet_template_ship"
+            else "remove"
+        )
+        if not isinstance(
+            request.target,
+            (FleetTemplateAddTarget, FleetTemplateRemoveTarget),
+        ):
+            raise RuntimeError("The fleet-template edit has the wrong target type.")
+        return build_template_edit_record(
+            action=action,
+            command_serial=command_serial,
+            actor=request.source_actor,
+            origin=request.request_origin,
+            target=request.target,
+        )
+    if request.action in {
+        "reinforce_fleet_stage_1",
+        "reinforce_fleet_stage_2",
+    }:
+        if not isinstance(request.target, FleetReinforcementTarget):
+            raise RuntimeError("The reinforcement action has the wrong target type.")
+        return build_reinforcement_stage_record(
+            stage=1 if request.action.endswith("_1") else 2,
+            command_serial=command_serial,
+            actor=request.source_actor,
+            origin=request.request_origin,
+            target=request.target,
+        )
     raise RuntimeError(f"Unsupported action: {request.action}")
+
+
+def build_action_probe(
+    *,
+    action: str,
+    target: dict[str, Any],
+    template_record_hex: str | None = None,
+    source_actor: int = 2,
+    host_actor: int = 1,
+    request_origin: int = 0,
+) -> dict[str, Any]:
+    """Build one command offline and return a non-secret structural fingerprint."""
+    document: dict[str, Any] = {
+        "request_id": "offline-protocol-probe",
+        "session_id": "offline-protocol-probe",
+        "action": action,
+        "source_actor": source_actor,
+        "host_actor": host_actor,
+        "request_origin": request_origin,
+        "target": target,
+    }
+    if template_record_hex:
+        document["template_record_hex"] = template_record_hex
+    request = parse_arm_document(document, "offline-protocol-probe")
+    record = _build_request_record(request, command_serial=1)
+    application_prefix = (
+        application_prefix_for_record(record)
+        if request.action == "create_ship_design"
+        else APPLICATION_COMMAND_PREFIX
+    )
+    if len(record) < 12:
+        raise RuntimeError("The generated command record is too short.")
+    return {
+        "action": request.action,
+        "wire_family_hex": record[6:12].hex(),
+        "record_length": len(record),
+        "application_prefix_hex": application_prefix.hex(),
+        "inserted_length": len(application_prefix) + len(record),
+        "record_sha256": hashlib.sha256(record).hexdigest(),
+    }
 
 
 def retag_matching_response(
@@ -1035,6 +1580,42 @@ def retag_matching_response(
     *,
     request: ArmRequest,
 ) -> tuple[bytes, dict[str, int | str]] | None:
+    if isinstance(request.target, ShipDesignTarget):
+        if not is_reliable_packet(payload):
+            return None
+        application = payload[RELIABLE_HEADER_LENGTH:]
+        extended = extended_record_from_application(application)
+        if extended is None:
+            return None
+        record_offset, record = extended
+        if not ship_design_record_matches(
+            record,
+            target=request.target,
+            actor=request.source_actor,
+            origin=0,
+        ):
+            return None
+        _actor, _origin, serial = command_identity(record)
+        rewritten_record = retag_actor(record, request.host_actor)
+        rewritten_application = (
+            application[:record_offset]
+            + rewritten_record
+            + application[record_offset + len(record) :]
+        )
+        rewritten = payload[:RELIABLE_HEADER_LENGTH] + rewritten_application
+        if len(rewritten) != len(payload):
+            raise RuntimeError("Ship-design response retagging changed payload length.")
+        return rewritten, {
+            "action": request.action,
+            "host_command_serial_u32": serial,
+            "source_actor": request.source_actor,
+            "target_actor": request.host_actor,
+            "source_origin": 0,
+            "target_origin": 0,
+            "carrier_offset": record_offset,
+            "carrier_length": len(record),
+            "design_name": ship_design_name(record),
+        }
     if isinstance(request.target, BuildingTarget):
         return retag_matching_host_response(
             payload,
@@ -1058,6 +1639,36 @@ def retag_matching_response(
                 parsed_target = _parse_zone_target(record, request.target.zone_type)
             elif isinstance(request.target, FleetMoveTarget):
                 parsed_target = _parse_fleet_move_target(record)
+            elif isinstance(request.target, FleetCoordinateMoveTarget):
+                parsed_target = _parse_fleet_coordinate_target(record)
+            elif isinstance(request.target, ResearchTarget):
+                if _research_action(record) != request.action:
+                    continue
+                parsed_target = _parse_research_target(record)
+            elif isinstance(request.target, ShipBuildTarget):
+                parsed_target = parse_ship_record(record)
+            elif isinstance(request.target, FleetTemplateAddTarget):
+                parsed = parse_template_edit(record)
+                if parsed is None or parsed[0] != "add":
+                    continue
+                parsed_target = parsed[1]
+            elif isinstance(request.target, FleetTemplateCreationTarget):
+                parsed_target = parse_template_creation(record)
+                if parsed_target is None:
+                    continue
+            elif isinstance(request.target, FleetTemplateRemoveTarget):
+                parsed = parse_template_edit(record)
+                if parsed is None or parsed[0] != "remove":
+                    continue
+                parsed_target = parsed[1]
+            elif isinstance(request.target, FleetReinforcementTarget):
+                parsed = parse_reinforcement_stage(record)
+                expected_stage = (
+                    1 if request.action == "reinforce_fleet_stage_1" else 2
+                )
+                if parsed is None or parsed[0] != expected_stage:
+                    continue
+                parsed_target = parsed[1]
             else:
                 raise TypeError("Unsupported correlated response target.")
             actor, origin = _actor_origin(record)
@@ -1100,10 +1711,33 @@ def retag_matching_response(
         metadata["district_type"] = request.target.district_type
     elif isinstance(request.target, ZoneSpecializationTarget):
         metadata["zone_type"] = request.target.zone_type
-    else:
+    elif isinstance(request.target, FleetMoveTarget):
         metadata["source_fleet_object"] = request.target.source_fleet_object
         metadata["destination_tag_hex"] = request.target.destination_tag_hex
         metadata["destination_object"] = request.target.destination_object
+    elif isinstance(request.target, FleetCoordinateMoveTarget):
+        metadata["source_fleet_object"] = request.target.source_fleet_object
+        metadata["x_fixed"] = request.target.x_fixed
+        metadata["y_fixed"] = request.target.y_fixed
+        metadata["system_origin"] = request.target.system_origin
+    elif isinstance(request.target, ShipBuildTarget):
+        metadata["build_queue_id"] = request.target.build_queue_id
+        metadata["design_id"] = request.target.design_id
+        metadata["destination_object"] = request.target.destination_object
+    elif isinstance(
+        request.target,
+        (FleetTemplateAddTarget, FleetTemplateRemoveTarget),
+    ):
+        metadata["fleet_template_id"] = request.target.fleet_template_id
+        metadata["design_id"] = request.target.design_id
+    elif isinstance(request.target, FleetTemplateCreationTarget):
+        metadata["context_822c"] = request.target.context_822c
+        metadata["template_id_transport"] = "deterministic_allocator_not_on_wire"
+    elif isinstance(request.target, FleetReinforcementTarget):
+        metadata["fleet_template_id"] = request.target.fleet_template_id
+    else:
+        metadata["technology_id"] = request.target.technology_id
+        metadata["context_822c"] = request.target.context_822c
     return rewritten, metadata
 
 
@@ -1121,12 +1755,17 @@ def inject_at_packet_boundary(
     if not is_reliable_packet(payload) or len(payload) != RELIABLE_HEADER_LENGTH:
         return None
     command = _build_request_record(request, command_serial)
-    inserted_length = len(APPLICATION_COMMAND_PREFIX) + len(command)
+    application_prefix = (
+        application_prefix_for_record(command)
+        if request.action == "create_ship_design"
+        else APPLICATION_COMMAND_PREFIX
+    )
+    inserted_length = len(application_prefix) + len(command)
     if (
         len(payload) + inserted_length > max_payload_length
     ):
         return None
-    application = APPLICATION_COMMAND_PREFIX + command
+    application = application_prefix + command
     return Injection(
         payload=payload + application,
         injection_offset=read_uint24_be(payload, 6),
@@ -1319,12 +1958,7 @@ def run() -> int:
         "inserted_length": INSERTED_LENGTH,
         "application_prefix_hex": APPLICATION_COMMAND_PREFIX.hex(),
         "command_record_length": COMMAND_RECORD_LENGTH,
-        "supported_actions": [
-            "build_building",
-            "build_district",
-            "build_zone",
-            "move_fleet",
-        ],
+        "supported_actions": list(SUPPORTED_SESSION_PROXY_ACTIONS),
         "command_serial_translation": True,
         "multi_injection": True,
         "request_origin_default": 0,

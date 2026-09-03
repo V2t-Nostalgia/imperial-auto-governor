@@ -1,0 +1,13 @@
+schema_version = "iag.application_manifest.v1"
+application_id = "research_strategy"
+version = "0.5.9"
+display_name_zh = "科研战略"
+description_zh = "读取三系合法科技候选，并通过会话代理执行实验性科技选择。"
+
+agent_roles = ["research_director"]
+message_types = ["research_assessment", "research_selection", "escalation"]
+action_types = ["start_research", "stop_research"]
+required_platform_capabilities = [
+  "stellaris_research_state_v1",
+  "session_proxy_v1",
+]

@@ -9,6 +9,14 @@ from iag.stellaris.execution.packet.autonomous_commands import (
     BuildingTarget,
     build_building_record,
 )
+from iag.stellaris.execution.packet.fleet_reinforcement_commands import (
+    FleetReinforcementTarget,
+    FleetTemplateAddTarget,
+    FleetTemplateCreationTarget,
+    build_reinforcement_stage_record,
+    build_template_creation_record,
+    build_template_edit_record,
+)
 from iag.stellaris.execution.packet.iag_stream_command_injector import (
     RELIABLE_HEADER_LENGTH,
     StreamTranslator,
@@ -22,12 +30,16 @@ from iag.stellaris.execution.session_proxy import (
     INSERTED_LENGTH,
     ArmRequest,
     DistrictConstructionTarget,
+    FleetCoordinateMoveTarget,
     FleetMoveTarget,
     FlowDiscovery,
     FlowKey,
+    ResearchTarget,
     ZoneSpecializationTarget,
     build_district_record,
+    build_fleet_coordinate_record,
     build_fleet_move_record,
+    build_research_record,
     build_zone_specialization_record,
     flow_packet_direction,
     inject_at_packet_boundary,
@@ -67,6 +79,251 @@ FLEET_ONE_TO_SOL_RECORD = bytes.fromhex(
 
 
 class SessionProxyTests(unittest.TestCase):
+    def test_fleet_template_creation_injects_and_correlates_response(self) -> None:
+        target = FleetTemplateCreationTarget(context_822c=0)
+        request = ArmRequest(
+            request_id="new-fleet-template-1",
+            session_id="test",
+            action="create_fleet_template",
+            source_actor=2,
+            host_actor=1,
+            request_origin=0,
+            target=target,
+        )
+        injection = inject_at_packet_boundary(
+            header(),
+            request=request,
+            command_serial=62,
+            max_payload_length=1400,
+        )
+        self.assertIsNotNone(injection)
+        assert injection is not None
+        self.assertEqual(
+            injection.payload[RELIABLE_HEADER_LENGTH + 3 :],
+            build_template_creation_record(
+                command_serial=62,
+                actor=2,
+                origin=0,
+                target=target,
+            ),
+        )
+
+        response_record = build_template_creation_record(
+            command_serial=105,
+            actor=2,
+            origin=0,
+            target=target,
+        )
+        retagged = retag_matching_response(
+            header() + APPLICATION_COMMAND_PREFIX + response_record,
+            request=request,
+        )
+        self.assertIsNotNone(retagged)
+        assert retagged is not None
+        rewritten, metadata = retagged
+        observations: dict[tuple[str, int, int], int] = {}
+        parsed = observe_command_serials(rewritten, observations, "inbound")
+        self.assertEqual(parsed[0]["actor"], 1)
+        self.assertEqual(metadata["context_822c"], 0)
+        self.assertEqual(
+            metadata["template_id_transport"],
+            "deterministic_allocator_not_on_wire",
+        )
+
+    def test_fleet_template_arm_injects_and_correlates_response(self) -> None:
+        target = FleetTemplateAddTarget(
+            context_822c=0,
+            fleet_template_id=175,
+            design_id=3188,
+        )
+        request = ArmRequest(
+            request_id="reinforcement-edit-1",
+            session_id="test",
+            action="add_fleet_template_ship",
+            source_actor=2,
+            host_actor=1,
+            request_origin=0,
+            target=target,
+        )
+        injection = inject_at_packet_boundary(
+            header(),
+            request=request,
+            command_serial=54,
+            max_payload_length=1400,
+        )
+        self.assertIsNotNone(injection)
+        assert injection is not None
+        record = injection.payload[RELIABLE_HEADER_LENGTH + 3 :]
+        self.assertEqual(
+            record,
+            build_template_edit_record(
+                action="add",
+                command_serial=54,
+                actor=2,
+                origin=0,
+                target=target,
+            ),
+        )
+
+        response_record = build_template_edit_record(
+            action="add",
+            command_serial=97,
+            actor=2,
+            origin=0,
+            target=target,
+        )
+        retagged = retag_matching_response(
+            header() + APPLICATION_COMMAND_PREFIX + response_record,
+            request=request,
+        )
+        self.assertIsNotNone(retagged)
+        assert retagged is not None
+        rewritten, metadata = retagged
+        observations: dict[tuple[str, int, int], int] = {}
+        parsed = observe_command_serials(rewritten, observations, "inbound")
+        self.assertEqual(parsed[0]["actor"], 1)
+        self.assertEqual(metadata["fleet_template_id"], 175)
+        self.assertEqual(metadata["design_id"], 3188)
+
+    def test_reinforcement_stage_arm_uses_exact_target(self) -> None:
+        target = FleetReinforcementTarget(
+            context_822c=0,
+            fleet_template_id=175,
+        )
+        request = ArmRequest(
+            request_id="reinforcement-stage-2",
+            session_id="test",
+            action="reinforce_fleet_stage_2",
+            source_actor=2,
+            host_actor=1,
+            request_origin=0,
+            target=target,
+        )
+        injection = inject_at_packet_boundary(
+            header(),
+            request=request,
+            command_serial=60,
+            max_payload_length=1400,
+        )
+        self.assertIsNotNone(injection)
+        assert injection is not None
+        self.assertEqual(
+            injection.payload[RELIABLE_HEADER_LENGTH + 3 :],
+            build_reinforcement_stage_record(
+                stage=2,
+                command_serial=60,
+                actor=2,
+                origin=0,
+                target=target,
+            ),
+        )
+
+    def test_builds_exact_captured_research_start_record(self) -> None:
+        target = ResearchTarget(context_822c=0, technology_id="tech_shields_2")
+        record = build_research_record(
+            action="start_research",
+            command_serial=17,
+            actor=2,
+            origin=0,
+            target=target,
+        )
+        expected = bytes.fromhex(
+            "690004000000062d01000300f30101000300400201000c0002000000"
+            "c70001000c00ff7f0000cc0001000e0000130401000e0000db000100"
+            "1400110000000400410001000300822c0100140000000000072d0100"
+            "0f000e00746563685f736869656c64735f3204000400"
+        )
+        self.assertEqual(record, expected)
+
+    def test_research_stop_response_retags_only_actor(self) -> None:
+        target = ResearchTarget(
+            context_822c=0,
+            technology_id="tech_doctrine_fleet_size_1",
+        )
+        request = ArmRequest(
+            request_id="research-1",
+            session_id="test",
+            action="stop_research",
+            source_actor=2,
+            host_actor=1,
+            request_origin=0,
+            target=target,
+        )
+        response_record = build_research_record(
+            action="stop_research",
+            command_serial=60,
+            actor=2,
+            origin=0,
+            target=target,
+        )
+        retagged = retag_matching_response(
+            header() + APPLICATION_COMMAND_PREFIX + response_record,
+            request=request,
+        )
+        self.assertIsNotNone(retagged)
+        assert retagged is not None
+        rewritten, metadata = retagged
+        observations: dict[tuple[str, int, int], int] = {}
+        parsed = observe_command_serials(rewritten, observations, "inbound")
+        self.assertEqual(parsed[0]["actor"], 1)
+        self.assertEqual(parsed[0]["serial_u32"], 60)
+        self.assertEqual(metadata["technology_id"], target.technology_id)
+
+    def test_builds_exact_captured_coordinate_move_record(self) -> None:
+        target = FleetCoordinateMoveTarget(
+            source_fleet_object=3,
+            x_fixed=312348,
+            y_fixed=-28956870,
+            system_origin=385,
+        )
+        record = build_fleet_coordinate_record(
+            command_serial=26,
+            actor=2,
+            origin=0,
+            target=target,
+        )
+        expected = bytes.fromhex(
+            "8f00040000004f2c01000300f30101000300400201000c0002000000"
+            "c70001000c00ff7f0000cc0001000e0000130401000e0000db000100"
+            "14001a0000000400410001000300502c01001400030000006b000100"
+            "03002000010014041cc40400000000002100010014043a2746feffffff"
+            "ffa72c01001400810100000400634001000e0000de3501000e000004"
+            "000400"
+        )
+        self.assertEqual(record, expected)
+
+    def test_coordinate_response_requires_exact_target(self) -> None:
+        target = FleetCoordinateMoveTarget(
+            source_fleet_object=3,
+            x_fixed=-27197680,
+            y_fixed=2565659,
+            system_origin=385,
+        )
+        request = ArmRequest(
+            request_id="fleet-xy-1",
+            session_id="test",
+            action="move_fleet_to_coordinate",
+            source_actor=2,
+            host_actor=1,
+            request_origin=0,
+            target=target,
+        )
+        response = build_fleet_coordinate_record(
+            command_serial=70,
+            actor=2,
+            origin=0,
+            target=target,
+        )
+        retagged = retag_matching_response(
+            header() + APPLICATION_COMMAND_PREFIX + response,
+            request=request,
+        )
+        self.assertIsNotNone(retagged)
+        assert retagged is not None
+        _, metadata = retagged
+        self.assertEqual(metadata["x_fixed"], -27197680)
+        self.assertEqual(metadata["y_fixed"], 2565659)
+
     def test_reliable_header_accepts_independent_sender_epoch(self) -> None:
         inbound_after_wrap = bytearray(header())
         inbound_after_wrap[5] = 1
@@ -468,6 +725,56 @@ class SessionProxyTests(unittest.TestCase):
             self.assertEqual(request.request_origin, 0)
             with self.assertRaisesRegex(ValueError, "session_id"):
                 parse_arm_request(path, "stale-session")
+
+    def test_arm_file_parses_coordinate_and_research_targets(self) -> None:
+        requests = [
+            (
+                {
+                    "request_id": "coordinate-1",
+                    "session_id": "current-session",
+                    "action": "move_fleet_to_coordinate",
+                    "target": {
+                        "source_fleet_object": 3,
+                        "x_fixed": 2347440,
+                        "y_fixed": -29904174,
+                        "system_origin": 486,
+                    },
+                },
+                FleetCoordinateMoveTarget(
+                    source_fleet_object=3,
+                    x_fixed=2347440,
+                    y_fixed=-29904174,
+                    system_origin=486,
+                ),
+            ),
+            (
+                {
+                    "request_id": "research-1",
+                    "session_id": "current-session",
+                    "action": "start_research",
+                    "target": {
+                        "context_822c": 0,
+                        "technology_id": "tech_shields_2",
+                    },
+                },
+                ResearchTarget(context_822c=0, technology_id="tech_shields_2"),
+            ),
+            (
+                {
+                    "request_id": "new-template-1",
+                    "session_id": "current-session",
+                    "action": "create_fleet_template",
+                    "target": {"context_822c": 0},
+                },
+                FleetTemplateCreationTarget(context_822c=0),
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "arm.json"
+            for value, expected_target in requests:
+                path.write_text(json.dumps(value), encoding="utf-8")
+                request = parse_arm_request(path, "current-session")
+                self.assertEqual(request.target, expected_target)
 
     def test_next_serial_is_shared_across_client_origins(self) -> None:
         self.assertEqual(next_actor_serial({}, 2), 1)

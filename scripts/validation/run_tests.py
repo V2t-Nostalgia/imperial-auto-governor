@@ -46,14 +46,37 @@ def build_suite(paths: list[Path]) -> unittest.TestSuite:
     return suite
 
 
+def selected_test_modules(values: list[Path] | None) -> list[Path]:
+    """Resolve an explicit maintained subset, or return the complete suite."""
+    if not values:
+        return test_modules()
+    root = ROOT.resolve()
+    selected: list[Path] = []
+    for value in values:
+        candidate = value if value.is_absolute() else ROOT / value
+        candidate = candidate.resolve()
+        if not candidate.is_relative_to(root):
+            raise ValueError(f"Test path is outside the repository: {value}")
+        if not candidate.is_file() or not candidate.name.startswith("test_"):
+            raise ValueError(f"Not a maintained test module: {value}")
+        selected.append(candidate)
+    return sorted(set(selected))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument(
+        "--path",
+        action="append",
+        type=Path,
+        help="Run one repository-relative test module; may be repeated.",
+    )
     values = parser.parse_args()
 
     sys.path.insert(0, str(ROOT))
     sys.path.insert(0, str(ROOT / "src"))
-    paths = test_modules()
+    paths = selected_test_modules(values.path)
     suite = build_suite(paths)
     print(f"Loaded {len(paths)} modules / {suite.countTestCases()} tests")
     result = unittest.TextTestRunner(

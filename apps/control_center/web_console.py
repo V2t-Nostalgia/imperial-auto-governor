@@ -9,6 +9,7 @@ import binascii
 import hashlib
 import hmac
 import json
+import math
 import mimetypes
 import os
 import re
@@ -18,10 +19,11 @@ import sys
 import threading
 import time
 import traceback
+from collections.abc import Callable
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from apps.control_center.visible_reply_stream import VisibleReplyBroker
@@ -33,12 +35,21 @@ from iag.applications.economy_governance.planner import (
     CAPABILITIES_PATH,
     read_json,
 )
-from iag.applications.registry import builtin_application_registry
 from iag.applications.fleet_operations.agent_tools import (
     FLEET_PERMISSIONS_KEY,
     normalized_permissions,
 )
-from iag.core.autonomy import autonomy_probe, coalesce_next_review_after_turn
+from iag.applications.registry import builtin_application_registry
+from iag.applications.save_continuations import (
+    continuation_public_summary,
+    probe_save_continuations,
+    run_save_continuations,
+)
+from iag.core.autonomy import (
+    autonomy_probe,
+    coalesce_next_review_after_turn,
+    save_identity,
+)
 from iag.core.campaign_strategy import (
     activate_emergency,
     end_emergency,
@@ -87,10 +98,16 @@ from iag.stellaris.execution.iag_supervisor import (
     runtime_path,
 )
 from iag.stellaris.execution.port_discovery import discover_session
+from iag.stellaris.execution.protocol_compatibility_control import (
+    ProtocolCompatibilityControl,
+    ProtocolCompatibilityError,
+)
 from iag.stellaris.execution.session_proxy_controller import (
     SessionProxyController,
     SessionProxyError,
 )
+from iag.stellaris.state.fleet_profiles import extract_fleet_profiles
+from iag.stellaris.state.planet_profiles import load_gamestate
 from iag.stellaris.state.save_ingest import (
     SaveIngestError,
     maximum_source_save_lag_versions,
@@ -115,8 +132,6 @@ DEFAULT_STRATEGIC_PROMPT_PATH = (
     / "prompts"
     / "grey_tempest_conversation_zh.md"
 )
-from iag.stellaris.state.fleet_profiles import extract_fleet_profiles
-from iag.stellaris.state.planet_profiles import load_gamestate
 DEFAULT_STRATEGIC_PROMPT = DEFAULT_STRATEGIC_PROMPT_PATH.read_text(
     encoding="utf-8"
 ).strip()
@@ -566,10 +581,16 @@ class ConsoleService:
             seed=False,
         )
         self._autonomy_stop = threading.Event()
+        self._scheduler_wakeup = threading.Event()
         self._autonomy_probe: dict[str, Any] = {
             "enabled": False,
             "mode": self._active_autonomy_mode(),
             "due": False,
+            "reason": "starting",
+        }
+        self._save_continuation_probe: dict[str, Any] = {
+            "due": False,
+            "blocks_autonomy": False,
             "reason": "starting",
         }
         self._job_lock = threading.Lock()
@@ -609,6 +630,10 @@ class ConsoleService:
                 secrets.token_urlsafe(32) + "\n",
                 mode=0o600,
             )
+        self.protocol_compatibility = ProtocolCompatibilityControl(
+            self.runtime_root,
+            lambda: dict(self.config),
+        )
         self._seed_conversation(self.conversation_store)
         if (
             self.conversation_store.conversation_id == "campaign"
@@ -2048,9 +2073,49 @@ class ConsoleService:
             "experimental_fleet_attack_enabled": bool(
                 self.config.get("experimental_fleet_attack_enabled", False)
             ),
+            "experimental_fleet_coordinate_tools_enabled": bool(
+                self.config.get(
+                    "experimental_fleet_coordinate_tools_enabled",
+                    False,
+                )
+            ),
+            "fleet_coordinate_max_abs": float(
+                self.config.get("fleet_coordinate_max_abs", 1000.0)
+            ),
+            "experimental_ship_design_tools_enabled": bool(
+                self.config.get(
+                    "experimental_ship_design_tools_enabled",
+                    False,
+                )
+            ),
+            "experimental_fleet_reinforcement_tools_enabled": bool(
+                self.config.get(
+                    "experimental_fleet_reinforcement_tools_enabled",
+                    False,
+                )
+            ),
+            "maximum_fleet_reinforcement_increase": int(
+                self.config.get("maximum_fleet_reinforcement_increase", 5)
+            ),
+            "experimental_new_fleet_tools_enabled": bool(
+                self.config.get("experimental_new_fleet_tools_enabled", False)
+            ),
+            "maximum_new_fleet_initial_ships": int(
+                self.config.get("maximum_new_fleet_initial_ships", 5)
+            ),
+            "experimental_research_tools_enabled": bool(
+                self.config.get("experimental_research_tools_enabled", False)
+            ),
+            "experimental_research_reselection_enabled": bool(
+                self.config.get(
+                    "experimental_research_reselection_enabled",
+                    False,
+                )
+            ),
         }
 
     def save_execution_settings(self, value: dict[str, Any]) -> dict[str, Any]:
+        self._require_protocol_compatibility_idle()
         try:
             manual_age = int(value.get("require_fresh_save_seconds", 900))
             autonomy_age = int(
@@ -2058,6 +2123,15 @@ class ConsoleService:
             )
             maximum = int(value.get("maximum_constructions_per_turn", 3))
             maximum_lag = int(value.get("maximum_source_save_lag_versions", 2))
+            coordinate_limit = float(
+                value.get("fleet_coordinate_max_abs", 1000.0)
+            )
+            reinforcement_limit = int(
+                value.get("maximum_fleet_reinforcement_increase", 5)
+            )
+            new_fleet_limit = int(
+                value.get("maximum_new_fleet_initial_ships", 5)
+            )
         except (TypeError, ValueError) as error:
             raise ConsoleError("执行门限必须是有效整数。") from error
         if not 0 <= manual_age <= 86_400:
@@ -2087,10 +2161,52 @@ class ConsoleService:
         fleet_attack_enabled = bool(
             value.get("experimental_fleet_attack_enabled", False)
         )
+        fleet_coordinate_enabled = bool(
+            value.get("experimental_fleet_coordinate_tools_enabled", False)
+        )
+        ship_design_enabled = bool(
+            value.get("experimental_ship_design_tools_enabled", False)
+        )
+        fleet_reinforcement_enabled = bool(
+            value.get(
+                "experimental_fleet_reinforcement_tools_enabled",
+                False,
+            )
+        )
+        new_fleet_enabled = bool(
+            value.get("experimental_new_fleet_tools_enabled", False)
+        )
+        research_tools_enabled = bool(
+            value.get("experimental_research_tools_enabled", False)
+        )
+        research_reselection_enabled = bool(
+            value.get("experimental_research_reselection_enabled", False)
+        )
         if fleet_tools_enabled and execution_mode != "session_proxy":
             raise ConsoleError("实验性舰队工具只能在会话代理模式下启用。")
         if fleet_attack_enabled and not fleet_tools_enabled:
             raise ConsoleError("启用攻击预检查前必须先启用实验性舰队工具。")
+        if fleet_coordinate_enabled and not fleet_tools_enabled:
+            raise ConsoleError("启用星系内坐标移动前必须先启用舰队工具。")
+        if ship_design_enabled and execution_mode != "session_proxy":
+            raise ConsoleError("实验性舰船设计工具只能在会话代理模式下启用。")
+        if fleet_reinforcement_enabled and execution_mode != "session_proxy":
+            raise ConsoleError("实验性舰队增援工具只能在会话代理模式下启用。")
+        if new_fleet_enabled and execution_mode != "session_proxy":
+            raise ConsoleError("实验性新建舰队工具只能在会话代理模式下启用。")
+        if not 1 <= reinforcement_limit <= 20:
+            raise ConsoleError("单次舰队目标编制增量上限必须在 1 到 20 之间。")
+        if not 1 <= new_fleet_limit <= 20:
+            raise ConsoleError("新舰队初始舰数上限必须在 1 到 20 之间。")
+        if (
+            not math.isfinite(coordinate_limit)
+            or not 10 <= coordinate_limit <= 100_000
+        ):
+            raise ConsoleError("舰队星系内坐标边界必须在 10 到 100000 之间。")
+        if research_tools_enabled and execution_mode != "session_proxy":
+            raise ConsoleError("实验性科研工具只能在会话代理模式下启用。")
+        if research_reselection_enabled and not research_tools_enabled:
+            raise ConsoleError("允许中途换题前必须先启用实验性科研工具。")
         try:
             source_actor = int(value.get("session_proxy_source_actor", 0))
             host_actor = int(value.get("session_proxy_host_actor", 1))
@@ -2123,6 +2239,21 @@ class ConsoleService:
             ),
             "experimental_fleet_tools_enabled": fleet_tools_enabled,
             "experimental_fleet_attack_enabled": fleet_attack_enabled,
+            "experimental_fleet_coordinate_tools_enabled": (
+                fleet_coordinate_enabled
+            ),
+            "fleet_coordinate_max_abs": coordinate_limit,
+            "experimental_ship_design_tools_enabled": ship_design_enabled,
+            "experimental_fleet_reinforcement_tools_enabled": (
+                fleet_reinforcement_enabled
+            ),
+            "maximum_fleet_reinforcement_increase": reinforcement_limit,
+            "experimental_new_fleet_tools_enabled": new_fleet_enabled,
+            "maximum_new_fleet_initial_ships": new_fleet_limit,
+            "experimental_research_tools_enabled": research_tools_enabled,
+            "experimental_research_reselection_enabled": (
+                research_reselection_enabled
+            ),
         }
         with self._config_lock:
             self.runtime_config.update(settings=changes)
@@ -2134,6 +2265,7 @@ class ConsoleService:
         return SessionProxyController(self.config).status()
 
     def start_session_proxy(self) -> dict[str, Any]:
+        self._require_protocol_compatibility_idle()
         self.reload_config()
         if str(self.config.get("execution_mode", "carrier_click")) != "session_proxy":
             raise ConsoleError("请先保存并选择会话代理执行模式。")
@@ -2143,12 +2275,127 @@ class ConsoleService:
             raise ConsoleError(str(error)) from error
 
     def stop_session_proxy(self, *, room_exited: bool) -> dict[str, Any]:
+        self._require_protocol_compatibility_idle()
         self.reload_config()
         try:
             return SessionProxyController(self.config).stop(
                 room_exited=room_exited,
             )
         except SessionProxyError as error:
+            raise ConsoleError(str(error)) from error
+
+    def _protocol_compatibility_live_active(self) -> bool:
+        suite = getattr(self, "protocol_compatibility", None)
+        return bool(suite is not None and suite.live_active())
+
+    def _require_protocol_compatibility_idle(self) -> None:
+        if self._protocol_compatibility_live_active():
+            raise ConsoleError(
+                "协议兼容性验收正在接管会话代理；请先退房并结束验收。"
+            )
+
+    def protocol_compatibility_payload(self) -> dict[str, Any]:
+        return self.protocol_compatibility.payload()
+
+    def new_protocol_compatibility_plan(
+        self,
+        value: dict[str, Any],
+    ) -> dict[str, Any]:
+        try:
+            return self.protocol_compatibility.new_plan(
+                game_version=str(value.get("game_version", "")),
+                game_build=str(value.get("game_build", "")),
+            )
+        except ProtocolCompatibilityError as error:
+            raise ConsoleError(str(error)) from error
+
+    def save_protocol_compatibility_plan(
+        self,
+        value: dict[str, Any],
+    ) -> dict[str, Any]:
+        try:
+            return self.protocol_compatibility.save_plan(value.get("plan"))
+        except ProtocolCompatibilityError as error:
+            raise ConsoleError(str(error)) from error
+
+    def check_protocol_compatibility(self) -> dict[str, Any]:
+        try:
+            return self.protocol_compatibility.offline_check()
+        except ProtocolCompatibilityError as error:
+            raise ConsoleError(str(error)) from error
+
+    def start_protocol_compatibility_live(
+        self,
+        *,
+        disposable_authorized: bool,
+    ) -> dict[str, Any]:
+        with self._conversation_lock:
+            with self._job_lock:
+                if self._job.get("state") == "running":
+                    raise ConsoleError(
+                        "已有代理任务正在运行；协议验收不会与模型任务并行。"
+                    )
+            self.reload_config()
+            if self._active_autonomy_mode() != "paused":
+                raise ConsoleError(
+                    "开始协议验收前请把自主巡检切换为暂停。"
+                )
+            try:
+                return self.protocol_compatibility.start_live(
+                    disposable_authorized=disposable_authorized,
+                )
+            except (ProtocolCompatibilityError, SessionProxyError) as error:
+                raise ConsoleError(str(error)) from error
+
+    def confirm_protocol_compatibility_room(self) -> dict[str, Any]:
+        try:
+            return self.protocol_compatibility.confirm_room()
+        except ProtocolCompatibilityError as error:
+            raise ConsoleError(str(error)) from error
+
+    def execute_protocol_compatibility_action(self) -> dict[str, Any]:
+        try:
+            return self.protocol_compatibility.execute_current()
+        except ProtocolCompatibilityError as error:
+            raise ConsoleError(str(error)) from error
+
+    def record_protocol_compatibility_verdict(
+        self,
+        verdict: str,
+    ) -> dict[str, Any]:
+        try:
+            return self.protocol_compatibility.record_verdict(verdict)
+        except ProtocolCompatibilityError as error:
+            raise ConsoleError(str(error)) from error
+
+    def skip_protocol_compatibility_action(self) -> dict[str, Any]:
+        try:
+            return self.protocol_compatibility.skip_current()
+        except ProtocolCompatibilityError as error:
+            raise ConsoleError(str(error)) from error
+
+    def finish_protocol_compatibility(
+        self,
+        *,
+        room_exited: bool,
+    ) -> dict[str, Any]:
+        try:
+            return self.protocol_compatibility.finish(
+                room_exited=room_exited,
+            )
+        except ProtocolCompatibilityError as error:
+            raise ConsoleError(str(error)) from error
+
+    def reset_protocol_compatibility(self) -> dict[str, Any]:
+        try:
+            return self.protocol_compatibility.reset()
+        except ProtocolCompatibilityError as error:
+            raise ConsoleError(str(error)) from error
+
+    def protocol_compatibility_report_path(self, format_name: str) -> Path:
+        try:
+            return self.protocol_compatibility.report_path(format_name)
+        except ProtocolCompatibilityError as error:
             raise ConsoleError(str(error)) from error
 
     def fleet_payload(self) -> dict[str, Any]:
@@ -2200,6 +2447,9 @@ class ConsoleService:
                         "allow_attack": bool(
                             permission.get("allow_attack", False)
                         ),
+                        "allow_reinforce": bool(
+                            permission.get("allow_reinforce", False)
+                        ),
                     },
                 }
             )
@@ -2238,6 +2488,7 @@ class ConsoleService:
         permissions[str(fleet_id)] = {
             "allow_move": bool(value.get("allow_move", False)),
             "allow_attack": bool(value.get("allow_attack", False)),
+            "allow_reinforce": bool(value.get("allow_reinforce", False)),
         }
         self.conversation_store.set_state(FLEET_PERMISSIONS_KEY, permissions)
         return {"saved": True, "fleet_state": self.fleet_payload()}
@@ -2527,12 +2778,63 @@ class ConsoleService:
     ) -> dict[str, Any]:
         self.reload_config()
         with self._save_upload_lock:
-            return receive_uploaded_save(
+            result = receive_uploaded_save(
                 self.config,
                 stream,
                 content_length=content_length,
                 headers=headers,
             )
+        wakeup = getattr(self, "_scheduler_wakeup", None)
+        if wakeup is not None:
+            wakeup.set()
+        return {
+            **result,
+            "save_continuation_wakeup": True,
+        }
+
+    def _current_continuation_store(self) -> ConversationStore | None:
+        """Resolve the conversation explicitly bound to the latest host save."""
+        manifest = read_manifest(self.config) or {}
+        campaign_id = str(manifest.get("campaign_id") or "").strip().lower()
+        campaign_label = str(
+            manifest.get("campaign_label") or ""
+        ).strip()
+        if not campaign_id:
+            return None
+        holder = self.conversation_store.conversation_for_campaign(campaign_id)
+        if holder is None or holder.get("archived"):
+            return None
+        if str(holder.get("campaign_label") or "").strip() != campaign_label:
+            return None
+        return ConversationStore(
+            self.conversation_db_path,
+            conversation_id=str(holder["conversation_id"]),
+        )
+
+    def _run_save_continuation_job(
+        self,
+        store: ConversationStore,
+        source_identity: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Run fixed code for one save event, without opening a model turn."""
+        result = run_save_continuations(self.config, store)
+        summary = continuation_public_summary(result)
+        store.append(
+            "system",
+            summary,
+            kind="save_continuation",
+            visible=True,
+            metadata={
+                "success": result.get("state")
+                not in {"failed", "needs_review"},
+                "trigger": "save_continuation",
+            },
+        )
+        if result.get("mutated_game"):
+            # The current save predates the command that was just emitted.  Do
+            # not spend a model turn auditing that now-stale snapshot.
+            store.set_state("last_autonomy_source", source_identity)
+        return result
 
     def upload_is_authorized(self, authorization: str | None) -> bool:
         token = optional_text(self.save_upload_token_path).strip()
@@ -2699,6 +3001,7 @@ class ConsoleService:
             with self._job_lock:
                 job = dict(self._job)
                 autonomy_status = dict(self._autonomy_probe)
+                continuation_status = dict(self._save_continuation_probe)
         calibration_steps = self.calibration_steps_payload()
         construction_catalog = build_construction_catalog(
             read_json(CAPABILITIES_PATH),
@@ -2733,6 +3036,7 @@ class ConsoleService:
                 **autonomy_status,
                 "mode": autonomy_mode,
             },
+            "save_continuation": continuation_status,
             "job": job,
             "emergency_stop_requested": self.stop_path.is_file(),
         }
@@ -2905,24 +3209,85 @@ class ConsoleService:
                 )
             except Exception:
                 interval = 15
-            if self._autonomy_stop.wait(interval):
+            self._scheduler_wakeup.wait(interval)
+            self._scheduler_wakeup.clear()
+            if self._autonomy_stop.is_set():
                 return
             try:
                 self.reload_config()
                 with self._conversation_lock:
+                    with self._job_lock:
+                        busy = self._job.get("state") == "running"
+                    if busy:
+                        continue
+                    if self._protocol_compatibility_live_active():
+                        continue
+
+                    continuation_store = self._current_continuation_store()
+                    continuation_probe = (
+                        probe_save_continuations(
+                            self.config,
+                            continuation_store,
+                        )
+                        if continuation_store is not None
+                        else {
+                            "schema": "iag.save_continuation_probe.v1",
+                            "due": False,
+                            "blocks_autonomy": False,
+                            "reason": "current_save_unbound",
+                        }
+                    )
+                    with self._job_lock:
+                        self._save_continuation_probe = continuation_probe
+                    ready = continuation_probe.get("ready")
+                    if (
+                        continuation_store is not None
+                        and continuation_probe.get("due")
+                        and isinstance(ready, dict)
+                    ):
+                        source = ready.get("save")
+                        source = source if isinstance(source, dict) else {}
+                        source_path = Path(str(source.get("path") or ""))
+                        source_identity = save_identity(source_path)
+                        self._start_job(
+                            "save_continuation",
+                            lambda store=continuation_store,
+                            source_identity=source_identity: (
+                                self._run_save_continuation_job(
+                                    store,
+                                    source_identity,
+                                )
+                            ),
+                            conversation_id=(
+                                continuation_store.conversation_id
+                            ),
+                        )
+                        continue
+                    if continuation_probe.get("blocks_autonomy"):
+                        with self._job_lock:
+                            self._autonomy_probe = {
+                                "enabled": True,
+                                "mode": self._active_autonomy_mode(),
+                                "due": False,
+                                "reason": "waiting_for_save_continuation",
+                            }
+                        continue
+
                     store = self.conversation_store
                     agent = self.conversation_agent
                     probe = autonomy_probe(self.config, store)
                     with self._job_lock:
                         self._autonomy_probe = probe
-                        busy = self._job.get("state") == "running"
-                    if not probe.get("due") or busy:
+                    if not probe.get("due"):
                         continue
                     mode = self._active_autonomy_mode(store)
                     source_identity = probe.get("save")
                     self._start_job(
                         "autonomous",
-                        lambda mode=mode, source_identity=source_identity: (
+                        lambda agent=agent,
+                        store=store,
+                        mode=mode,
+                        source_identity=source_identity: (
                             self._conversation_action(
                                 agent=agent,
                                 store=store,
@@ -2948,6 +3313,7 @@ class ConsoleService:
 
     def close(self) -> None:
         self._autonomy_stop.set()
+        self._scheduler_wakeup.set()
         self._scheduler_thread.join(timeout=3)
 
     def capture(self) -> dict[str, Any]:
@@ -3026,6 +3392,7 @@ class ConsoleService:
         *,
         conversation_id: str | None = None,
     ) -> dict[str, Any]:
+        self._require_protocol_compatibility_idle()
         with self._job_lock:
             if self._job.get("state") == "running":
                 raise ConsoleError("已有一个代理任务正在运行。")
@@ -3063,6 +3430,9 @@ class ConsoleService:
                         "finished_at": now_iso(),
                     }
                 )
+            wakeup = getattr(self, "_scheduler_wakeup", None)
+            if wakeup is not None:
+                wakeup.set()
 
         threading.Thread(
             target=worker,
@@ -3264,7 +3634,13 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             raise FileNotFoundError(relative)
         return target
 
-    def send_file(self, path: Path, *, head_only: bool = False) -> None:
+    def send_file(
+        self,
+        path: Path,
+        *,
+        head_only: bool = False,
+        download_name: str | None = None,
+    ) -> None:
         content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         if content_type.startswith("text/") or content_type in {
             "application/javascript",
@@ -3295,7 +3671,13 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         if byte_range is not None:
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
-        if path.suffix.lower() == ".zip":
+        if download_name:
+            safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", download_name)
+            self.send_header(
+                "Content-Disposition",
+                f'attachment; filename="{safe_name}"',
+            )
+        elif path.suffix.lower() == ".zip":
             self.send_header(
                 "Content-Disposition",
                 f'attachment; filename="{path.name}"',
@@ -3354,6 +3736,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 return
             relative = "index.html" if path == "/" else path.lstrip("/")
             self.send_file(self.static_file(relative), head_only=True)
+        except ConsoleError:
+            self.send_bytes(
+                b"",
+                "application/json; charset=utf-8",
+                status=400,
+            )
         except FileNotFoundError:
             self.send_bytes(b"", "application/json; charset=utf-8", status=404)
         except Exception:
@@ -3403,6 +3791,24 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             if path == "/api/strategy":
                 self.send_json(self.service.strategy_payload())
                 return
+            if path == "/api/protocol-compatibility":
+                self.send_json(
+                    self.service.protocol_compatibility_payload()
+                )
+                return
+            if path == "/api/protocol-compatibility/report":
+                format_name = str(query.get("format", ["json"])[0])
+                report_path = self.service.protocol_compatibility_report_path(
+                    format_name
+                )
+                self.send_file(
+                    report_path,
+                    download_name=(
+                        f"protocol-compatibility-{report_path.parent.name}-"
+                        f"{report_path.name}"
+                    ),
+                )
+                return
             if path == "/api/conversations":
                 include_archived = (
                     query.get("include_archived", ["0"])[0]
@@ -3433,6 +3839,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 return
             relative = "index.html" if path == "/" else path.lstrip("/")
             self.send_file(self.static_file(relative))
+        except ConsoleError as error:
+            self.send_json({"error": str(error)}, status=400)
         except FileNotFoundError:
             self.send_json({"error": "not_found"}, status=404)
         except Exception as error:
@@ -3576,6 +3984,34 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 result = self.service.stop_session_proxy(
                     room_exited=bool(value.get("room_exited", False))
                 )
+            elif path == "/api/protocol-compatibility/plan/new":
+                result = self.service.new_protocol_compatibility_plan(value)
+            elif path == "/api/protocol-compatibility/plan/save":
+                result = self.service.save_protocol_compatibility_plan(value)
+            elif path == "/api/protocol-compatibility/offline-check":
+                result = self.service.check_protocol_compatibility()
+            elif path == "/api/protocol-compatibility/live/start":
+                result = self.service.start_protocol_compatibility_live(
+                    disposable_authorized=bool(
+                        value.get("disposable_authorized", False)
+                    )
+                )
+            elif path == "/api/protocol-compatibility/room/confirm":
+                result = self.service.confirm_protocol_compatibility_room()
+            elif path == "/api/protocol-compatibility/action/execute":
+                result = self.service.execute_protocol_compatibility_action()
+            elif path == "/api/protocol-compatibility/action/verdict":
+                result = self.service.record_protocol_compatibility_verdict(
+                    str(value.get("verdict", ""))
+                )
+            elif path == "/api/protocol-compatibility/action/skip":
+                result = self.service.skip_protocol_compatibility_action()
+            elif path == "/api/protocol-compatibility/finish":
+                result = self.service.finish_protocol_compatibility(
+                    room_exited=bool(value.get("room_exited", False))
+                )
+            elif path == "/api/protocol-compatibility/reset":
+                result = self.service.reset_protocol_compatibility()
             elif path == "/api/fleet-permission":
                 result = self.service.save_fleet_permission(value)
             elif path == "/api/strategy/decade":

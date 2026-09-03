@@ -13,7 +13,6 @@ import hashlib
 import json
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / "docs" / "code-map" / "FILE_INDEX.md"
 IGNORED_PARTS = {
@@ -45,17 +44,25 @@ FILE_NOTES = {
     "src/iag/applications/economy_governance/planner.py": "把存档事实与 Content Pack 映射转换为合法建设候选。",
     "src/iag/applications/economy_governance/agent_tools.py": "向模型暴露受控工具，并维护准备、执行与事实账本。",
     "src/iag/applications/economy_governance/conversation_agent.py": "运行带工具调用的持续战役会话与自主巡检。",
-    "src/iag/applications/fleet_operations/agent_tools.py": "向模型暴露逐舰队授权的状态、准备与执行工具；未验证攻击保持失败关闭。",
+    "src/iag/applications/fleet_operations/agent_tools.py": "向模型暴露逐舰队授权的移动、舰船设计与编制增援工具；未验证攻击保持失败关闭。",
+    "src/iag/applications/research_strategy/agent_tools.py": "向模型暴露存档约束的三系科研状态、准备与串行确认工具。",
+    "src/iag/applications/save_continuations.py": "在新存档到达后续接已授权的确定性跨存档工作流，不重新调用模型。",
     "src/iag/infrastructure/llm/model_client.py": "保持规划器同步接口，并编排异步模型协议调用与 JSON 解析。",
     "src/iag/infrastructure/llm/chat_stream.py": "重组流式正文、私有推理和工具参数，只向叠加层发布普通正文。",
     "src/iag/infrastructure/llm/providers.py": "以 AsyncOpenAI 为默认传输，并保留显式 raw HTTP 兼容实现。",
     "src/iag/stellaris/state/extract_game_state.py": "解包 Stellaris 存档并生成标准化帝国状态。",
     "src/iag/stellaris/state/planet_profiles.py": "解析殖民地、区域、槽位、容量、拥有者和建设队列。",
-    "src/iag/stellaris/state/fleet_profiles.py": "解析玩家舰队、军力、位置、交战、MIA 和已验证移动目标。",
+    "src/iag/stellaris/state/fleet_profiles.py": "解析玩家舰队、军力、位置、模板编制、增援队列和已验证动作目标。",
+    "src/iag/stellaris/state/ship_profiles.py": "解析玩家舰船设计、部件槽和直接船坞协议证据。",
+    "src/iag/stellaris/state/research_profiles.py": "分离已完成科技、当前研究、合法候选和储存研究点。",
     "src/iag/stellaris/execution/iag_supervisor.py": "在载体点击与会话代理之间编排准备、执行、确认和失败保护。",
     "src/iag/stellaris/execution/session_proxy.py": "在整局可靠流中插入已验证命令并持续映射 offset、ACK 与 actor serial。",
     "src/iag/stellaris/execution/session_proxy_controller.py": "管理 Windows 会话代理的进房前启动、串行动作提交和离房后停止。",
+    "src/iag/stellaris/execution/protocol_compatibility.py": "登记全部会话代理命令，并生成版本兼容性计划、结果分类和基线差异报告。",
+    "src/iag/stellaris/execution/protocol_compatibility_control.py": "持久化网页协议验收计划，以无模型调用的逐项状态机驱动离线检查和会话代理。",
     "src/iag/stellaris/execution/packet/iag_packet_interceptor.py": "WinDivert 一次性捕获框架、方向过滤和审计日志。",
+    "src/iag/stellaris/execution/packet/fleet_reinforcement_commands.py": "精确解析并构造 Fleet Manager 编制增减与两阶段增援记录。",
+    "src/iag/stellaris/execution/packet/ship_commands.py": "精确解析并构造舰船设计与直接船坞记录。",
     "apps/control_center/web_console.py": "战役会话、模型配置、巡检、研究和执行状态的 HTTPS 控制面。",
     "apps/control_center/windows_agent_gui.py": "Windows Agent 一键启动、运行目录、证书和健康检查界面。",
     "apps/host_bridge/iag_host_interceptor.py": "房主侧入站命令识别、受约束改写与权威回包确认。",
@@ -63,6 +70,7 @@ FILE_NOTES = {
     "apps/control_center/visible_reply_stream.py": "维护只含玩家输入与模型可见正文的有界事件流。",
     "apps/game_overlay/window.py": "透明、置顶、可拖动且可切换鼠标穿透的游戏会话界面。",
     "apps/game_overlay/transport.py": "以证书固定 HTTPS 接收可见 SSE 事件并发送玩家消息。",
+    "scripts/diagnostics/run_protocol_compatibility_suite.py": "先离线构包，再在明确授权的可丢弃房间中逐项验证已登记协议命令。",
     "content_packs/vanilla_4_4/mappings/capabilities.json": "Stellaris 4.4 原版建设对象与平台动作的声明式能力清单。",
     "stellaris_mod/common/scripted_effects/iag_carrier_effects.txt": "创建和维护建设载体星系、殖民地及其安全状态。",
     "requirements.txt": "Python 3.11+ 统一依赖；Windows/Linux 抓包依赖用环境标记隔离。",
@@ -75,7 +83,9 @@ PREFIX_NOTES = (
     ("src/iag/stellaris/execution/packet/", "协作建设命令的离线解析与受约束改写。"),
     ("src/iag/stellaris/execution/", "游戏侧点击、网络发现、执行监督和确认。"),
     ("src/iag/applications/economy_governance/", "经济治理 Application 的规则、工具和提示词。"),
-    ("src/iag/applications/fleet_operations/", "实验性舰队状态、逐舰队权限与移动工具。"),
+    ("src/iag/applications/fleet_operations/", "实验性舰队状态、逐舰队权限、移动、设计与编制增援工具。"),
+    ("src/iag/applications/research_strategy/", "实验性科研状态、合法候选与科技选择工具。"),
+    ("src/iag/applications/", "平台原生 Application 注册、跨域调度与确定性续接。"),
     ("src/iag/infrastructure/llm/", "模型供应商协议和请求模板适配。"),
     ("src/iag/infrastructure/research/", "不可信网页资料的检索与正文提取适配。"),
     ("apps/control_center/web/", "灰风控制台的浏览器端界面资源。"),
@@ -86,7 +96,7 @@ PREFIX_NOTES = (
     ("stellaris_mod/", "建设载体 Clausewitz Mod 源码。"),
     ("scripts/build/", "Windows 可执行程序的可重复构建入口。"),
     ("scripts/deploy/", "Ubuntu 虚拟环境、控制台和 systemd 部署。"),
-    ("scripts/diagnostics/", "只读诊断与流量/存档分析工具。"),
+    ("scripts/diagnostics/", "只读诊断，以及需显式授权的协议兼容性验收工具。"),
     ("scripts/migration/", "可审计迁移、哈希与代码地图维护工具。"),
     ("services/research/", "可选的本地联网检索服务。"),
     ("docs/reference/v0_5_8/", "迁移基线 v0.5.8 的原始操作与研究记录。"),
@@ -198,13 +208,7 @@ def main() -> int:
             summary = FILE_NOTES[relative]
         source = source_by_target.get(relative, "新工程文件")
         rows.append(
-            "| `{}` | {} | {} | {} | `{}` |".format(
-                escape(relative),
-                escape(category(relative)),
-                escape(summary),
-                escape(symbols),
-                escape(source),
-            )
+            f"| `{escape(relative)}` | {escape(category(relative))} | {escape(summary)} | {escape(symbols)} | `{escape(source)}` |"
         )
 
     header = """# 逐文件代码地图

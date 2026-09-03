@@ -1010,3 +1010,210 @@
     padding: 14px;
   }
 }
+
+.protocol-suite-dialog {
+  width: min(1260px, calc(100vw - 36px));
+  height: min(920px, calc(100vh - 36px));
+  max-width: none;
+  max-height: none;
+  border: 1px solid rgba(229, 170, 88, .72);
+  background: #041318;
+  color: var(--text);
+  padding: 0;
+  box-shadow: 0 26px 90px rgba(0, 0, 0, .76), inset 0 0 40px rgba(229, 170, 88, .05);
+}
+
+.protocol-suite-dialog::backdrop {
+  background: rgba(0, 7, 10, .82);
+  backdrop-filter: blur(4px);
+}
+
+.protocol-suite-dialog [hidden] {
+  display: none !important;
+}
+
+.protocol-suite-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.protocol-suite-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+  border-bottom: 1px solid rgba(229, 170, 88, .25);
+  background: linear-gradient(90deg, rgba(54, 41, 14, .7), rgba(3, 18, 22, .94));
+  padding: 15px 18px 13px;
+}
+
+.protocol-suite-header h2,
+.protocol-scenario-heading h3 {
+  color: var(--text);
+  font-weight: 500;
+  margin: 3px 0 0;
+}
+
+.protocol-suite-header h2 { font-size: 20px; }
+.protocol-suite-header p {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 5px 0 0;
+}
+
+.protocol-suite-toolbar {
+  display: grid;
+  grid-template-columns: minmax(150px, .65fr) minmax(150px, .65fr) minmax(190px, .8fr) minmax(360px, 1.5fr);
+  align-items: end;
+  gap: 0 12px;
+  border-bottom: 1px solid rgba(95, 196, 181, .18);
+  padding: 10px 16px;
+}
+
+.protocol-suite-dialog label {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.protocol-suite-dialog input,
+.protocol-suite-dialog textarea {
+  margin-top: 5px;
+}
+
+.protocol-install-identity {
+  border: 1px solid rgba(95, 196, 181, .16);
+  background: rgba(1, 10, 13, .45);
+  padding: 8px 10px;
+}
+
+.protocol-install-identity small,
+.protocol-install-identity strong,
+.protocol-install-identity span {
+  display: block;
+}
+
+.protocol-install-identity small,
+.protocol-install-identity span { color: var(--muted); font-size: 10px; }
+.protocol-install-identity strong { color: var(--teal); font: 600 13px Consolas, monospace; margin: 2px 0; }
+.protocol-plan-actions { margin: 0; justify-content: flex-end; }
+.protocol-plan-actions button { padding: 8px 10px; font-size: 11px; }
+
+.protocol-suite-layout {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+
+.protocol-command-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid rgba(95, 196, 181, .2);
+  background: rgba(1, 10, 14, .8);
+  padding: 12px;
+}
+
+.protocol-sidebar-heading,
+.protocol-scenario-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.protocol-sidebar-heading {
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 9px;
+}
+
+.protocol-sidebar-heading b { color: var(--gold); font: 600 11px Consolas, monospace; }
+.protocol-command-list { display: grid; gap: 6px; overflow-y: auto; padding-right: 2px; }
+.protocol-command-item {
+  width: 100%;
+  border: 1px solid rgba(95, 196, 181, .17);
+  background: rgba(6, 26, 30, .66);
+  color: var(--text);
+  padding: 9px 10px;
+  text-align: left;
+}
+
+.protocol-command-item:hover { border-color: rgba(100, 227, 208, .46); }
+.protocol-command-item.active { border-color: rgba(100, 227, 208, .72); box-shadow: inset 2px 0 var(--teal); }
+.protocol-command-item[data-enabled="false"] { opacity: .58; }
+.protocol-command-item[data-result="passed"] { border-color: rgba(112, 215, 155, .52); }
+.protocol-command-item[data-result="failed"] { border-color: rgba(227, 109, 109, .68); }
+.protocol-command-item strong,
+.protocol-command-item small { display: block; }
+.protocol-command-item strong { font-size: 12px; font-weight: 500; }
+.protocol-command-item small { color: var(--muted); font: 9px Consolas, monospace; margin-top: 4px; }
+
+.protocol-scenario-editor {
+  min-width: 0;
+  overflow-y: auto;
+  padding: 16px 18px 20px;
+}
+
+.protocol-scenario-heading h3 { font-size: 18px; }
+.protocol-command-meta { display: flex; flex-wrap: wrap; gap: 7px 18px; margin: 12px 0; }
+.protocol-command-meta span { color: var(--muted); font-size: 10px; }
+.protocol-command-meta code { color: var(--gold); margin-left: 4px; }
+.protocol-copy {
+  display: grid;
+  grid-template-columns: 82px 1fr;
+  gap: 10px;
+  border-top: 1px solid rgba(95, 196, 181, .12);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 0;
+  padding: 9px 0;
+}
+.protocol-copy strong { color: var(--teal); font-weight: 500; }
+.protocol-scenario-switches { display: flex; flex-wrap: wrap; gap: 16px; margin: 8px 0; }
+.protocol-suite-dialog .check-line { display: flex; align-items: center; gap: 8px; }
+.protocol-suite-dialog .check-line input { width: auto; margin: 0; }
+.protocol-target-label { margin-top: 10px; }
+.protocol-scenario-editor textarea { font: 12px/1.55 Consolas, monospace; resize: vertical; }
+.protocol-template-record { border: 1px solid rgba(95, 196, 181, .16); margin-top: 10px; padding: 8px 10px 10px; }
+.protocol-template-record summary { color: var(--muted); cursor: pointer; font-size: 11px; }
+
+.protocol-workflow-panel {
+  display: block;
+  border-top: 1px solid rgba(229, 170, 88, .3);
+  background: linear-gradient(90deg, rgba(36, 28, 12, .45), rgba(3, 18, 22, .96));
+  color: var(--text);
+  padding: 11px 16px 13px;
+}
+
+.protocol-workflow-summary {
+  display: grid;
+  grid-template-columns: minmax(180px, .65fr) minmax(300px, 1.4fr) minmax(220px, .8fr);
+  align-items: center;
+  gap: 12px;
+}
+.protocol-workflow-summary strong { display: block; color: var(--gold); font-weight: 500; margin-top: 2px; }
+.protocol-workflow-summary p { color: var(--muted); font-size: 11px; margin: 0; }
+.protocol-workflow-summary code { color: var(--teal); font-size: 10px; overflow-wrap: anywhere; }
+.protocol-disposable-confirmation { margin-top: 9px; color: var(--amber) !important; }
+.protocol-workflow-actions,
+.protocol-verdict-actions,
+.protocol-finish-actions { margin-top: 8px; }
+.protocol-workflow-actions button,
+.protocol-verdict-actions button,
+.protocol-finish-actions button,
+.protocol-finish-actions .button-link { padding: 7px 11px; font-size: 11px; }
+
+@media (max-width: 900px) {
+  .protocol-suite-dialog { width: calc(100vw - 16px); height: calc(100vh - 16px); }
+  .protocol-suite-toolbar { grid-template-columns: 1fr 1fr; }
+  .protocol-plan-actions { justify-content: flex-start; }
+  .protocol-suite-layout { grid-template-columns: 1fr; overflow-y: auto; }
+  .protocol-command-sidebar { flex: 0 0 auto; max-height: 260px; border-right: 0; border-bottom: 1px solid rgba(95, 196, 181, .2); }
+  .protocol-scenario-editor { overflow: visible; }
+  .protocol-workflow-summary { grid-template-columns: 1fr; }
+}

@@ -2,7 +2,7 @@
 
 Imperial Auto Governor（IAG）正在从单一的《Stellaris》经济建设 Agent，演进为一个可承载多个领域 Application 的群星 Agent 平台。
 
-当前 `v0.5.9` Draft 在已跑通的 v0.5.8 建设链上增加了可选的会话代理执行模式，以及第一版实验性 `fleet_operations` Application。经济治理仍由 `economy_governance` 承担；外交等领域尚未实现。
+当前 `v0.5.9` Draft 在已跑通的 v0.5.8 建设链上增加了可选的会话代理执行模式，以及实验性的 `fleet_operations` 与 `research_strategy` Application。经济治理仍由 `economy_governance` 承担；外交等领域尚未实现。
 
 ## 核心链路
 
@@ -14,25 +14,31 @@ IAG 的核心不是 Clausewitz Mod 直接修改玩家殖民地，而是经过验
 两种方式共同遵守以下状态与审计流程：
 
 1. 房主存档同步到 Agent 端。
-2. 存档解析器生成帝国、殖民地、区划、区域与建筑槽状态。
+2. 存档解析器生成帝国、殖民地、科研、舰队、区划、区域与建筑槽状态。
 3. 规则引擎生成游戏当前允许的候选，模型只从候选中决策。
 4. Execution Broker 根据玩家选择调用载体点击链或会话代理链。
 5. 房主权威实例处理经过确定性校验的命令。
 6. 房主处理并广播权威结果。
-7. 执行账本依据网络证据或后续存档确认结果，而不是相信模型自述。
+7. 动作若依赖游戏新分配的 ID，新存档直接唤醒固定续接器，不再重复调用模型。
+8. 执行账本依据网络证据或后续存档确认结果，而不是相信模型自述。
 
 ```mermaid
 flowchart LR
     S["Stellaris save"] --> P["State parser"]
     P --> A["economy_governance"]
     P --> F["fleet_operations (experimental)"]
+    P --> R["research_strategy (experimental)"]
     C["Coordinator / Mandate"] --> A
     U["Player fleet permissions"] --> F
+    C --> R
     K["Content Pack"] --> P
     K --> A
+    S --> Q["Deterministic save continuation"]
     A --> V["Deterministic validation"]
     F --> V
+    R --> V
     V --> B["Execution Broker"]
+    Q --> B
     B --> H["carrier_click / session_proxy"]
     H --> G["Host-authoritative Stellaris"]
     G --> E["Execution evidence ledger"]
@@ -47,7 +53,8 @@ flowchart LR
 | `src/iag/stellaris/state` | 存档接收、解析与游戏状态规范化 |
 | `src/iag/stellaris/execution` | 点击、端口发现、拦截、确认和执行监督 |
 | `src/iag/applications/economy_governance` | 当前可用的殖民地建设与经济治理 Application |
-| `src/iag/applications/fleet_operations` | 实验性舰队解析、逐舰队授权与已验证移动工具 |
+| `src/iag/applications/fleet_operations` | 实验性舰队解析、逐舰队授权、移动、舰船设计与 Fleet Manager 编制增援工具 |
+| `src/iag/applications/research_strategy` | 实验性三系科研状态、候选验证与科技选择工具 |
 | `src/iag/infrastructure` | 模型供应商和联网检索适配器 |
 | `apps/control_center` | 网页控制台和 Windows Agent 启动器 |
 | `apps/host_bridge` | 房主侧存档上传、入站改写和 GUI |
@@ -117,7 +124,9 @@ Linux 端可运行：
 
 - [总体架构](docs/ARCHITECTURE.md)
 - [会话代理模式](docs/SESSION_PROXY_MODE.md)
+- [版本更新后的协议兼容性验收](docs/protocol/PROTOCOL_COMPATIBILITY_SUITE.md)
 - [舰队行动实验功能](docs/FLEET_OPERATIONS.md)
+- [科研战略实验功能](docs/RESEARCH_STRATEGY.md)
 - [迁移说明](docs/MIGRATION.md)
 - [开发约定](docs/DEVELOPMENT.md)
 - [逐文件代码地图](docs/code-map/FILE_INDEX.md)

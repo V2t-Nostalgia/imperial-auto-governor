@@ -29,6 +29,10 @@ let catalogActionType = "build_building";
 let catalogSelectionKey = null;
 let renderedStrategyConversationId = null;
 let executionSettingsInitialized = false;
+let protocolSuitePayload = null;
+let selectedProtocolScenarioId = null;
+let protocolSuiteBusy = false;
+let protocolSuitePollInFlight = false;
 
 function gameDateFromMonthIndex(value) {
   const index = Number(value);
@@ -999,6 +1003,24 @@ function renderExecutionSettings(settings, proxy = {}, running = false) {
       settings.experimental_fleet_tools_enabled === true;
     $("experimental-fleet-attack-enabled").checked =
       settings.experimental_fleet_attack_enabled === true;
+    $("experimental-fleet-coordinate-tools-enabled").checked =
+      settings.experimental_fleet_coordinate_tools_enabled === true;
+    $("fleet-coordinate-max-abs").value =
+      settings.fleet_coordinate_max_abs ?? 1000;
+    $("experimental-ship-design-tools-enabled").checked =
+      settings.experimental_ship_design_tools_enabled === true;
+    $("experimental-fleet-reinforcement-tools-enabled").checked =
+      settings.experimental_fleet_reinforcement_tools_enabled === true;
+    $("maximum-fleet-reinforcement-increase").value =
+      settings.maximum_fleet_reinforcement_increase ?? 5;
+    $("experimental-new-fleet-tools-enabled").checked =
+      settings.experimental_new_fleet_tools_enabled === true;
+    $("maximum-new-fleet-initial-ships").value =
+      settings.maximum_new_fleet_initial_ships ?? 5;
+    $("experimental-research-tools-enabled").checked =
+      settings.experimental_research_tools_enabled === true;
+    $("experimental-research-reselection-enabled").checked =
+      settings.experimental_research_reselection_enabled === true;
     updateExecutionModeVisibility();
     executionSettingsInitialized = true;
   }
@@ -1008,7 +1030,9 @@ function renderExecutionSettings(settings, proxy = {}, running = false) {
     : "无待核验动作";
   $("pending-confirmation-state").className =
     "status-tag " + (pending ? "warn" : "good");
-  $("save-execution-settings").disabled = running;
+  const protocolSuiteActive =
+    protocolSuitePayload?.state?.live_active === true;
+  $("save-execution-settings").disabled = running || protocolSuiteActive;
   const proxyRunning = proxy.running === true;
   const flow = proxy.flow || {};
   const flowCandidates = Array.isArray(proxy.flow_candidates)
@@ -1047,8 +1071,11 @@ function renderExecutionSettings(settings, proxy = {}, running = false) {
         " · 游戏/Steam UDP 端口 " +
         Number((proxy.stellaris_udp_ports || []).length || 0))
     : "尚未建立代理进程。";
-  $("start-session-proxy").disabled = running || proxyRunning;
-  $("stop-session-proxy").disabled = running || !proxyRunning;
+  $("start-session-proxy").disabled =
+    running || proxyRunning || protocolSuiteActive;
+  $("stop-session-proxy").disabled =
+    running || !proxyRunning || protocolSuiteActive;
+  $("open-protocol-suite").disabled = running;
 }
 
 function renderFleetState(fleetState = {}, running = false) {
@@ -1082,24 +1109,39 @@ function renderFleetState(fleetState = {}, running = false) {
     identity.append(title, detail);
     const controls = document.createElement("div");
     controls.className = "fleet-permission-controls";
-    for (const [field, labelText] of [["allow_move", "移动"], ["allow_attack", "攻击"]]) {
+    for (const [field, labelText] of [
+      ["allow_move", "移动"],
+      ["allow_attack", "攻击"],
+      ["allow_reinforce", "编制增援"],
+    ]) {
       const label = document.createElement("label");
       label.className = "check-line";
       const input = document.createElement("input");
       input.type = "checkbox";
       input.checked = fleet.permission?.[field] === true;
-      input.disabled = running || fleet.d32c_move_verified_family !== true;
-      if (fleet.d32c_move_verified_family !== true) {
+      const movementPermission = field === "allow_move" || field === "allow_attack";
+      const reinforcementPermission = field === "allow_reinforce";
+      const hasVerifiedMovement = fleet.d32c_move_verified_family === true;
+      const hasFleetTemplate = fleet.fleet_template_id !== null &&
+        fleet.fleet_template_id !== undefined;
+      input.disabled = running ||
+        (movementPermission && !hasVerifiedMovement) ||
+        (reinforcementPermission && !hasFleetTemplate);
+      if (movementPermission && !hasVerifiedMovement) {
         input.title = "该船队不属于当前已验证的军用 d32c 移动命令族";
+      } else if (reinforcementPermission && !hasFleetTemplate) {
+        input.title = "最新存档中没有找到该舰队的 Fleet Manager 模板";
       }
       input.addEventListener("change", async () => {
         const moveInput = controls.querySelector('[data-permission="allow_move"]');
         const attackInput = controls.querySelector('[data-permission="allow_attack"]');
+        const reinforceInput = controls.querySelector('[data-permission="allow_reinforce"]');
         try {
           await post("/api/fleet-permission", {
             fleet_id: fleet.fleet_id,
             allow_move: moveInput.checked,
             allow_attack: attackInput.checked,
+            allow_reinforce: reinforceInput.checked,
           });
           message("舰队 " + fleet.fleet_id + " 的调用权限已保存");
           await refresh();
@@ -1761,6 +1803,262 @@ async function loadConversation(reset = false) {
   }
 }
 
+function protocolScenarioById(scenarioId, payload = protocolSuitePayload) {
+  return (payload?.plan?.scenarios || []).find(
+    (item) => item.id === scenarioId,
+  );
+}
+
+function protocolSpecByAction(action, payload = protocolSuitePayload) {
+  return (payload?.catalog?.commands || []).find(
+    (item) => item.action === action,
+  );
+}
+
+function protocolReportItem(scenarioId, payload = protocolSuitePayload) {
+  return (payload?.report?.scenarios || []).find(
+    (item) => item.id === scenarioId,
+  );
+}
+
+function commitProtocolScenarioEditor() {
+  const plan = protocolSuitePayload?.plan;
+  if (!plan || !protocolSuitePayload?.actions?.can_edit_plan) return plan;
+  plan.game_version = $("protocol-game-version").value.trim();
+  plan.game_build = $("protocol-game-build").value.trim();
+  const scenario = protocolScenarioById(selectedProtocolScenarioId);
+  if (!scenario) return plan;
+  let target;
+  try {
+    target = JSON.parse($("protocol-scenario-target").value || "{}");
+  } catch (error) {
+    throw new Error("当前命令目标不是有效 JSON：" + error.message);
+  }
+  if (!target || Array.isArray(target) || typeof target !== "object") {
+    throw new Error("当前命令目标必须是 JSON 对象。");
+  }
+  scenario.enabled = $("protocol-scenario-enabled").checked;
+  scenario.acknowledge_side_effects = $("protocol-scenario-ack").checked;
+  scenario.target = target;
+  const template = $("protocol-template-record-hex").value.trim();
+  if (template) scenario.template_record_hex = template;
+  else delete scenario.template_record_hex;
+  protocolSuitePayload.offline_current = false;
+  return plan;
+}
+
+function protocolScenarioResult(scenario, reportItem) {
+  if (!scenario.enabled) return ["未启用", ""];
+  if (!reportItem) return ["等待离线检查", "warn"];
+  if (
+    reportItem.network_stage === "network_confirmed" &&
+    reportItem.operator_verdict === "passed"
+  ) return ["联机通过", "good"];
+  if (
+    ["action_not_applied", "unexpected_result", "desync_or_stalled_clock"]
+      .includes(reportItem.operator_verdict) ||
+    ["controller_error", "authoritative_response_not_matched",
+      "host_ack_or_authoritative_response_missing", "proxy_result_unrecognized"]
+      .includes(reportItem.network_stage)
+  ) return ["验收失败", "bad"];
+  if (reportItem.operator_verdict === "skipped") return ["已跳过", "warn"];
+  if (reportItem.network_stage === "network_confirmed") {
+    return ["等待玩家核对", "warn"];
+  }
+  if (reportItem.offline_status === "passed") return ["离线通过", "good"];
+  if (reportItem.offline_status === "build_failed") return ["构包失败", "bad"];
+  return [reportItem.offline_status || "等待检查", "warn"];
+}
+
+function renderProtocolSuite(payload) {
+  protocolSuitePayload = payload;
+  const plan = payload?.plan;
+  const state = payload?.state || {};
+  const actions = payload?.actions || {};
+  const liveActive = state.live_active === true;
+  const enabledCount = (plan?.scenarios || []).filter(
+    (item) => item.enabled === true,
+  ).length;
+  if (liveActive && state.current_scenario_id) {
+    selectedProtocolScenarioId = state.current_scenario_id;
+  } else if (
+    !selectedProtocolScenarioId ||
+    !protocolScenarioById(selectedProtocolScenarioId, payload)
+  ) {
+    selectedProtocolScenarioId = plan?.scenarios?.[0]?.id || null;
+  }
+
+  $("protocol-game-version").value = plan?.game_version || "";
+  $("protocol-game-build").value = plan?.game_build || "";
+  const detected = payload?.game_install?.normalized_version || "未检测到";
+  $("protocol-detected-version").textContent = detected;
+  $("protocol-plan-integrity").textContent = !plan
+    ? "尚未创建计划"
+    : (payload.offline_current ? "当前计划离线检查有效" : "计划尚未通过离线检查");
+  $("protocol-enabled-count").textContent =
+    enabledCount + " / " +
+    Number(payload?.catalog?.commands?.length || 0);
+
+  const reportById = new Map(
+    (payload?.report?.scenarios || []).map((item) => [item.id, item]),
+  );
+  const commandList = $("protocol-command-list");
+  commandList.replaceChildren();
+  for (const scenario of plan?.scenarios || []) {
+    const spec = protocolSpecByAction(scenario.action, payload) || {};
+    const result = protocolScenarioResult(scenario, reportById.get(scenario.id));
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "protocol-command-item";
+    if (scenario.id === selectedProtocolScenarioId) button.classList.add("active");
+    button.dataset.enabled = String(scenario.enabled === true);
+    button.dataset.result = result[1] === "good"
+      ? "passed"
+      : (result[1] === "bad" ? "failed" : "pending");
+    const title = document.createElement("strong");
+    title.textContent = spec.title || scenario.action;
+    const detail = document.createElement("small");
+    detail.textContent = scenario.action + " · " + result[0];
+    button.append(title, detail);
+    button.addEventListener("click", () => {
+      try {
+        commitProtocolScenarioEditor();
+        selectedProtocolScenarioId = scenario.id;
+        renderProtocolSuite(protocolSuitePayload);
+      } catch (error) {
+        message(error.message, true);
+      }
+    });
+    commandList.append(button);
+  }
+
+  const scenario = protocolScenarioById(selectedProtocolScenarioId, payload);
+  const spec = protocolSpecByAction(scenario?.action, payload) || {};
+  const reportItem = scenario ? reportById.get(scenario.id) : null;
+  const scenarioResult = scenario
+    ? protocolScenarioResult(scenario, reportItem)
+    : ["未配置", ""];
+  $("protocol-scenario-title").textContent =
+    spec.title || scenario?.action || "请选择一个命令";
+  $("protocol-scenario-group").textContent =
+    (spec.group || "COMMAND").toUpperCase();
+  $("protocol-scenario-action").textContent = scenario?.action || "--";
+  $("protocol-scenario-wire-family").textContent = spec.wire_family_hex || "--";
+  $("protocol-scenario-verification").textContent = spec.verification_state || "--";
+  $("protocol-scenario-setup").textContent = scenario?.setup || spec.setup || "--";
+  $("protocol-scenario-check").textContent =
+    scenario?.operator_check || spec.operator_check || "--";
+  $("protocol-scenario-enabled").checked = scenario?.enabled === true;
+  $("protocol-scenario-ack").checked =
+    scenario?.acknowledge_side_effects === true;
+  $("protocol-scenario-target").value = scenario
+    ? JSON.stringify(scenario.target || {}, null, 2)
+    : "";
+  $("protocol-template-record-hex").value =
+    scenario?.template_record_hex || "";
+  $("protocol-scenario-status").textContent = scenarioResult[0];
+  $("protocol-scenario-status").className =
+    "status-tag " + (scenarioResult[1] || "");
+
+  const planEditorDisabled = protocolSuiteBusy || !actions.can_edit_plan;
+  $("protocol-game-version").disabled = planEditorDisabled;
+  $("protocol-game-build").disabled = planEditorDisabled;
+  const editorDisabled = planEditorDisabled || !scenario;
+  for (const id of [
+    "protocol-scenario-enabled", "protocol-scenario-ack",
+    "protocol-scenario-target", "protocol-template-record-hex",
+  ]) $(id).disabled = editorDisabled;
+
+  const phaseLabels = {
+    idle: "尚未开始",
+    plan_ready: "计划待检查",
+    offline_running: "离线检查中",
+    offline_passed: "离线检查通过",
+    offline_failed: "离线检查失败",
+    waiting_for_room: "等待进房锁流",
+    ready_for_action: "当前项可执行",
+    executing_action: "等待房主回包",
+    awaiting_operator_verdict: "等待玩家核对",
+    halted: "异常停止",
+    completed: "启用项已完成",
+    finished: "验收已结束",
+  };
+  $("protocol-phase-label").textContent =
+    phaseLabels[state.phase] || state.phase || "尚未开始";
+  $("protocol-workflow-message").textContent =
+    state.workflow_message || "创建计划后开始检查。";
+  const proxy = payload?.proxy || {};
+  $("protocol-proxy-summary").textContent = !proxy.running
+    ? "代理未运行"
+    : (proxy.flow_locked
+      ? "代理运行中 · 已锁流 · " + (proxy.route || "未知路径") +
+        " · 已注入 " + Number(proxy.insertion_count || 0) + " 条"
+      : "代理运行中 · 等待双向可靠流");
+
+  $("new-protocol-plan").disabled = protocolSuiteBusy || liveActive;
+  $("save-protocol-plan").disabled =
+    protocolSuiteBusy || !actions.can_edit_plan || !plan;
+  $("enable-all-protocol-scenarios").disabled =
+    protocolSuiteBusy || !actions.can_edit_plan || !plan;
+  $("run-protocol-offline-check").disabled =
+    protocolSuiteBusy || !actions.can_run_offline;
+  $("start-protocol-suite").disabled =
+    protocolSuiteBusy || liveActive || !plan ||
+    enabledCount === 0 ||
+    !$("protocol-disposable-authorized").checked;
+  $("confirm-protocol-room").disabled =
+    protocolSuiteBusy || !actions.can_confirm_room;
+  $("execute-protocol-action").disabled =
+    protocolSuiteBusy || !actions.can_execute;
+  $("skip-protocol-action").disabled =
+    protocolSuiteBusy || !actions.can_skip;
+  $("protocol-verdict-actions").hidden = !actions.can_record_verdict;
+  for (const button of document.querySelectorAll("[data-protocol-verdict]")) {
+    button.disabled = protocolSuiteBusy || !actions.can_record_verdict;
+  }
+  $("finish-protocol-suite").disabled =
+    protocolSuiteBusy || !actions.can_finish;
+  $("reset-protocol-suite").disabled =
+    protocolSuiteBusy || !actions.can_reset;
+  $("download-protocol-json").hidden = !payload?.report;
+  $("download-protocol-markdown").hidden = !payload?.report;
+}
+
+async function refreshProtocolSuite() {
+  if (protocolSuitePollInFlight || protocolSuiteBusy) return protocolSuitePayload;
+  protocolSuitePollInFlight = true;
+  try {
+    const payload = await api("/api/protocol-compatibility");
+    renderProtocolSuite(payload);
+    return payload;
+  } finally {
+    protocolSuitePollInFlight = false;
+  }
+}
+
+async function runProtocolSuiteOperation(operation, successMessage) {
+  protocolSuiteBusy = true;
+  if (protocolSuitePayload) renderProtocolSuite(protocolSuitePayload);
+  try {
+    const payload = await operation();
+    renderProtocolSuite(payload);
+    if (successMessage) message(successMessage);
+    return payload;
+  } catch (error) {
+    message(error.message, true);
+    throw error;
+  } finally {
+    protocolSuiteBusy = false;
+    if (protocolSuitePayload) renderProtocolSuite(protocolSuitePayload);
+  }
+}
+
+async function saveProtocolSuitePlan() {
+  const plan = commitProtocolScenarioEditor();
+  if (!plan?.game_version) throw new Error("目标游戏版本不能为空。");
+  return post("/api/protocol-compatibility/plan/save", {plan});
+}
+
 async function refresh() {
   try {
     renderStatus(await api("/api/status"));
@@ -1934,6 +2232,213 @@ $("close-model-catalog").addEventListener("click", () => {
 
 $("model-catalog-dialog").addEventListener("click", (event) => {
   if (event.target === event.currentTarget) event.currentTarget.close();
+});
+
+$("open-protocol-suite").addEventListener("click", async () => {
+  $("protocol-suite-dialog").showModal();
+  try {
+    await refreshProtocolSuite();
+  } catch (error) {
+    message(error.message, true);
+  }
+});
+
+$("close-protocol-suite").addEventListener("click", () => {
+  $("protocol-suite-dialog").close();
+});
+
+$("protocol-suite-dialog").addEventListener("click", (event) => {
+  if (event.target === event.currentTarget) event.currentTarget.close();
+});
+
+$("new-protocol-plan").addEventListener("click", async () => {
+  if (
+    protocolSuitePayload?.plan &&
+    !window.confirm("新建计划会丢弃尚未保存的当前编辑。确认继续？")
+  ) return;
+  try {
+    selectedProtocolScenarioId = null;
+    await runProtocolSuiteOperation(
+      () => post("/api/protocol-compatibility/plan/new", {
+        game_version: $("protocol-game-version").value.trim(),
+        game_build: $("protocol-game-build").value.trim(),
+      }),
+      "已创建安全模板；所有真实动作默认关闭。",
+    );
+  } catch (_) {
+    // The shared operation helper already surfaced the operator-facing error.
+  }
+});
+
+$("save-protocol-plan").addEventListener("click", async () => {
+  try {
+    await runProtocolSuiteOperation(
+      saveProtocolSuitePlan,
+      "协议验收计划已保存。",
+    );
+  } catch (_) {
+    // Error already displayed.
+  }
+});
+
+$("enable-all-protocol-scenarios").addEventListener("click", () => {
+  if (!protocolSuitePayload?.plan) return;
+  if (!$("protocol-disposable-authorized").checked) {
+    message("先确认这是所有参与者已授权的可丢弃测试房间。", true);
+    return;
+  }
+  if (!window.confirm("将十四个命令全部纳入联机验收并确认副作用？每项仍会逐条执行。")) {
+    return;
+  }
+  try {
+    commitProtocolScenarioEditor();
+    for (const scenario of protocolSuitePayload.plan.scenarios) {
+      scenario.enabled = true;
+      scenario.acknowledge_side_effects = true;
+    }
+    renderProtocolSuite(protocolSuitePayload);
+    message("已在本地启用全部命令；请逐项填写当前会话目标后保存。 ");
+  } catch (error) {
+    message(error.message, true);
+  }
+});
+
+$("run-protocol-offline-check").addEventListener("click", async () => {
+  try {
+    await runProtocolSuiteOperation(async () => {
+      let payload = await saveProtocolSuitePlan();
+      renderProtocolSuite(payload);
+      payload = await post("/api/protocol-compatibility/offline-check", {});
+      return payload;
+    }, "离线全量构包检查已经完成；未触碰游戏网络。 ");
+  } catch (_) {
+    // Error already displayed.
+  }
+});
+
+$("protocol-disposable-authorized").addEventListener("change", () => {
+  if (protocolSuitePayload) renderProtocolSuite(protocolSuitePayload);
+});
+
+for (const id of ["protocol-scenario-enabled", "protocol-scenario-ack"]) {
+  $(id).addEventListener("change", () => {
+    try {
+      commitProtocolScenarioEditor();
+      renderProtocolSuite(protocolSuitePayload);
+    } catch (error) {
+      message(error.message, true);
+    }
+  });
+}
+
+$("start-protocol-suite").addEventListener("click", async () => {
+  if (!window.confirm(
+    "控制台将保存计划、执行离线全量构包，然后在进房前启动 WinDivert 代理。" +
+    "联机命令不会连发，仍需逐项确认。继续？",
+  )) return;
+  try {
+    await runProtocolSuiteOperation(async () => {
+      let payload = await saveProtocolSuitePlan();
+      renderProtocolSuite(payload);
+      payload = await post("/api/protocol-compatibility/offline-check", {});
+      renderProtocolSuite(payload);
+      if (!payload.offline_current) {
+        throw new Error("离线构包检查失败；未启动会话代理。 ");
+      }
+      return post("/api/protocol-compatibility/live/start", {
+        disposable_authorized: $("protocol-disposable-authorized").checked,
+      });
+    }, "代理已在进房前启动。现在进入可丢弃测试房间。 ");
+  } catch (_) {
+    // Error already displayed.
+  }
+});
+
+$("confirm-protocol-room").addEventListener("click", async () => {
+  try {
+    await runProtocolSuiteOperation(
+      () => post("/api/protocol-compatibility/room/confirm", {}),
+      "双向可靠流与合作端 actor 已确认。 ",
+    );
+  } catch (_) {
+    // Error already displayed.
+  }
+});
+
+$("execute-protocol-action").addEventListener("click", async () => {
+  const scenario = protocolScenarioById(
+    protocolSuitePayload?.state?.current_scenario_id,
+  );
+  const spec = protocolSpecByAction(scenario?.action) || {};
+  if (!scenario) return;
+  if (!window.confirm(
+    "只执行当前一项：" + (spec.title || scenario.action) + "\n\n" +
+    JSON.stringify(scenario.target, null, 2),
+  )) return;
+  try {
+    await runProtocolSuiteOperation(
+      () => post("/api/protocol-compatibility/action/execute", {}),
+      "网络阶段已完成；请立即核对游戏内实际结果。 ",
+    );
+  } catch (_) {
+    // Error already displayed.
+  }
+});
+
+$("skip-protocol-action").addEventListener("click", async () => {
+  if (!window.confirm("跳过当前命令？最终报告会标记为不完整。")) return;
+  try {
+    await runProtocolSuiteOperation(
+      () => post("/api/protocol-compatibility/action/skip", {}),
+      "当前命令已跳过。 ",
+    );
+  } catch (_) {
+    // Error already displayed.
+  }
+});
+
+for (const button of document.querySelectorAll("[data-protocol-verdict]")) {
+  button.addEventListener("click", async () => {
+    const verdict = button.dataset.protocolVerdict;
+    if (
+      verdict !== "passed" &&
+      !window.confirm("该结论会立即停止后续命令。确认记录？")
+    ) return;
+    try {
+      await runProtocolSuiteOperation(
+        () => post("/api/protocol-compatibility/action/verdict", {verdict}),
+        verdict === "passed"
+          ? "当前命令已通过双重确认。 "
+          : "异常已记录，后续命令已经停止。 ",
+      );
+    } catch (_) {
+      // Error already displayed.
+    }
+  });
+}
+
+$("finish-protocol-suite").addEventListener("click", async () => {
+  if (!window.confirm("确认合作端已经退出多人房间？确认后才会停止代理。")) return;
+  try {
+    await runProtocolSuiteOperation(
+      () => post("/api/protocol-compatibility/finish", {room_exited: true}),
+      "协议验收已结束，代理已停止，报告可供下载。 ",
+    );
+  } catch (_) {
+    // Error already displayed.
+  }
+});
+
+$("reset-protocol-suite").addEventListener("click", async () => {
+  if (!window.confirm("重置验收工作流？已生成的报告文件仍会保留。")) return;
+  try {
+    await runProtocolSuiteOperation(
+      () => post("/api/protocol-compatibility/reset", {}),
+      "验收工作流已重置。 ",
+    );
+  } catch (_) {
+    // Error already displayed.
+  }
 });
 
 $("create-model-pool").addEventListener("click", () => {
@@ -2175,6 +2680,25 @@ $("save-execution-settings").addEventListener("click", async () => {
       session_proxy_acknowledged: $("session-proxy-acknowledged").checked,
       experimental_fleet_tools_enabled: $("experimental-fleet-tools-enabled").checked,
       experimental_fleet_attack_enabled: $("experimental-fleet-attack-enabled").checked,
+      experimental_fleet_coordinate_tools_enabled:
+        $("experimental-fleet-coordinate-tools-enabled").checked,
+      fleet_coordinate_max_abs: Number($("fleet-coordinate-max-abs").value || 1000),
+      experimental_ship_design_tools_enabled:
+        $("experimental-ship-design-tools-enabled").checked,
+      experimental_fleet_reinforcement_tools_enabled:
+        $("experimental-fleet-reinforcement-tools-enabled").checked,
+      maximum_fleet_reinforcement_increase: Number(
+        $("maximum-fleet-reinforcement-increase").value || 5,
+      ),
+      experimental_new_fleet_tools_enabled:
+        $("experimental-new-fleet-tools-enabled").checked,
+      maximum_new_fleet_initial_ships: Number(
+        $("maximum-new-fleet-initial-ships").value || 5,
+      ),
+      experimental_research_tools_enabled:
+        $("experimental-research-tools-enabled").checked,
+      experimental_research_reselection_enabled:
+        $("experimental-research-reselection-enabled").checked,
     });
     executionSettingsInitialized = false;
     message("执行时效与确认策略已保存");
@@ -2389,6 +2913,11 @@ updateCalibrationCopy();
 Promise.all([loadPrompt(), refresh(), loadConversation(true)])
   .catch((error) => message(error.message, true));
 setInterval(() => {
-  Promise.all([refresh(), loadConversation()])
+  const tasks = [refresh(), loadConversation()];
+  if (
+    $("protocol-suite-dialog").open &&
+    protocolSuitePayload?.state?.live_active === true
+  ) tasks.push(refreshProtocolSuite());
+  Promise.all(tasks)
     .catch((error) => message(error.message, true));
 }, 2000);

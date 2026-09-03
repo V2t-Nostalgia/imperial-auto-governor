@@ -28,13 +28,13 @@ from iag.stellaris.state.planet_profiles import (
     quoted_scalar,
     scalar,
 )
+from iag.stellaris.state.research_profiles import extract_research_profile
 
 
 RESOURCE_LINE_RE = re.compile(
     r"(?m)^\s*([a-z_][a-z0-9_]*)=(-?\d+(?:\.\d+)?)\s*$"
 )
 DATE_RE = re.compile(r'(?m)^date="([^"]+)"\s*$')
-TECH_RE = re.compile(r'(?m)^\s*technology="([^"]+)"\s*$')
 AMOUNT_RE = re.compile(r"(?m)^\s*amount=(\d+)\s*$")
 
 PRIMARY_RESOURCES = (
@@ -206,7 +206,7 @@ def player_identity(text: str) -> dict[str, Any]:
 def extract_country_state(
     text: str,
     country_id: int,
-) -> tuple[dict[str, Any], set[str]]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
     countries = parse_numeric_map(find_braced_section(text, "country").strip())
     country_block = countries.get(country_id)
     if not country_block:
@@ -222,7 +222,7 @@ def extract_country_state(
     economy_module = optional_section(modules, "standard_economy_module")
     stockpile = resource_values(optional_section(economy_module, "resources"))
 
-    technologies = set(TECH_RE.findall(optional_section(country_block, "tech_status")))
+    research = extract_research_profile(text, owner=country_id)
     wars = integer_list(country_block, "wars")
     last_war = loose_quoted_scalar(country_block, "last_date_at_war")
 
@@ -269,7 +269,7 @@ def extract_country_state(
             "last_date_at_war": last_war,
         },
     }
-    return country_state, technologies
+    return country_state, research
 
 
 def construction_queues(text: str) -> dict[int, str | None]:
@@ -466,7 +466,7 @@ def extract_game_state(
 ) -> dict[str, Any]:
     identity = player_identity(text)
     owner_id = identity["country_id"] if owner is None else owner
-    country_state, technologies = extract_country_state(text, owner_id)
+    country_state, research = extract_country_state(text, owner_id)
 
     profiles = extract_profiles(text, owner_id)
     colonies = parse_numeric_map(find_braced_section(text, "colony").strip())
@@ -572,7 +572,8 @@ def extract_game_state(
         "player": identity,
         "owner_filter": owner_id,
         "country": country_state,
-        "known_technologies": sorted(technologies),
+        "known_technologies": research["known_technologies"],
+        "research": research,
         "planet_count": len(planets),
         "planets": sorted(planets, key=lambda item: item["planet_id"]),
         "data_quality": {

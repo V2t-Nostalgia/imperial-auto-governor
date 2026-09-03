@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from iag.applications.fleet_operations.agent_tools import FleetToolbox
+from iag.applications.research_strategy.agent_tools import TechnologyToolbox
 from iag.core.conversation_store import ConversationStore, now_iso
 from iag.infrastructure.research.research_tools import ResearchClient
 from iag.stellaris.execution.iag_supervisor import (
@@ -614,6 +615,11 @@ class AgentToolbox:
             self.store,
             allow_execute=self.allow_execute,
         )
+        self.research_strategy_tools = TechnologyToolbox(
+            self.config,
+            self.store,
+            allow_execute=self.allow_execute,
+        )
         metadata = self.store.conversation_metadata()
         self.campaign_id = metadata.get("campaign_id")
         self.snapshot: dict[str, Any] | None = None
@@ -678,6 +684,7 @@ class AgentToolbox:
     def schemas(self) -> list[dict[str, Any]]:
         schemas = [*READ_TOOLS, *PLAN_TOOLS]
         schemas.extend(self.fleet_tools.schemas())
+        schemas.extend(self.research_strategy_tools.schemas())
         if self.research.enabled:
             schemas.extend(RESEARCH_TOOLS)
         if self.allow_execute:
@@ -1527,6 +1534,8 @@ class AgentToolbox:
             raise AgentToolError("Tool arguments must be a JSON object.")
         if name in self.fleet_tools.tool_names:
             return self.fleet_tools.dispatch(name, arguments)
+        if name in self.research_strategy_tools.tool_names:
+            return self.research_strategy_tools.dispatch(name, arguments)
         if name == "inspect_empire_state":
             result = self.inspect_empire_state()
             state = result["state"]

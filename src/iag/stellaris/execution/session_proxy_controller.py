@@ -242,6 +242,7 @@ class SessionProxyController:
         target: dict[str, Any],
         request_id: str | None = None,
         timeout_seconds: int | None = None,
+        template_record_hex: str | None = None,
     ) -> dict[str, Any]:
         """Submit one action and wait for its correlated host result."""
         with self._lock:
@@ -270,6 +271,8 @@ class SessionProxyController:
                 ),
                 "target": target,
             }
+            if template_record_hex:
+                request["template_record_hex"] = template_record_hex
             _atomic_write_json(self.arm_path, request)
 
         timeout = timeout_seconds or int(

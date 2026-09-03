@@ -28,6 +28,7 @@ DEFINITION_DIRS = {
     "zone_slot": "common/zone_slots",
     "deposit": "common/deposits",
     "static_modifier": "common/static_modifiers",
+    "technology": "common/technology",
 }
 
 DISTRICT_CAPACITY_FIELDS = {
@@ -326,6 +327,49 @@ def numeric_assignments(
             }
         )
     return output
+
+
+@lru_cache(maxsize=512)
+def technology_rule(
+    game_root: Path,
+    technology_id: str,
+) -> dict[str, Any]:
+    """Return version-locked, source-backed metadata for one technology."""
+    source = find_definition_source(game_root, "technology", technology_id)
+    if source is None:
+        return {"status": "missing", "technology_id": technology_id}
+
+    path, block, line = source
+    entries = _object_entries(block, technology_id)
+    variables = variables_for_source(game_root, path)
+    raw_cost = _scalar_value(entries, "cost")
+    raw_tier = _scalar_value(entries, "tier")
+    modifier_entries = _child_blocks(entries, "modifier")
+    modifiers: list[dict[str, Any]] = []
+    for child in modifier_entries:
+        modifiers.extend(numeric_assignments(child, variables))
+    return {
+        "status": "ok",
+        "technology_id": technology_id,
+        "area": _scalar_value(entries, "area"),
+        "tier": _resolved_number(raw_tier, variables),
+        "tier_raw": raw_tier,
+        "cost": _resolved_number(raw_cost, variables),
+        "cost_raw": raw_cost,
+        "category": _list_values(entries, "category"),
+        "prerequisites": _list_values(entries, "prerequisites"),
+        "feature_flags": _list_values(entries, "feature_flags"),
+        "gateway": _scalar_value(entries, "gateway"),
+        "is_rare": _scalar_value(entries, "is_rare") == "yes",
+        "is_dangerous": _scalar_value(entries, "is_dangerous") == "yes",
+        "is_start_technology": _scalar_value(entries, "start_tech") == "yes",
+        "modifiers": modifiers,
+        "source": {
+            "path": str(path),
+            "line": line,
+            "sha256": file_sha256(path),
+        },
+    }
 
 
 def _object_entries(block: str, object_id: str) -> list[tuple[str, Any]]:

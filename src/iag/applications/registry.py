@@ -7,7 +7,7 @@ from iag.core.application_registry import (
 
 
 def builtin_application_registry() -> ApplicationRegistry:
-    """返回当前平台内置的经济治理与舰队行动能力。"""
+    """返回当前平台内置的经济、科研与舰队能力。"""
 
     return ApplicationRegistry(
         [
@@ -48,9 +48,34 @@ def builtin_application_registry() -> ApplicationRegistry:
                     "fleet_order",
                     "escalation",
                 ),
-                action_types=("move_fleet", "attack_fleet"),
+                action_types=(
+                    "move_fleet",
+                    "move_fleet_to_coordinate",
+                    "attack_fleet",
+                    "create_ship_design",
+                    "create_new_fleet",
+                    "reinforce_fleet_to_target",
+                ),
                 required_platform_capabilities=(
                     "stellaris_fleet_state_v1",
+                    "session_proxy_v1",
+                ),
+            ),
+            ApplicationManifest(
+                schema_version="iag.application_manifest.v1",
+                application_id="research_strategy",
+                version="0.5.9",
+                display_name_zh="科研战略",
+                description_zh="读取合法科技候选并执行实验性科研选择。",
+                agent_roles=("research_director",),
+                message_types=(
+                    "research_assessment",
+                    "research_selection",
+                    "escalation",
+                ),
+                action_types=("start_research", "stop_research"),
+                required_platform_capabilities=(
+                    "stellaris_research_state_v1",
                     "session_proxy_v1",
                 ),
             ),

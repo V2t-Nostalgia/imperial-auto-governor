@@ -42,6 +42,8 @@ a = Analysis(
         "iag.applications.economy_governance.planner",
         "iag.applications.fleet_operations.agent_tools",
         "iag.stellaris.execution.fixed_click",
+        "iag.stellaris.execution.protocol_compatibility",
+        "iag.stellaris.execution.protocol_compatibility_control",
         "iag.stellaris.execution.session_proxy",
         "iag.stellaris.execution.session_proxy_controller",
         "iag.stellaris.execution.packet.autonomous_commands",

@@ -27,8 +27,20 @@ WinDivert priority 只定义多个 WinDivert 句柄之间的先后顺序，不�
 - 基础区划建设：`b43d` 内已验证的 district 记录。
 - 区域特化：`b43d` 内已验证的 zone 记录。
 - 舰队移动：`d32c` 的两个已验证目的地字段形式。
+- 星系内坐标移动：`4f2c`，固定长度记录，坐标和当前星系 origin 来自结构化工具输入与最新存档。
+- 科研选择：`062d` 开始和 `4533` 停止，科技 ID 使用动态长度 ASCII 字段。
+- 舰队编制：`5f3b`/`603b` 逐艘调整 Fleet Manager 目标数量。
+- 舰队增援：`123b` 后接 `f23b` 的两阶段请求；必须逐条确认。
+- 舰船设计：`fb2d` 克隆并提交一份新设计，不覆盖原设计。
 
-建筑升级、建筑替换仍走 `carrier_click`。舰队攻击 `6b33` 尚未开放构包。
+建筑升级、建筑替换仍走 `carrier_click`。`4f2c`、科研、舰船设计与舰队编制增援命令
+默认关闭，完成当前执行链的多人实机闭环前不视为稳定功能。舰队攻击 `6b33` 尚未开放
+构包。
+
+游戏更新后不要逐项临时拼命令验证。使用
+[`protocol/PROTOCOL_COMPATIBILITY_SUITE.md`](protocol/PROTOCOL_COMPATIBILITY_SUITE.md)
+中的统一验收脚本；命令目录会强制新增代理动作同时提供离线 fixture，并生成可与上一
+版本基线比较的 JSON/Markdown 报告。
 
 ## 操作顺序
 
