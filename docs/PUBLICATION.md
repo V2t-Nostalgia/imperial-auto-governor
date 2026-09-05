@@ -1,6 +1,6 @@
 # 发布流程
 
-`v0.5.9` 首先作为 GitHub Draft Release 创建。Draft 可以供指定测试者下载，但在完成真实联机验收前不得转为正式发布。
+`v0.5.9` 按本流程先创建 GitHub Draft Release 供指定测试者验收；完成真实联机验收并重新构建最终附件后，才转为正式发布。
 
 1. 审阅完整源码和 `git diff`。
 2. 运行 `python scripts/validation/run_tests.py`、编译、静态检查和隐私扫描。

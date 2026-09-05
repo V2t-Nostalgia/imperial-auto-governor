@@ -9,15 +9,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-
 PLAN_SCHEMA = "iag.protocol_compatibility_plan.v1"
 CATALOG_SCHEMA = "iag.protocol_command_catalog.v1"
 REPORT_SCHEMA = "iag.protocol_compatibility_report.v1"
+TARGET_PLACEHOLDER_RE = re.compile(r"^<[A-Z0-9_]+>$")
 
 
 def now_iso() -> str:
@@ -62,6 +63,56 @@ COMMAND_SPECS = (
             "colony_id": "<COLONY_ID>",
             "zone_id": "<ZONE_ID>",
             "building_id": "building_research_lab_1",
+        },
+    ),
+    ProtocolCommandSpec(
+        action="upgrade_building",
+        group="construction",
+        title="升级已有建筑",
+        wire_family_hex="b43d01000300",
+        verification_state="live_verified",
+        risk="state_change",
+        required_target_fields=(
+            "build_queue_id",
+            "colony_id",
+            "zone_id",
+            "building_object_id",
+            "building_id",
+        ),
+        setup="准备一座由最新存档确认可升级、资源充足且队列可用的建筑。",
+        operator_check="确认指定建筑对象进入正确的升级队列。",
+        example_target={
+            "context_822c": 0,
+            "build_queue_id": "<BUILD_QUEUE_ID>",
+            "colony_id": "<COLONY_ID>",
+            "zone_id": "<ZONE_ID>",
+            "building_object_id": "<BUILDING_OBJECT_ID>",
+            "building_id": "building_research_lab_2",
+        },
+    ),
+    ProtocolCommandSpec(
+        action="replace_building",
+        group="construction",
+        title="替换已有建筑",
+        wire_family_hex="b43d01000300",
+        verification_state="live_verified",
+        risk="destructive_state_change",
+        required_target_fields=(
+            "build_queue_id",
+            "colony_id",
+            "zone_id",
+            "source_building_object_id",
+            "building_id",
+        ),
+        setup="仅在玩家策略允许的继承殖民地上，准备一座可替换的已有建筑。",
+        operator_check="确认指定建筑对象被替换为目标建筑，并用后续存档复核。",
+        example_target={
+            "context_822c": 0,
+            "build_queue_id": "<BUILD_QUEUE_ID>",
+            "colony_id": "<COLONY_ID>",
+            "zone_id": "<ZONE_ID>",
+            "source_building_object_id": "<BUILDING_OBJECT_ID>",
+            "building_id": "building_holo_theatres",
         },
     ),
     ProtocolCommandSpec(
@@ -149,6 +200,168 @@ COMMAND_SPECS = (
         },
     ),
     ProtocolCommandSpec(
+        action="attack_fleet",
+        group="fleet_combat",
+        title="舰队攻击目标",
+        wire_family_hex="6b3301000300",
+        verification_state="paired_capture",
+        risk="destructive_state_change",
+        required_target_fields=("source_fleet_object", "target_fleet_object"),
+        setup="选择获玩家授权的可用军用舰队，以及由最新存档证明为敌对的目标舰队。",
+        operator_check="确认来源舰队获得攻击该目标的命令，且房间保持同步。",
+        example_target={
+            "source_fleet_object": "<FLEET_OBJECT_ID>",
+            "target_fleet_object": "<HOSTILE_FLEET_OBJECT_ID>",
+        },
+    ),
+    ProtocolCommandSpec(
+        action="configure_ship_automation",
+        group="civilian_ship_automation",
+        title="科研船／工程船自动化",
+        wire_family_hex="8f3201000300",
+        verification_state="paired_capture",
+        risk="state_change",
+        required_target_fields=("source_fleet_object", "options"),
+        setup="选择一支空闲科研船或工程船，并仅填写该船型已验证的自动化选项。",
+        operator_check="确认自动化已开启且复选项与计划完全一致。",
+        example_target={
+            "context_822c": 0,
+            "source_fleet_object": "<CIVILIAN_FLEET_OBJECT_ID>",
+            "options": ["AUTOMATION_EXPLORE", "AUTOMATION_SURVEY"],
+        },
+    ),
+    ProtocolCommandSpec(
+        action="build_starbase",
+        group="expansion",
+        title="工程船建造恒星基地",
+        wire_family_hex="e02c01000300",
+        verification_state="paired_capture",
+        risk="state_change",
+        required_target_fields=("source_fleet_object", "target_system_object"),
+        setup="选择空闲工程船和当前可合法建立前哨站的已勘探星系。",
+        operator_check="确认工程船获得在目标星系建造恒星基地的命令。",
+        example_target={
+            "source_fleet_object": "<CONSTRUCTION_FLEET_OBJECT_ID>",
+            "target_system_object": "<SYSTEM_OBJECT_ID>",
+        },
+    ),
+    ProtocolCommandSpec(
+        action="order_colony_ship_and_colonize",
+        group="colonization",
+        title="订购殖民船并殖民",
+        wire_family_hex="3d3701000300",
+        verification_state="paired_capture",
+        risk="state_change_requires_fresh_save",
+        required_target_fields=(
+            "species_id",
+            "colony_designation",
+            "design_id",
+            "target_planet_id",
+            "source_planet_id",
+            "system_name_key",
+        ),
+        setup="从最新存档核对目标、物种、殖民船设计、来源行星、宜居性和规划键。",
+        operator_check="确认殖民船订单与目标殖民任务成立，并用后续存档复核。",
+        example_target={
+            "context_822c": 0,
+            "species_id": "<SPECIES_ID>",
+            "colony_designation": "col_city",
+            "design_id": "<COLONY_SHIP_DESIGN_ID>",
+            "upgrade_id": 4294967295,
+            "growth_stage": 0,
+            "target_planet_id": "<TARGET_PLANET_ID>",
+            "source_planet_id": "<SOURCE_PLANET_ID>",
+            "system_name_key": "<SYSTEM_NAME_KEY>",
+        },
+    ),
+    ProtocolCommandSpec(
+        action="colonize_with_existing_ship",
+        group="colonization",
+        title="现成殖民船发起殖民",
+        wire_family_hex="e62c01000300",
+        verification_state="paired_capture",
+        risk="state_change_requires_fresh_save",
+        required_target_fields=(
+            "source_fleet_object",
+            "target_planet_id",
+            "system_name_key",
+        ),
+        setup="选择玩家拥有的空闲殖民船和最新存档中的合法可殖民目标。",
+        operator_check="确认现成殖民船获得正确殖民任务，并用后续存档复核规划。",
+        example_target={
+            "source_fleet_object": "<COLONY_FLEET_OBJECT_ID>",
+            "target_planet_id": "<TARGET_PLANET_ID>",
+            "system_name_key": "<SYSTEM_NAME_KEY>",
+        },
+    ),
+    ProtocolCommandSpec(
+        action="upgrade_starbase",
+        group="starbase",
+        title="升级恒星基地",
+        wire_family_hex="b43d01000300",
+        verification_state="paired_capture",
+        risk="state_change",
+        required_target_fields=(
+            "build_queue_id",
+            "target_level",
+            "starbase_object",
+        ),
+        setup="选择玩家拥有、队列可用且满足下一等级规则的恒星基地。",
+        operator_check="确认恒星基地进入目标等级升级队列。",
+        example_target={
+            "context_822c": 0,
+            "build_queue_id": "<STARBASE_BUILD_QUEUE_ID>",
+            "target_level": "starbase_level_starport",
+            "starbase_object": "<STARBASE_OBJECT_ID>",
+        },
+    ),
+    ProtocolCommandSpec(
+        action="set_starbase_module",
+        group="starbase",
+        title="建造／替换恒星基地模块",
+        wire_family_hex="b43d01000300",
+        verification_state="paired_capture",
+        risk="destructive_state_change",
+        required_target_fields=(
+            "build_queue_id",
+            "component_id",
+            "slot_index",
+            "starbase_object",
+        ),
+        setup="核对模块槽当前状态；已占用槽仅在明确允许替换时测试。",
+        operator_check="确认指定模块槽进入正确的新模块建设或替换队列。",
+        example_target={
+            "context_822c": 0,
+            "build_queue_id": "<STARBASE_BUILD_QUEUE_ID>",
+            "component_id": "shipyard",
+            "slot_index": "<MODULE_SLOT_INDEX>",
+            "starbase_object": "<STARBASE_OBJECT_ID>",
+        },
+    ),
+    ProtocolCommandSpec(
+        action="set_starbase_building",
+        group="starbase",
+        title="建造／替换恒星基地建筑",
+        wire_family_hex="b43d01000300",
+        verification_state="paired_capture",
+        risk="destructive_state_change",
+        required_target_fields=(
+            "build_queue_id",
+            "component_id",
+            "slot_index",
+            "starbase_object",
+        ),
+        setup="核对建筑槽当前状态；已占用槽仅在明确允许替换时测试。",
+        operator_check="确认指定建筑槽进入正确的新建筑建设或替换队列。",
+        example_target={
+            "context_822c": 0,
+            "build_queue_id": "<STARBASE_BUILD_QUEUE_ID>",
+            "component_id": "crew_quarters",
+            "slot_index": "<BUILDING_SLOT_INDEX>",
+            "starbase_object": "<STARBASE_OBJECT_ID>",
+        },
+    ),
+    ProtocolCommandSpec(
         action="start_research",
         group="research",
         title="开始科研",
@@ -225,10 +438,10 @@ COMMAND_SPECS = (
         wire_family_hex="7e3b01000300",
         verification_state="paired_capture",
         risk="state_change_requires_fresh_save",
-        required_target_fields=(),
+        required_target_fields=("context_822c",),
         setup="确保测试后会等待新存档，以差分确认确定性分配的模板 ID。",
         operator_check="确认 Fleet Manager 出现一个新空模板；记录月底存档。",
-        example_target={"context_822c": 0},
+        example_target={"context_822c": "<COUNTRY_ID>"},
     ),
     ProtocolCommandSpec(
         action="add_fleet_template_ship",
@@ -312,6 +525,22 @@ OFFLINE_FIXTURE_TARGETS: dict[str, dict[str, Any]] = {
         "zone_id": 13,
         "building_id": "building_research_lab_1",
     },
+    "upgrade_building": {
+        "context_822c": 0,
+        "build_queue_id": 11,
+        "colony_id": 12,
+        "zone_id": 13,
+        "building_object_id": 14,
+        "building_id": "building_research_lab_2",
+    },
+    "replace_building": {
+        "context_822c": 0,
+        "build_queue_id": 11,
+        "colony_id": 12,
+        "zone_id": 13,
+        "source_building_object_id": 14,
+        "building_id": "building_holo_theatres",
+    },
     "build_district": {
         "context_822c": 0,
         "build_queue_id": 11,
@@ -336,6 +565,55 @@ OFFLINE_FIXTURE_TARGETS: dict[str, dict[str, Any]] = {
         "x_fixed": 125000,
         "y_fixed": -250000,
         "system_origin": 23,
+    },
+    "attack_fleet": {
+        "source_fleet_object": 21,
+        "target_fleet_object": 24,
+    },
+    "configure_ship_automation": {
+        "context_822c": 0,
+        "source_fleet_object": 25,
+        "options": ["AUTOMATION_EXPLORE", "AUTOMATION_SURVEY"],
+    },
+    "build_starbase": {
+        "source_fleet_object": 25,
+        "target_system_object": 26,
+    },
+    "order_colony_ship_and_colonize": {
+        "context_822c": 0,
+        "species_id": 27,
+        "colony_designation": "col_city",
+        "design_id": 28,
+        "upgrade_id": 0xFFFFFFFF,
+        "growth_stage": 0,
+        "target_planet_id": 29,
+        "source_planet_id": 30,
+        "system_name_key": "NAME_Compat_System",
+    },
+    "colonize_with_existing_ship": {
+        "source_fleet_object": 31,
+        "target_planet_id": 29,
+        "system_name_key": "NAME_Compat_System",
+    },
+    "upgrade_starbase": {
+        "context_822c": 0,
+        "build_queue_id": 32,
+        "target_level": "starbase_level_starport",
+        "starbase_object": 33,
+    },
+    "set_starbase_module": {
+        "context_822c": 0,
+        "build_queue_id": 32,
+        "component_id": "shipyard",
+        "slot_index": 0,
+        "starbase_object": 33,
+    },
+    "set_starbase_building": {
+        "context_822c": 0,
+        "build_queue_id": 32,
+        "component_id": "crew_quarters",
+        "slot_index": 0,
+        "starbase_object": 33,
     },
     "start_research": {
         "context_822c": 0,
@@ -531,6 +809,37 @@ def target_fingerprint(target: Mapping[str, Any]) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def target_placeholder_paths(
+    value: Any,
+    *,
+    parent: str = "target",
+) -> list[str]:
+    """Locate untouched catalog placeholders in a prospective live target."""
+    if isinstance(value, Mapping):
+        output: list[str] = []
+        for key, child in value.items():
+            output.extend(
+                target_placeholder_paths(
+                    child,
+                    parent=f"{parent}.{key}",
+                )
+            )
+        return output
+    if isinstance(value, list):
+        output = []
+        for index, child in enumerate(value):
+            output.extend(
+                target_placeholder_paths(
+                    child,
+                    parent=f"{parent}[{index}]",
+                )
+            )
+        return output
+    if isinstance(value, str) and TARGET_PLACEHOLDER_RE.fullmatch(value.strip()):
+        return [parent]
+    return []
 
 
 def classify_network_result(result: Mapping[str, Any]) -> str:

@@ -127,6 +127,31 @@ class ProtocolCompatibilityControlTests(unittest.TestCase):
         )
         self.assertTrue(all(item["status"] == "passed" for item in fixtures))
 
+    def test_default_placeholders_do_not_impersonate_builder_failures(self) -> None:
+        self.control.new_plan(game_version="4.4.6")
+        plan = self.control.payload()["plan"]
+        for scenario in plan["scenarios"]:
+            scenario["enabled"] = True
+            scenario["acknowledge_side_effects"] = True
+        self.control.save_plan(plan)
+
+        result = self.control.offline_check()
+
+        self.assertTrue(result["offline_current"])
+        self.assertFalse(result["state"]["live_targets_ready"])
+        self.assertFalse(result["actions"]["can_start_live"])
+        statuses = {
+            item["offline_status"]
+            for item in result["report"]["scenarios"]
+            if item["enabled"]
+        }
+        self.assertEqual(statuses, {"unconfigured"})
+        with self.assertRaisesRegex(
+            ProtocolCompatibilityError,
+            "仍含示例占位符",
+        ):
+            self.control.start_live(disposable_authorized=True)
+
     def test_live_workflow_advances_one_action_then_requires_room_exit(self) -> None:
         self.prepared_plan()
         self.control.offline_check()

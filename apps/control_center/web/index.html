@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>帝国内政代理控制台</title>
-  <link rel="stylesheet" href="styles.css?v=25">
-  <link rel="stylesheet" href="conversation.css?v=25">
+  <link rel="stylesheet" href="styles.css?v=28">
+  <link rel="stylesheet" href="conversation.css?v=26">
   <link rel="stylesheet" href="construction.css">
 </head>
 <body>
@@ -74,9 +74,9 @@
           <div><dt>当前任务</dt><dd id="job-state">空闲</dd></div>
         </dl>
         <div class="button-row">
-          <a class="button-link" href="/downloads/IAGHostBridge-paired-windows-x64.zip" download>下载已配对 Windows 房主执行桥</a>
+          <a id="download-host-bridge" class="button-link" href="/downloads/IAGHostBridge-paired-windows-x64.zip" download>下载已配对 Windows 房主执行桥</a>
         </div>
-        <p class="hint">新版需要接受一次管理员权限提示，以便在房主机打开 WinDivert；窗口关闭即停止，不会开机自启。</p>
+        <p id="host-bridge-download-status" class="hint">首次下载会先生成仅供当前 Agent 使用的配对包。新版需要接受一次管理员权限提示，以便在房主机打开 WinDivert；窗口关闭即停止，不会开机自启。</p>
       </article>
 
       <article class="panel decision-panel">
@@ -166,11 +166,16 @@
           <span id="autonomy-state" class="status-tag">自动巡检已暂停</span>
         </div>
         <div class="conversation-toolbar">
+          <label>对话对象
+            <select id="conversation-application">
+              <option value="economy_governance">帝国经济总管</option>
+            </select>
+          </label>
           <label>运行策略
             <select id="autonomy-mode">
               <option value="paused">暂停自动巡检</option>
               <option value="advisory">自主分析，只准备规划</option>
-              <option value="execute">自主分析并执行建设</option>
+              <option value="execute">自主分析并执行领域动作</option>
             </select>
           </label>
           <label>读取存档周期
@@ -182,7 +187,7 @@
             </select>
           </label>
           <button id="save-autonomy">应用策略</button>
-          <button id="review-button">立即巡检</button>
+          <button id="review-button">巡检所选领域</button>
         </div>
         <div class="conversation-status-row">
           <span>本地完整记录 <b id="conversation-count">0</b> 条</span>
@@ -251,7 +256,7 @@
     </section>
 
     <section class="workspace-grid lower">
-      <article class="panel calibration-panel">
+      <article id="carrier-calibration-panel" class="panel calibration-panel">
         <div class="panel-heading">
           <div><span class="kicker">CARRIER CALIBRATION</span><h2>载体点击校准</h2></div>
           <span id="calibration-state" class="status-tag">未校准</span>
@@ -327,30 +332,30 @@
           <div><span class="kicker">EXECUTION LEDGER</span><h2>执行与确认</h2></div>
           <span id="pending-confirmation-state" class="status-tag">无待核验动作</span>
         </div>
-        <label>执行方式<select id="execution-mode"><option value="carrier_click">点击载体（稳定）</option><option value="session_proxy">会话代理（实验）</option></select></label>
-        <label class="check-line"><input id="fixed-click-guard-enabled" type="checkbox">启用固定点击界面校验</label>
+        <label>执行方式<select id="execution-mode"><option value="session_proxy">会话代理（推荐）</option><option value="carrier_click">点击载体（兼容模式）</option></select></label>
+        <label id="fixed-click-guard-row" class="check-line"><input id="fixed-click-guard-enabled" type="checkbox">启用固定点击界面校验</label>
         <div id="session-proxy-settings" class="session-proxy-settings" hidden>
           <div class="subpanel-heading"><strong>会话代理</strong><span id="session-proxy-state" class="status-tag">未启动</span></div>
-          <p class="hint">Windows Agent 必须以管理员身份运行，并在合作端加入房间前启动代理。发现阶段会根据本机 Stellaris UDP 端口识别局域网直连或 Steam 中继的实际对端；一旦本局插入过命令，必须先退出房间再停止代理。</p>
+          <p class="hint">推荐执行方式。Windows Agent 必须以管理员身份运行，并在合作端加入房间前启动代理。发现阶段会根据本机 Stellaris UDP 端口识别局域网直连或 Steam 中继的实际对端；一旦本局插入过命令，必须先退出房间再停止代理。</p>
           <div class="proxy-address-grid">
             <label>合作端本地 IP（留空自动）<input id="session-proxy-local-ip" type="text" placeholder="自动发现"></label>
             <label>房主 IP（直连提示，必填）<input id="session-proxy-host-ip" type="text" placeholder="&lt;HOST_IP&gt;"></label>
             <label>合作端 actor（0 自动）<input id="session-proxy-source-actor" type="number" min="0" step="1"></label>
             <label>房主 actor<input id="session-proxy-host-actor" type="number" min="1" step="1"></label>
           </div>
-          <label class="check-line"><input id="session-proxy-acknowledged" type="checkbox">我理解这是实验功能，并会在退出房间前保持代理运行</label>
+          <label class="check-line"><input id="session-proxy-acknowledged" type="checkbox">我理解会话代理会维护本局可靠流，并会在退出房间前保持代理运行</label>
           <div class="proxy-runtime-detail" id="session-proxy-detail">尚未建立代理进程。</div>
           <div class="button-row"><button id="start-session-proxy" type="button">进房前启动代理</button><button id="stop-session-proxy" type="button" class="danger-outline">退房后停止代理</button><button id="open-protocol-suite" type="button">协议兼容性验收</button></div>
         </div>
         <label>规划存档最多落后（上传版本数）<input id="maximum-source-save-lag-versions" type="number" min="0" max="24" step="1"></label>
-        <label>规划到点击的存档时效（秒）<input id="fresh-save-seconds" type="number" min="0" max="86400" step="30"></label>
+        <label>规划到执行的存档时效（秒）<input id="fresh-save-seconds" type="number" min="0" max="86400" step="30"></label>
         <label>自主巡检存档时效（秒）<input id="autonomy-fresh-save-seconds" type="number" min="0" max="86400" step="30"></label>
         <label>单轮串行建设上限<select id="maximum-constructions"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option></select></label>
         <label>回包没有可识别明文时<select id="inconclusive-rewrite-policy"><option value="block_until_save">严格：等待新存档后再继续</option><option value="allow_serial_provisional">宽松：记为暂定并允许继续串行</option></select></label>
         <label class="check-line"><input id="experimental-fleet-tools-enabled" type="checkbox">向模型开放实验性舰队移动工具（仅会话代理模式）</label>
         <label class="check-line"><input id="experimental-fleet-coordinate-tools-enabled" type="checkbox">允许 4f2c 星系内坐标移动（实验）</label>
         <label>星系内坐标绝对值上限<input id="fleet-coordinate-max-abs" type="number" min="10" max="100000" step="10"></label>
-        <label class="check-line"><input id="experimental-fleet-attack-enabled" type="checkbox">显示攻击工具（协议尚未完成成对验证，v0.5.9 仍会拒绝发包）</label>
+        <label class="check-line"><input id="experimental-fleet-attack-enabled" type="checkbox">显示攻击预检（6b33 执行器已验证；敌对目标映射完成前 Agent 不会发包）</label>
         <label class="check-line"><input id="experimental-ship-design-tools-enabled" type="checkbox">向模型开放实验性舰船设计工具（克隆现有设计后修改）</label>
         <label class="check-line"><input id="experimental-fleet-reinforcement-tools-enabled" type="checkbox">向模型开放实验性舰队编制与增援工具</label>
         <label>单次目标编制增量上限<input id="maximum-fleet-reinforcement-increase" type="number" min="1" max="20" step="1"></label>
@@ -358,7 +363,7 @@
         <label>新舰队初始舰数上限<input id="maximum-new-fleet-initial-ships" type="number" min="1" max="20" step="1"></label>
         <label class="check-line"><input id="experimental-research-tools-enabled" type="checkbox">向模型开放 062d 科技选择工具（实验）</label>
         <label class="check-line"><input id="experimental-research-reselection-enabled" type="checkbox">允许停止当前科技并中途换题（高影响）</label>
-        <p class="hint">存档版本容差填 0 表示只接受最新上传版本；默认 2 表示一轮分析期间即使又上传两份新档，原批次仍可继续。关闭界面校验会保留截图和匹配分数，但不再因分数不足阻止点击，需自行承担误点风险。时效填 0 只关闭墙钟年龄限制；存档哈希和战役绑定仍然有效。</p>
+        <p class="hint">存档版本容差填 0 表示只接受最新上传版本；默认 2 表示一轮分析期间即使又上传两份新档，原批次仍可继续。<span id="fixed-click-guard-hint">关闭界面校验会保留截图和匹配分数，但不再因分数不足阻止点击，需自行承担误点风险。</span>时效填 0 只关闭墙钟年龄限制；存档哈希和战役绑定仍然有效。</p>
         <div class="button-row"><button id="save-execution-settings">保存执行设置</button></div>
       </article>
 
@@ -557,6 +562,6 @@
     </div>
   </dialog>
 
-  <script src="app_v2.js?v=25"></script>
+  <script src="app_v2.js?v=28"></script>
 </body>
 </html>

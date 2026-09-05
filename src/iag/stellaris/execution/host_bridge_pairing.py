@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import ssl
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -131,35 +132,55 @@ def build_paired_host_bridge_archive(
                 f"{root}/secrets/save_upload_token",
                 f"{root}/secrets/overlay_access_token",
             }
-            with zipfile.ZipFile(
-                temporary,
-                "w",
-                compression=zipfile.ZIP_DEFLATED,
-                compresslevel=9,
-            ) as target:
-                for member in members:
-                    _safe_member_name(member.filename)
-                    if _is_symlink(member):
-                        raise HostBridgePairingError(
-                            f"Host Bridge 包含符号链接：{member.filename}"
-                        )
-                    if member.filename in replaced:
-                        continue
-                    target.writestr(member, source.read(member.filename))
-                target.writestr(
-                    f"{root}/iag_save_uploader.json",
-                    json.dumps(config, ensure_ascii=False, indent=2) + "\n",
-                )
-                token_info = zipfile.ZipInfo(f"{root}/secrets/save_upload_token")
-                token_info.compress_type = zipfile.ZIP_DEFLATED
-                token_info.external_attr = 0o600 << 16
-                target.writestr(token_info, token + "\n")
-                overlay_token_info = zipfile.ZipInfo(
-                    f"{root}/secrets/overlay_access_token"
-                )
-                overlay_token_info.compress_type = zipfile.ZIP_DEFLATED
-                overlay_token_info.external_attr = 0o600 << 16
-                target.writestr(overlay_token_info, overlay_token + "\n")
+            for member in members:
+                _safe_member_name(member.filename)
+                if _is_symlink(member):
+                    raise HostBridgePairingError(
+                        f"Host Bridge 包含符号链接：{member.filename}"
+                    )
+
+            existing_pairing_members = {
+                member.filename
+                for member in members
+                if member.filename in replaced
+            }
+            if existing_pairing_members:
+                with zipfile.ZipFile(
+                    temporary,
+                    "w",
+                    compression=zipfile.ZIP_DEFLATED,
+                    compresslevel=9,
+                ) as target:
+                    for member in members:
+                        if member.filename in replaced:
+                            continue
+                        target.writestr(member, source.read(member.filename))
+            else:
+                # Release archives do not contain runtime credentials. Preserve
+                # their compressed members byte-for-byte instead of recompressing
+                # the entire Windows bundle for every new pairing signature.
+                shutil.copyfile(source_archive, temporary)
+
+        with zipfile.ZipFile(
+            temporary,
+            "a",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=9,
+        ) as target:
+            target.writestr(
+                f"{root}/iag_save_uploader.json",
+                json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+            )
+            token_info = zipfile.ZipInfo(f"{root}/secrets/save_upload_token")
+            token_info.compress_type = zipfile.ZIP_DEFLATED
+            token_info.external_attr = 0o600 << 16
+            target.writestr(token_info, token + "\n")
+            overlay_token_info = zipfile.ZipInfo(
+                f"{root}/secrets/overlay_access_token"
+            )
+            overlay_token_info.compress_type = zipfile.ZIP_DEFLATED
+            overlay_token_info.external_attr = 0o600 << 16
+            target.writestr(overlay_token_info, overlay_token + "\n")
         os.replace(temporary, destination_archive)
     finally:
         temporary.unlink(missing_ok=True)

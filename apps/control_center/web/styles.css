@@ -15,6 +15,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body {
   margin: 0;
   min-height: 100vh;
@@ -216,6 +217,7 @@ button, .button-link {
 .button-link { display: inline-block; text-decoration: none; }
 button:hover, .button-link:hover { background: rgba(35, 116, 113, .62); }
 button:disabled { opacity: .35; cursor: not-allowed; }
+.button-link[aria-disabled="true"] { opacity: .55; cursor: wait; pointer-events: none; }
 .primary { color: #06100e; background: var(--teal); border-color: var(--teal); font-weight: 650; }
 .danger { background: rgba(120, 35, 39, .72); border-color: var(--red); }
 .danger-outline { border-color: rgba(216, 184, 107, .66); color: var(--gold); background: transparent; }

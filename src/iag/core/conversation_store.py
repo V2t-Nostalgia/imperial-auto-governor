@@ -307,6 +307,8 @@ class ConversationStore:
                             "success",
                             "run_id",
                             "trigger",
+                            "application_id",
+                            "application_display_name",
                         }
                     },
                 }

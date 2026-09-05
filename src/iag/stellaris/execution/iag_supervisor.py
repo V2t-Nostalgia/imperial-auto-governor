@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from iag.infrastructure.llm.runtime_config import RuntimeConfig
+from iag.stellaris.execution.fixed_click import execute_fixed_click
 from iag.stellaris.execution.host_executor_protocol import (
     HostExecutorProtocolError,
     begin_host_execution,
@@ -27,7 +28,6 @@ from iag.stellaris.execution.host_executor_protocol import (
     wait_for_host_ready,
     wait_for_host_result,
 )
-from iag.stellaris.execution.fixed_click import execute_fixed_click
 from iag.stellaris.execution.port_discovery import discover_session
 from iag.stellaris.execution.session_proxy_controller import (
     SessionProxyController,
@@ -40,7 +40,6 @@ from iag.stellaris.state.save_ingest import (
     resolve_current_save,
     save_manifest_revision,
 )
-
 
 ROOT = Path(__file__).resolve().parent
 INTERCEPTOR = ROOT / "iag_linux_interceptor.py"
@@ -716,6 +715,24 @@ def session_proxy_action_target(
             "zone_id": int(action["zone_id"]),
             "building_id": str(action["building_id"]),
         }
+    elif action_type == "upgrade_building":
+        target = {
+            "context_822c": int(action.get("context_822c") or 0),
+            "build_queue_id": int(action["build_queue_id"]),
+            "colony_id": int(action["colony_id"]),
+            "zone_id": int(action["zone_id"]),
+            "building_object_id": int(action["building_object_id"]),
+            "building_id": str(action["to_building_id"]),
+        }
+    elif action_type == "replace_building":
+        target = {
+            "context_822c": int(action.get("context_822c") or 0),
+            "build_queue_id": int(action["build_queue_id"]),
+            "colony_id": int(action["colony_id"]),
+            "zone_id": int(action["zone_id"]),
+            "source_building_object_id": int(action["building_object_id"]),
+            "building_id": str(action["to_building_id"]),
+        }
     elif action_type == "build_district":
         target = {
             "context_822c": int(action.get("context_822c") or 0),
@@ -734,8 +751,7 @@ def session_proxy_action_target(
         }
     else:
         raise SupervisorError(
-            "代理模式当前只开放建筑、区划与区域特化；"
-            "升级和替换请切回点击模式。"
+            f"代理模式不支持经济动作 {action_type!r}。"
         )
     return action_type, target
 
@@ -750,7 +766,7 @@ def execute_run(
     source_save = validate_source_save(manifest, config)
 
     runtime_root = Path(config["runtime_root"]).expanduser()
-    execution_mode = str(config.get("execution_mode", "carrier_click")).strip()
+    execution_mode = str(config.get("execution_mode", "session_proxy")).strip()
     if execution_mode == "session_proxy":
         action = dict(manifest["action"])
         action_type, target = session_proxy_action_target(action)

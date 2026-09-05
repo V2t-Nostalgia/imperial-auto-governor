@@ -18,11 +18,12 @@
 ## 添加 Application
 
 1. 在 `src/iag/applications/<application_id>/` 建立独立包。
-2. 定义职责、输入视图、消息类型、动作类型和升级条件。
-3. 在 `src/iag/applications/registry.py` 显式登记。
-4. 把玩家可调整政策放入配置，不写死最低储备或巡检频率。
-5. 在模块自己的 `tests/` 下建立新测试。
-6. 只有确定性验证器通过的 `ActionIntent` 才能进入执行层。
+2. 定义职责、输入视图、消息类型、动作类型、升级条件和严格限域的 `agent_tools.py`。
+3. 提供领域提示词与 `conversation_agent.py`；可复用 `SpecialistConversationAgent`，但不能把其他 Application 的工具聚合进来。
+4. 在 `src/iag/applications/registry.py` 显式登记，并在控制台注册独立的 Agent 工厂与模型路由。
+5. 把玩家可调整政策放入配置，不写死最低储备或巡检频率。
+6. 在模块自己的 `tests/` 下验证工具隔离、模型绑定、私有历史和执行事实。
+7. 只有确定性验证器通过的 `ActionIntent` 才能进入执行层；多个 Application 的游戏副作用必须经共享执行锁串行化。
 
 ## 添加 Content Pack
 

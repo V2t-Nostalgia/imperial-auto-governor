@@ -9,13 +9,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from iag.applications.fleet_operations.agent_tools import FleetToolbox
-from iag.applications.research_strategy.agent_tools import TechnologyToolbox
 from iag.core.conversation_store import ConversationStore, now_iso
 from iag.infrastructure.research.research_tools import ResearchClient
 from iag.stellaris.execution.iag_supervisor import (
     StaleSourceSaveError,
     execute_run,
+)
+from iag.stellaris.execution.session_proxy_controller import (
+    SessionProxyController,
+    SessionProxyError,
 )
 from iag.stellaris.game_knowledge import enrich_snapshot_layout
 from iag.stellaris.state.extract_game_state import (
@@ -40,7 +42,6 @@ from .planner import (
     write_json,
 )
 
-
 RISK_LEVELS = {"low", "medium", "high", "critical"}
 PENDING_EXECUTION_STATE_KEY = "pending_execution_confirmation"
 PENDING_EXECUTIONS_STATE_KEY = "pending_execution_confirmations"
@@ -48,8 +49,6 @@ INCONCLUSIVE_POLICIES = {
     "block_until_save",
     "allow_serial_provisional",
 }
-
-
 def construction_action_id(action: dict[str, Any]) -> str:
     return str(
         action.get("to_building_id")
@@ -610,16 +609,6 @@ class AgentToolbox:
         )
         self.capabilities = read_json(CAPABILITIES_PATH)
         self.research = ResearchClient(self.config)
-        self.fleet_tools = FleetToolbox(
-            self.config,
-            self.store,
-            allow_execute=self.allow_execute,
-        )
-        self.research_strategy_tools = TechnologyToolbox(
-            self.config,
-            self.store,
-            allow_execute=self.allow_execute,
-        )
         metadata = self.store.conversation_metadata()
         self.campaign_id = metadata.get("campaign_id")
         self.snapshot: dict[str, Any] | None = None
@@ -681,10 +670,81 @@ class AgentToolbox:
         self.noop_recorded = False
         self.review_recorded = False
 
+    @property
+    def turn_action_recorded(self) -> bool:
+        """Whether this turn has already produced an auditable outcome."""
+        return bool(
+            self.review_recorded
+            or self.successful_executions
+            or self.provisional_executions
+        )
+
+    def confirmed_turn_actions(self) -> list[dict[str, Any]]:
+        return list(self.successful_executions)
+
+    def provisional_turn_actions(self) -> list[dict[str, Any]]:
+        return list(self.provisional_executions)
+
+    def _execution_channel_status(self) -> dict[str, Any]:
+        mode = str(self.config.get("execution_mode") or "host_bridge")
+        result: dict[str, Any] = {
+            "schema": "iag.execution_channel_status.v1",
+            "mode": mode,
+            "proxy_required": mode == "session_proxy",
+        }
+        if mode != "session_proxy":
+            result.update(
+                {
+                    "running": False,
+                    "ready": False,
+                    "flow_locked": False,
+                    "armed": False,
+                }
+            )
+            return result
+        try:
+            status = SessionProxyController(self.config).status()
+        except (KeyError, OSError, TypeError, ValueError, SessionProxyError):
+            result.update(
+                {
+                    "running": False,
+                    "ready": False,
+                    "state": "status_unavailable",
+                    "flow_locked": False,
+                    "route": None,
+                    "source_actor": None,
+                    "candidate_source_actors": [],
+                    "armed": False,
+                    "insertion_count": 0,
+                    "synthetic_serial_count": 0,
+                }
+            )
+            return result
+        flow = status.get("flow")
+        flow = flow if isinstance(flow, dict) else {}
+        candidates = status.get("candidate_source_actors")
+        result.update(
+            {
+                "running": status.get("running") is True,
+                "ready": status.get("ready") is True,
+                "state": status.get("state"),
+                "flow_locked": bool(flow),
+                "route": flow.get("route"),
+                "source_actor": status.get("source_actor"),
+                "candidate_source_actors": (
+                    candidates if isinstance(candidates, list) else []
+                ),
+                "armed": status.get("armed") is True,
+                "insertion_count": int(status.get("insertion_count") or 0),
+                "synthetic_serial_count": int(
+                    status.get("synthetic_serial_count") or 0
+                ),
+            }
+        )
+        return result
+
     def schemas(self) -> list[dict[str, Any]]:
         schemas = [*READ_TOOLS, *PLAN_TOOLS]
-        schemas.extend(self.fleet_tools.schemas())
-        schemas.extend(self.research_strategy_tools.schemas())
         if self.research.enabled:
             schemas.extend(RESEARCH_TOOLS)
         if self.allow_execute:
@@ -1138,6 +1198,7 @@ class AgentToolbox:
             "state": state,
             "data_quality": self.snapshot.get("data_quality", {}),
             "batch": self._batch_status(),
+            "execution_channel": self._execution_channel_status(),
         }
 
     def list_legal_construction_candidates(self) -> dict[str, Any]:
@@ -1237,9 +1298,12 @@ class AgentToolbox:
             )
         if self.prepared_run_id is not None:
             raise AgentToolError("A prepared construction is still awaiting execution.")
-        if self.successful_executions or self.provisional_executions:
+        if (
+            self.successful_executions
+            or self.provisional_executions
+        ):
             raise AgentToolError(
-                "A noop cannot be recorded after this turn already completed construction."
+                "A noop cannot be recorded after this turn already changed game state."
             )
         if self.review_recorded:
             raise AgentToolError("This turn has already recorded its planning result.")
@@ -1532,10 +1596,6 @@ class AgentToolbox:
     ) -> tuple[dict[str, Any], str]:
         if not isinstance(arguments, dict):
             raise AgentToolError("Tool arguments must be a JSON object.")
-        if name in self.fleet_tools.tool_names:
-            return self.fleet_tools.dispatch(name, arguments)
-        if name in self.research_strategy_tools.tool_names:
-            return self.research_strategy_tools.dispatch(name, arguments)
         if name == "inspect_empire_state":
             result = self.inspect_empire_state()
             state = result["state"]

@@ -39,11 +39,20 @@ from iag.applications.fleet_operations.agent_tools import (
     FLEET_PERMISSIONS_KEY,
     normalized_permissions,
 )
+from iag.applications.fleet_operations.conversation_agent import (
+    FleetConversationAgent,
+)
 from iag.applications.registry import builtin_application_registry
+from iag.applications.research_strategy.conversation_agent import (
+    ResearchConversationAgent,
+)
 from iag.applications.save_continuations import (
     continuation_public_summary,
     probe_save_continuations,
     run_save_continuations,
+)
+from iag.applications.specialist_conversation_agent import (
+    SpecialistConversationAgent,
 )
 from iag.core.autonomy import (
     autonomy_probe,
@@ -135,6 +144,12 @@ DEFAULT_STRATEGIC_PROMPT_PATH = (
 DEFAULT_STRATEGIC_PROMPT = DEFAULT_STRATEGIC_PROMPT_PATH.read_text(
     encoding="utf-8"
 ).strip()
+
+ECONOMY_APPLICATION_ID = "economy_governance"
+SPECIALIST_APPLICATION_IDS = (
+    "research_strategy",
+    "fleet_operations",
+)
 
 class ConsoleError(RuntimeError):
     """An operator-facing console error."""
@@ -477,7 +492,23 @@ class ConsoleService:
             pool.pool_id: ModelPoolRuntime(pool)
             for pool in runtime_snapshot.model_pools
         }
-        self.model_pool_runtime = ModelPoolRuntime(runtime_snapshot.model_pool)
+        self.application_model_runtimes: dict[str, ModelPoolRuntime] = {}
+        for application_id in (
+            ECONOMY_APPLICATION_ID,
+            *SPECIALIST_APPLICATION_IDS,
+        ):
+            try:
+                application_snapshot = self.runtime_config.snapshot(
+                    application_id
+                )
+            except KeyError:
+                application_snapshot = runtime_snapshot
+            self.application_model_runtimes[application_id] = ModelPoolRuntime(
+                application_snapshot.model_pool
+            )
+        self.model_pool_runtime = self.application_model_runtimes[
+            ECONOMY_APPLICATION_ID
+        ]
         self.runtime_root = Path(self.config["runtime_root"]).expanduser()
         self.operator_root = self.runtime_root / "operator"
         self.state_root = self.runtime_root / "state"
@@ -653,7 +684,22 @@ class ConsoleService:
         with self._config_lock:
             snapshot = self.runtime_config.snapshot()
             self.config = snapshot.settings
-            self.model_pool_runtime.replace_pool(snapshot.model_pool)
+            application_runtimes = getattr(
+                self,
+                "application_model_runtimes",
+                None,
+            )
+            if application_runtimes:
+                for application_id, runtime in application_runtimes.items():
+                    try:
+                        application_snapshot = self.runtime_config.snapshot(
+                            application_id
+                        )
+                    except KeyError:
+                        application_snapshot = snapshot
+                    runtime.replace_pool(application_snapshot.model_pool)
+            else:
+                self.model_pool_runtime.replace_pool(snapshot.model_pool)
 
     def _sync_model_pool_runtimes(
         self,
@@ -672,10 +718,28 @@ class ConsoleService:
                 runtime.replace_pool(pool, reset_health=reset_health)
             next_runtimes[pool.pool_id] = runtime
         self.model_pool_runtimes = next_runtimes
-        self.model_pool_runtime.replace_pool(
-            snapshot.model_pool,
-            reset_health=reset_health,
+        application_runtimes = getattr(
+            self,
+            "application_model_runtimes",
+            None,
         )
+        if application_runtimes:
+            for application_id, runtime in application_runtimes.items():
+                try:
+                    application_snapshot = self.runtime_config.snapshot(
+                        application_id
+                    )
+                except KeyError:
+                    application_snapshot = snapshot
+                runtime.replace_pool(
+                    application_snapshot.model_pool,
+                    reset_health=reset_health,
+                )
+        else:
+            self.model_pool_runtime.replace_pool(
+                snapshot.model_pool,
+                reset_health=reset_health,
+            )
         self.config = snapshot.settings
 
     def _initialize_conversation_defaults(
@@ -708,6 +772,83 @@ class ConsoleService:
             visible=True,
         )
 
+    def _specialist_store(
+        self,
+        application_id: str,
+        action_store: ConversationStore,
+    ) -> ConversationStore:
+        """Open an Application-private history synchronized to one campaign."""
+        suffix = self.conversation_db_path.suffix or ".sqlite3"
+        history_path = self.conversation_db_path.with_name(
+            f"{self.conversation_db_path.stem}.{application_id}{suffix}"
+        )
+        store = ConversationStore(
+            history_path,
+            conversation_id=action_store.conversation_id,
+        )
+        metadata = action_store.conversation_metadata()
+        specialist_metadata = store.conversation_metadata()
+        if specialist_metadata["title"] != metadata["title"]:
+            store.rename_conversation(
+                action_store.conversation_id,
+                str(metadata["title"]),
+            )
+        campaign_id = metadata.get("campaign_id")
+        if campaign_id:
+            store.assign_campaign_to_conversation(
+                str(campaign_id),
+                action_store.conversation_id,
+                campaign_label=metadata.get("campaign_label"),
+            )
+        elif specialist_metadata.get("campaign_id"):
+            store.bind_campaign(action_store.conversation_id, None)
+        store.set_active_conversation(action_store.conversation_id)
+        return store
+
+    def _build_application_agents(
+        self,
+        action_store: ConversationStore,
+    ) -> None:
+        fleet_store = self._specialist_store(
+            "fleet_operations",
+            action_store,
+        )
+        research_store = self._specialist_store(
+            "research_strategy",
+            action_store,
+        )
+        self.application_stores: dict[str, ConversationStore] = {
+            ECONOMY_APPLICATION_ID: action_store,
+            "fleet_operations": fleet_store,
+            "research_strategy": research_store,
+        }
+        self.conversation_agent = ConversationAgent(
+            self.runtime_config,
+            action_store,
+            model_pool_runtime=self.application_model_runtimes[
+                ECONOMY_APPLICATION_ID
+            ],
+        )
+        self.application_agents: dict[str, Any] = {
+            ECONOMY_APPLICATION_ID: self.conversation_agent,
+            "fleet_operations": FleetConversationAgent(
+                self.runtime_config,
+                fleet_store,
+                action_store,
+                model_pool_runtime=self.application_model_runtimes[
+                    "fleet_operations"
+                ],
+            ),
+            "research_strategy": ResearchConversationAgent(
+                self.runtime_config,
+                research_store,
+                action_store,
+                model_pool_runtime=self.application_model_runtimes[
+                    "research_strategy"
+                ],
+            ),
+        }
+
     def _activate_conversation(
         self,
         conversation_id: str,
@@ -721,11 +862,7 @@ class ConsoleService:
         metadata = store.set_active_conversation(conversation_id)
         self._initialize_conversation_defaults(store)
         self.conversation_store = store
-        self.conversation_agent = ConversationAgent(
-            self.runtime_config,
-            store,
-            model_pool_runtime=self.model_pool_runtime,
-        )
+        self._build_application_agents(store)
         if seed:
             self._seed_conversation(store)
         return metadata
@@ -1087,6 +1224,73 @@ class ConsoleService:
             "password_path": str(password_path),
         }
 
+    @staticmethod
+    def _application_tools_enabled(
+        application_id: str,
+        config: dict[str, Any],
+    ) -> bool:
+        if application_id == ECONOMY_APPLICATION_ID:
+            return True
+        if application_id == "research_strategy":
+            return bool(config.get("experimental_research_tools_enabled", False))
+        if application_id == "fleet_operations":
+            return any(
+                bool(config.get(key, False))
+                for key in (
+                    "experimental_fleet_tools_enabled",
+                    "experimental_ship_design_tools_enabled",
+                    "experimental_fleet_reinforcement_tools_enabled",
+                    "experimental_new_fleet_tools_enabled",
+                )
+            )
+        return False
+
+    def application_agent_routes(self) -> list[dict[str, Any]]:
+        """Describe the model route and activation state of every agent."""
+        fallback = self.runtime_config.snapshot(ECONOMY_APPLICATION_ID)
+        bindings = fallback.application_model_bindings
+        routes: list[dict[str, Any]] = []
+        for manifest in self.application_registry.all():
+            application_id = manifest.application_id
+            try:
+                runtime = self.runtime_config.snapshot(application_id)
+                binding_mode = "dedicated"
+            except KeyError:
+                runtime = fallback
+                binding_mode = "inherited"
+            pool = runtime.model_pool
+            conversation_supported = (
+                any(
+                    endpoint.enabled
+                    and endpoint.provider == "chat_completions_compatible"
+                    and endpoint.supports_tools
+                    for endpoint in pool.endpoints
+                )
+                and bool(runtime.settings.get("tool_calling_enabled", True))
+            )
+            routes.append(
+                {
+                    "application_id": application_id,
+                    "display_name": manifest.display_name_zh,
+                    "agent_role": (
+                        manifest.agent_roles[0]
+                        if manifest.agent_roles
+                        else application_id
+                    ),
+                    "tools_enabled": self._application_tools_enabled(
+                        application_id,
+                        runtime.settings,
+                    ),
+                    "conversation_supported": conversation_supported,
+                    "binding_mode": binding_mode,
+                    "profile_id": runtime.application_profile.profile_id,
+                    "configured_profile_id": bindings.get(application_id),
+                    "pool_id": runtime.application_profile.pool_id,
+                    "model_id": runtime.application_profile.model_id,
+                }
+            )
+        return routes
+
     def public_model_config(self) -> dict[str, Any]:
         runtime = self.runtime_config.snapshot()
         endpoint = runtime.endpoint
@@ -1157,6 +1361,7 @@ class ConsoleService:
                 manifest.model_dump(mode="json")
                 for manifest in self.application_registry.all()
             ],
+            "application_agents": self.application_agent_routes(),
             "model_pools": public_pools,
             "application_model_profiles": [
                 {
@@ -2033,7 +2238,7 @@ class ConsoleService:
             pending_count = 0
         return {
             "execution_mode": str(
-                self.config.get("execution_mode", "carrier_click")
+                self.config.get("execution_mode", "session_proxy")
             ),
             "fixed_click_guard_enabled": bool(
                 self.config.get("fixed_click_guard_enabled", True)
@@ -2152,7 +2357,7 @@ class ConsoleService:
             "allow_serial_provisional",
         }:
             raise ConsoleError("不支持的模糊回包处理策略。")
-        execution_mode = str(value.get("execution_mode", "carrier_click"))
+        execution_mode = str(value.get("execution_mode", "session_proxy"))
         if execution_mode not in {"carrier_click", "session_proxy"}:
             raise ConsoleError("执行模式必须是点击载体或会话代理。")
         fleet_tools_enabled = bool(
@@ -2267,7 +2472,7 @@ class ConsoleService:
     def start_session_proxy(self) -> dict[str, Any]:
         self._require_protocol_compatibility_idle()
         self.reload_config()
-        if str(self.config.get("execution_mode", "carrier_click")) != "session_proxy":
+        if str(self.config.get("execution_mode", "session_proxy")) != "session_proxy":
             raise ConsoleError("请先保存并选择会话代理执行模式。")
         try:
             return SessionProxyController(self.config).start()
@@ -3097,6 +3302,27 @@ class ConsoleService:
                 "saved_at": now_iso(),
             }
 
+    def _record_turn_completion(
+        self,
+        store: ConversationStore,
+        previous_next_review: Any,
+        source_identity: dict[str, Any] | None,
+    ) -> None:
+        if source_identity is not None:
+            store.set_state("last_autonomy_source", source_identity)
+        try:
+            coalescing = coalesce_next_review_after_turn(
+                self.config,
+                store,
+                previous_next_review,
+            )
+        except Exception as error:
+            coalescing = {
+                "changed": False,
+                "reason": f"coalescing_error:{type(error).__name__}",
+            }
+        store.set_state("last_review_coalescing", coalescing)
+
     def _conversation_action(
         self,
         *,
@@ -3106,6 +3332,7 @@ class ConsoleService:
         user_content: str | None,
         mode: str,
         source_identity: dict[str, Any] | None = None,
+        coalesce: bool = True,
     ) -> dict[str, Any]:
         previous_next_review = store.get_state("next_review", None)
         conversation_id = store.conversation_id
@@ -3144,60 +3371,339 @@ class ConsoleService:
                 "turn_finished",
                 {"trigger": trigger},
             )
-            if source_identity is not None:
-                store.set_state(
-                    "last_autonomy_source",
-                    source_identity,
-                )
-            try:
-                coalescing = coalesce_next_review_after_turn(
-                    self.config,
+            if coalesce:
+                self._record_turn_completion(
                     store,
                     previous_next_review,
+                    source_identity,
                 )
-            except Exception as error:
-                coalescing = {
-                    "changed": False,
-                    "reason": f"coalescing_error:{type(error).__name__}",
-                }
-            store.set_state("last_review_coalescing", coalescing)
 
-    def start_chat(self, text: str) -> dict[str, Any]:
+    def _specialist_conversation_action(
+        self,
+        *,
+        agent: SpecialistConversationAgent,
+        store: ConversationStore,
+        trigger: str,
+        user_content: str | None,
+        mode: str,
+        source_identity: dict[str, Any] | None = None,
+        coalesce: bool = True,
+    ) -> dict[str, Any]:
+        previous_next_review = store.get_state("next_review", None)
+        conversation_id = store.conversation_id
+        application_id = agent.application_id
+        display_name = agent.display_name
+        metadata = {
+            "application_id": application_id,
+            "application_display_name": display_name,
+            "trigger": trigger,
+        }
+        self.visible_reply_broker.publish(
+            conversation_id,
+            "turn_started",
+            {"trigger": trigger},
+        )
+
+        if trigger == "chat":
+            text = str(user_content or "").strip()
+            message_id = store.append(
+                "user",
+                text,
+                kind="operator_message",
+                visible=True,
+                metadata=metadata,
+            )
+            self.visible_reply_broker.publish(
+                conversation_id,
+                "user_message",
+                {
+                    "id": message_id,
+                    "role": "user",
+                    "kind": "operator_message",
+                    "content": text,
+                },
+            )
+        else:
+            label = (
+                "玩家要求立即巡检"
+                if trigger == "manual_review"
+                else "后台自主巡检"
+            )
+            store.append(
+                "user",
+                f"[{label} · {display_name}] 请完成本领域审计。",
+                kind="autonomy_trigger",
+                visible=True,
+                metadata=metadata,
+            )
+
+        mirrored_assistant_contents: list[str] = []
+
+        def publish_visible(event_type: str, payload: dict[str, Any]) -> None:
+            if event_type == "user_message":
+                return
+            if event_type != "assistant_final":
+                self.visible_reply_broker.publish(
+                    conversation_id,
+                    event_type,
+                    payload,
+                )
+                return
+            content = str(payload.get("content") or "")
+            if not content:
+                return
+            main_id = store.append(
+                "assistant",
+                content,
+                kind=str(payload.get("kind") or "assistant_message"),
+                visible=True,
+                metadata=metadata,
+            )
+            mirrored_assistant_contents.append(content)
+            self.visible_reply_broker.publish(
+                conversation_id,
+                "assistant_final",
+                {
+                    **payload,
+                    "id": main_id,
+                    "role": "assistant",
+                    "content": content,
+                },
+            )
+
+        def publish_audit(event: dict[str, Any]) -> None:
+            store.append(
+                "tool",
+                json.dumps(event, ensure_ascii=False, separators=(",", ":")),
+                tool_name=str(event.get("tool") or "unknown"),
+                kind="tool_result",
+                visible=True,
+                metadata={
+                    **metadata,
+                    "public_summary": str(event.get("summary") or ""),
+                    "success": bool(event.get("success")),
+                    "run_id": event.get("run_id"),
+                },
+            )
+
+        try:
+            result = agent.run_turn(
+                trigger=trigger,
+                user_content=user_content,
+                autonomy_mode=mode,
+                visible_event_callback=publish_visible,
+                audit_event_callback=publish_audit,
+            )
+            final_content = str(result.get("final_content") or "")
+            if final_content and (
+                not mirrored_assistant_contents
+                or mirrored_assistant_contents[-1] != final_content
+            ):
+                publish_visible(
+                    "assistant_final",
+                    {
+                        "role": "assistant",
+                        "kind": "assistant_message",
+                        "content": final_content,
+                        "round_index": -1,
+                    },
+                )
+            facts = result.get("execution_facts")
+            facts = facts if isinstance(facts, dict) else {}
+            confirmed = facts.get("confirmed")
+            provisional = facts.get("provisional")
+            if confirmed or provisional:
+                store.append(
+                    "system",
+                    (
+                        f"{display_name}机器事实：确认 "
+                        f"{len(confirmed or [])} 项，待核验 "
+                        f"{len(provisional or [])} 项。"
+                    ),
+                    kind="execution_fact_ledger",
+                    visible=True,
+                    metadata={
+                        **metadata,
+                        "success": not bool(provisional),
+                    },
+                )
+            return result
+        except Exception as error:
+            store.append(
+                "system",
+                f"{display_name}：{type(error).__name__}: {error}",
+                kind="error",
+                visible=True,
+                metadata={**metadata, "success": False},
+            )
+            raise
+        finally:
+            self.visible_reply_broker.publish(
+                conversation_id,
+                "turn_finished",
+                {"trigger": trigger},
+            )
+            if coalesce:
+                self._record_turn_completion(
+                    store,
+                    previous_next_review,
+                    source_identity,
+                )
+
+    def _application_agent(self, application_id: str) -> Any:
+        selected = str(application_id or ECONOMY_APPLICATION_ID).strip()
+        try:
+            self.application_registry.get(selected)
+        except KeyError as error:
+            raise ConsoleError(str(error)) from error
+        try:
+            return self.application_agents[selected]
+        except KeyError as error:
+            raise ConsoleError(f"Application 尚未接入 Agent：{selected}") from error
+
+    def start_chat(
+        self,
+        text: str,
+        application_id: str = ECONOMY_APPLICATION_ID,
+    ) -> dict[str, Any]:
         with self._conversation_lock:
             self.reload_config()
+            message_text = str(text).strip()
+            if not message_text:
+                raise ConsoleError("消息不能为空。")
             store = self.conversation_store
-            agent = self.conversation_agent
+            agent = self._application_agent(application_id)
             mode = self._active_autonomy_mode(store)
-            return self._start_job(
-                "chat",
-                lambda: self._conversation_action(
+            selected = str(application_id or ECONOMY_APPLICATION_ID).strip()
+            if selected == ECONOMY_APPLICATION_ID:
+                action = lambda: self._conversation_action(
                     agent=agent,
                     store=store,
                     trigger="chat",
-                    user_content=text,
+                    user_content=message_text,
                     mode=mode,
-                ),
+                )
+            else:
+                action = lambda: self._specialist_conversation_action(
+                    agent=agent,
+                    store=store,
+                    trigger="chat",
+                    user_content=message_text,
+                    mode=mode,
+                )
+            return self._start_job(
+                f"chat:{selected}",
+                action,
                 conversation_id=store.conversation_id,
             )
 
-    def start_review(self) -> dict[str, Any]:
+    def start_review(
+        self,
+        application_id: str = ECONOMY_APPLICATION_ID,
+    ) -> dict[str, Any]:
         with self._conversation_lock:
             self.reload_config()
             store = self.conversation_store
-            agent = self.conversation_agent
+            agent = self._application_agent(application_id)
             self._require_active_campaign(store)
             mode = self._active_autonomy_mode(store)
-            return self._start_job(
-                "manual_review",
-                lambda: self._conversation_action(
+            selected = str(application_id or ECONOMY_APPLICATION_ID).strip()
+            if selected == ECONOMY_APPLICATION_ID:
+                action = lambda: self._conversation_action(
                     agent=agent,
                     store=store,
                     trigger="manual_review",
                     user_content=None,
                     mode=mode,
-                ),
+                )
+            else:
+                action = lambda: self._specialist_conversation_action(
+                    agent=agent,
+                    store=store,
+                    trigger="manual_review",
+                    user_content=None,
+                    mode=mode,
+                )
+            return self._start_job(
+                f"manual_review:{selected}",
+                action,
                 conversation_id=store.conversation_id,
             )
+
+    def _run_autonomous_suite(
+        self,
+        store: ConversationStore,
+        mode: str,
+        source_identity: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Run enabled domain agents sequentially against one save trigger."""
+        previous_next_review = store.get_state("next_review", None)
+        results: list[dict[str, Any]] = []
+        for application_id in (
+            "research_strategy",
+            "fleet_operations",
+            ECONOMY_APPLICATION_ID,
+        ):
+            agent = self.application_agents[application_id]
+            if application_id != ECONOMY_APPLICATION_ID:
+                try:
+                    runtime = self.runtime_config.snapshot(application_id)
+                except KeyError:
+                    runtime = self.runtime_config.snapshot(
+                        ECONOMY_APPLICATION_ID
+                    )
+                if not self._application_tools_enabled(
+                    application_id,
+                    runtime.settings,
+                ):
+                    continue
+            try:
+                if application_id == ECONOMY_APPLICATION_ID:
+                    result = self._conversation_action(
+                        agent=agent,
+                        store=store,
+                        trigger="autonomous",
+                        user_content=None,
+                        mode=mode,
+                        coalesce=False,
+                    )
+                else:
+                    result = self._specialist_conversation_action(
+                        agent=agent,
+                        store=store,
+                        trigger="autonomous",
+                        user_content=None,
+                        mode=mode,
+                        coalesce=False,
+                    )
+                results.append(
+                    {
+                        "application_id": application_id,
+                        "success": True,
+                        "result": result,
+                    }
+                )
+            except Exception as error:
+                results.append(
+                    {
+                        "application_id": application_id,
+                        "success": False,
+                        "error": f"{type(error).__name__}: {error}",
+                    }
+                )
+        self._record_turn_completion(
+            store,
+            previous_next_review,
+            source_identity,
+        )
+        successful = sum(item["success"] is True for item in results)
+        return {
+            "schema": "iag.autonomous_application_suite.v1",
+            "final_content": (
+                f"已完成 {successful}/{len(results)} 个 Application 巡检。"
+            ),
+            "applications": results,
+        }
 
     def _autonomy_loop(self) -> None:
         while True:
@@ -3274,7 +3780,6 @@ class ConsoleService:
                         continue
 
                     store = self.conversation_store
-                    agent = self.conversation_agent
                     probe = autonomy_probe(self.config, store)
                     with self._job_lock:
                         self._autonomy_probe = probe
@@ -3284,16 +3789,12 @@ class ConsoleService:
                     source_identity = probe.get("save")
                     self._start_job(
                         "autonomous",
-                        lambda agent=agent,
-                        store=store,
+                        lambda store=store,
                         mode=mode,
                         source_identity=source_identity: (
-                            self._conversation_action(
-                                agent=agent,
-                                store=store,
-                                trigger="autonomous",
-                                user_content=None,
-                                mode=mode,
+                            self._run_autonomous_suite(
+                                store,
+                                mode,
                                 source_identity=source_identity,
                             )
                         ),
@@ -4062,9 +4563,24 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     )
                 )
             elif path == "/api/conversation/message":
-                result = self.service.start_chat(str(value.get("text", "")))
+                result = self.service.start_chat(
+                    str(value.get("text", "")),
+                    str(
+                        value.get(
+                            "application_id",
+                            ECONOMY_APPLICATION_ID,
+                        )
+                    ),
+                )
             elif path == "/api/conversation/review":
-                result = self.service.start_review()
+                result = self.service.start_review(
+                    str(
+                        value.get(
+                            "application_id",
+                            ECONOMY_APPLICATION_ID,
+                        )
+                    )
+                )
             elif path == "/api/autonomy":
                 result = self.service.save_autonomy_settings(
                     str(value.get("mode", "")),

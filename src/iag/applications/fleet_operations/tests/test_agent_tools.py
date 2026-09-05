@@ -116,6 +116,18 @@ class FleetToolboxTests(unittest.TestCase):
                 }
             )
 
+    def test_inspect_summary_reports_actual_permission_state(self) -> None:
+        self.store.set_state(
+            FLEET_PERMISSIONS_KEY,
+            {"7": {"allow_move": True, "allow_attack": False}},
+        )
+
+        _result, summary = self.toolbox().dispatch("inspect_fleet_state", {})
+
+        self.assertIn("1 支已获至少一项 AI 权限", summary)
+        self.assertIn("1 支当前可调用", summary)
+        self.assertNotIn("新舰队默认不允许", summary)
+
     def test_prepare_and_execute_revalidate_permission(self) -> None:
         self.store.set_state(
             FLEET_PERMISSIONS_KEY,
@@ -163,12 +175,12 @@ class FleetToolboxTests(unittest.TestCase):
             7,
         )
 
-    def test_attack_permission_does_not_bypass_missing_protocol_pair(self) -> None:
+    def test_attack_permission_does_not_bypass_missing_target_mapping(self) -> None:
         self.store.set_state(
             FLEET_PERMISSIONS_KEY,
             {"7": {"allow_move": True, "allow_attack": True}},
         )
-        with self.assertRaisesRegex(FleetToolError, "成对样本"):
+        with self.assertRaisesRegex(FleetToolError, "确定性敌对目标映射"):
             self.toolbox().prepare_attack(
                 {"fleet_id": 7, "target_fleet_id": 99, "reason": "Intercept."}
             )

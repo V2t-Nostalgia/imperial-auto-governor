@@ -61,6 +61,53 @@ class HostBridgePairingTests(unittest.TestCase):
             "secrets/overlay_access_token",
         )
 
+    def test_pairing_replaces_existing_runtime_members_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.zip"
+            destination = root / "paired.zip"
+            package_root = "IAGHostBridge-test"
+            with zipfile.ZipFile(source, "w") as archive:
+                archive.writestr(
+                    f"{package_root}/iag_save_uploader.example.json",
+                    json.dumps({"server_url": "", "overlay": {}}),
+                )
+                archive.writestr(
+                    f"{package_root}/iag_save_uploader.json",
+                    json.dumps({"server_url": "https://old.example"}),
+                )
+                archive.writestr(
+                    f"{package_root}/secrets/save_upload_token",
+                    "old-upload-secret",
+                )
+                archive.writestr(
+                    f"{package_root}/secrets/overlay_access_token",
+                    "old-overlay-secret",
+                )
+
+            build_paired_host_bridge_archive(
+                source,
+                destination,
+                server_url="https://192.0.2.20:8765",
+                certificate_fingerprint="b" * 64,
+                upload_token="new-upload-secret",
+                overlay_access_token="new-overlay-secret",
+            )
+
+            with zipfile.ZipFile(destination) as archive:
+                names = archive.namelist()
+                self.assertIsNone(archive.testzip())
+                self.assertEqual(
+                    names.count(f"{package_root}/iag_save_uploader.json"),
+                    1,
+                )
+                self.assertEqual(
+                    archive.read(
+                        f"{package_root}/secrets/save_upload_token"
+                    ).decode("utf-8").strip(),
+                    "new-upload-secret",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

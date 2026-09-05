@@ -43,6 +43,39 @@ from iag.stellaris.execution.packet.autonomous_commands import (
     build_building_record,
     retag_matching_host_response,
 )
+from iag.stellaris.execution.packet.building_mutation_commands import (
+    BuildingReplacementTarget,
+    BuildingUpgradeTarget,
+    build_building_replacement_record,
+    build_building_upgrade_record,
+    parse_building_replacement_record,
+    parse_building_upgrade_record,
+)
+from iag.stellaris.execution.packet.expansion_commands import (
+    ExistingColonyShipTarget,
+    OrderColonyShipTarget,
+    StarbaseComponentTarget,
+    StarbaseUpgradeTarget,
+    build_existing_colony_ship_record,
+    build_order_colony_ship_record,
+    build_starbase_component_record,
+    build_starbase_upgrade_record,
+    parse_existing_colony_ship_record,
+    parse_order_colony_ship_record,
+    parse_starbase_component_record,
+    parse_starbase_upgrade_record,
+)
+from iag.stellaris.execution.packet.fleet_operation_commands import (
+    ConstructionShipStarbaseTarget,
+    FleetAttackTarget,
+    ShipAutomationTarget,
+    build_construction_ship_starbase_record,
+    build_fleet_attack_record,
+    build_ship_automation_record,
+    parse_construction_ship_starbase_record,
+    parse_fleet_attack_record,
+    parse_ship_automation_record,
+)
 from iag.stellaris.execution.packet.fleet_reinforcement_commands import (
     FleetReinforcementTarget,
     FleetTemplateAddTarget,
@@ -551,6 +584,15 @@ class ArmRequest:
         | FleetTemplateCreationTarget
         | FleetTemplateRemoveTarget
         | FleetReinforcementTarget
+        | FleetAttackTarget
+        | ConstructionShipStarbaseTarget
+        | ShipAutomationTarget
+        | OrderColonyShipTarget
+        | ExistingColonyShipTarget
+        | StarbaseUpgradeTarget
+        | StarbaseComponentTarget
+        | BuildingUpgradeTarget
+        | BuildingReplacementTarget
     )
     template_record: bytes | None = None
     previous_serial_floor: int = 0
@@ -629,6 +671,15 @@ def parse_arm_document(raw: Any, expected_session_id: str) -> ArmRequest:
             | FleetTemplateCreationTarget
             | FleetTemplateRemoveTarget
             | FleetReinforcementTarget
+            | FleetAttackTarget
+            | ConstructionShipStarbaseTarget
+            | ShipAutomationTarget
+            | OrderColonyShipTarget
+            | ExistingColonyShipTarget
+            | StarbaseUpgradeTarget
+            | StarbaseComponentTarget
+            | BuildingUpgradeTarget
+            | BuildingReplacementTarget
         ) = BuildingTarget(
             context_822c=int(target_raw.get("context_822c", 0)),
             build_queue_id=int(target_raw["build_queue_id"]),
@@ -637,6 +688,42 @@ def parse_arm_document(raw: Any, expected_session_id: str) -> ArmRequest:
             building_id=str(
                 target_raw.get("building_id", "building_research_lab_1")
             ),
+        )
+    elif action == "upgrade_building":
+        target = BuildingUpgradeTarget(
+            context_822c=_validate_u32(
+                int(target_raw.get("context_822c", 0)),
+                "context_822c",
+            ),
+            build_queue_id=_validate_u32(
+                int(target_raw["build_queue_id"]),
+                "build_queue_id",
+            ),
+            colony_id=_validate_u32(int(target_raw["colony_id"]), "colony_id"),
+            zone_id=_validate_u32(int(target_raw["zone_id"]), "zone_id"),
+            building_object_id=_validate_u32(
+                int(target_raw["building_object_id"]),
+                "building_object_id",
+            ),
+            building_id=str(target_raw["building_id"]),
+        )
+    elif action == "replace_building":
+        target = BuildingReplacementTarget(
+            context_822c=_validate_u32(
+                int(target_raw.get("context_822c", 0)),
+                "context_822c",
+            ),
+            build_queue_id=_validate_u32(
+                int(target_raw["build_queue_id"]),
+                "build_queue_id",
+            ),
+            colony_id=_validate_u32(int(target_raw["colony_id"]), "colony_id"),
+            zone_id=_validate_u32(int(target_raw["zone_id"]), "zone_id"),
+            source_building_object_id=_validate_u32(
+                int(target_raw["source_building_object_id"]),
+                "source_building_object_id",
+            ),
+            building_id=str(target_raw["building_id"]),
         )
     elif action == "build_district":
         target = DistrictConstructionTarget(
@@ -680,6 +767,118 @@ def parse_arm_document(raw: Any, expected_session_id: str) -> ArmRequest:
             system_origin=_validate_u32(
                 int(target_raw["system_origin"]),
                 "system_origin",
+            ),
+        )
+    elif action == "attack_fleet":
+        target = FleetAttackTarget(
+            source_fleet_object=_validate_u32(
+                int(target_raw["source_fleet_object"]),
+                "source_fleet_object",
+            ),
+            target_fleet_object=_validate_u32(
+                int(target_raw["target_fleet_object"]),
+                "target_fleet_object",
+            ),
+        )
+    elif action == "build_starbase":
+        target = ConstructionShipStarbaseTarget(
+            source_fleet_object=_validate_u32(
+                int(target_raw["source_fleet_object"]),
+                "source_fleet_object",
+            ),
+            target_system_object=_validate_u32(
+                int(target_raw["target_system_object"]),
+                "target_system_object",
+            ),
+        )
+    elif action == "configure_ship_automation":
+        options_raw = target_raw.get("options")
+        if not isinstance(options_raw, list):
+            raise ValueError("configure_ship_automation requires an options list.")
+        target = ShipAutomationTarget(
+            context_822c=_validate_u32(
+                int(target_raw.get("context_822c", 0)),
+                "context_822c",
+            ),
+            source_fleet_object=_validate_u32(
+                int(target_raw["source_fleet_object"]),
+                "source_fleet_object",
+            ),
+            options=tuple(str(option) for option in options_raw),
+        )
+    elif action == "order_colony_ship_and_colonize":
+        target = OrderColonyShipTarget(
+            context_822c=_validate_u32(
+                int(target_raw.get("context_822c", 0)),
+                "context_822c",
+            ),
+            species_id=_validate_u32(int(target_raw["species_id"]), "species_id"),
+            colony_designation=str(target_raw["colony_designation"]),
+            design_id=_validate_u32(int(target_raw["design_id"]), "design_id"),
+            upgrade_id=_validate_u32(
+                int(target_raw.get("upgrade_id", 0xFFFFFFFF)),
+                "upgrade_id",
+            ),
+            growth_stage=_validate_u32(
+                int(target_raw.get("growth_stage", 0)),
+                "growth_stage",
+            ),
+            target_planet_id=_validate_u32(
+                int(target_raw["target_planet_id"]),
+                "target_planet_id",
+            ),
+            source_planet_id=_validate_u32(
+                int(target_raw["source_planet_id"]),
+                "source_planet_id",
+            ),
+            system_name_key=str(target_raw["system_name_key"]),
+        )
+    elif action == "colonize_with_existing_ship":
+        target = ExistingColonyShipTarget(
+            source_fleet_object=_validate_u32(
+                int(target_raw["source_fleet_object"]),
+                "source_fleet_object",
+            ),
+            target_planet_id=_validate_u32(
+                int(target_raw["target_planet_id"]),
+                "target_planet_id",
+            ),
+            system_name_key=str(target_raw["system_name_key"]),
+        )
+    elif action == "upgrade_starbase":
+        target = StarbaseUpgradeTarget(
+            context_822c=_validate_u32(
+                int(target_raw.get("context_822c", 0)),
+                "context_822c",
+            ),
+            build_queue_id=_validate_u32(
+                int(target_raw["build_queue_id"]),
+                "build_queue_id",
+            ),
+            target_level=str(target_raw["target_level"]),
+            starbase_object=_validate_u32(
+                int(target_raw["starbase_object"]),
+                "starbase_object",
+            ),
+        )
+    elif action in {"set_starbase_module", "set_starbase_building"}:
+        target = StarbaseComponentTarget(
+            context_822c=_validate_u32(
+                int(target_raw.get("context_822c", 0)),
+                "context_822c",
+            ),
+            build_queue_id=_validate_u32(
+                int(target_raw["build_queue_id"]),
+                "build_queue_id",
+            ),
+            component_id=str(target_raw["component_id"]),
+            slot_index=_validate_u32(
+                int(target_raw["slot_index"]),
+                "slot_index",
+            ),
+            starbase_object=_validate_u32(
+                int(target_raw["starbase_object"]),
+                "starbase_object",
             ),
         )
     elif action in {"start_research", "stop_research"}:
@@ -1422,6 +1621,26 @@ def _build_request_record(request: ArmRequest, command_serial: int) -> bytes:
             origin=request.request_origin,
             target=request.target,
         )
+    if request.action == "upgrade_building":
+        if not isinstance(request.target, BuildingUpgradeTarget):
+            raise RuntimeError("The building-upgrade action has the wrong target type.")
+        return build_building_upgrade_record(
+            command_serial=command_serial,
+            actor=request.source_actor,
+            origin=request.request_origin,
+            target=request.target,
+        )
+    if request.action == "replace_building":
+        if not isinstance(request.target, BuildingReplacementTarget):
+            raise RuntimeError(
+                "The building-replacement action has the wrong target type."
+            )
+        return build_building_replacement_record(
+            command_serial=command_serial,
+            actor=request.source_actor,
+            origin=request.request_origin,
+            target=request.target,
+        )
     if request.action == "build_district":
         if not isinstance(request.target, DistrictConstructionTarget):
             raise RuntimeError("The district action has the wrong target type.")
@@ -1460,6 +1679,70 @@ def _build_request_record(request: ArmRequest, command_serial: int) -> bytes:
             origin=request.request_origin,
             target=request.target,
             template_record=request.template_record or FLEET_COORDINATE_RECORD,
+        )
+    if request.action == "attack_fleet":
+        if not isinstance(request.target, FleetAttackTarget):
+            raise RuntimeError("The fleet-attack action has the wrong target type.")
+        return build_fleet_attack_record(
+            command_serial=command_serial,
+            actor=request.source_actor,
+            origin=request.request_origin,
+            target=request.target,
+        )
+    if request.action == "build_starbase":
+        if not isinstance(request.target, ConstructionShipStarbaseTarget):
+            raise RuntimeError("The starbase-build action has the wrong target type.")
+        return build_construction_ship_starbase_record(
+            command_serial=command_serial,
+            actor=request.source_actor,
+            origin=request.request_origin,
+            target=request.target,
+        )
+    if request.action == "configure_ship_automation":
+        if not isinstance(request.target, ShipAutomationTarget):
+            raise RuntimeError("The ship-automation action has the wrong target type.")
+        return build_ship_automation_record(
+            command_serial=command_serial,
+            actor=request.source_actor,
+            origin=request.request_origin,
+            target=request.target,
+        )
+    if request.action == "order_colony_ship_and_colonize":
+        if not isinstance(request.target, OrderColonyShipTarget):
+            raise RuntimeError("The colony-order action has the wrong target type.")
+        return build_order_colony_ship_record(
+            command_serial=command_serial,
+            actor=request.source_actor,
+            origin=request.request_origin,
+            target=request.target,
+        )
+    if request.action == "colonize_with_existing_ship":
+        if not isinstance(request.target, ExistingColonyShipTarget):
+            raise RuntimeError("The colony-ship action has the wrong target type.")
+        return build_existing_colony_ship_record(
+            command_serial=command_serial,
+            actor=request.source_actor,
+            origin=request.request_origin,
+            target=request.target,
+        )
+    if request.action == "upgrade_starbase":
+        if not isinstance(request.target, StarbaseUpgradeTarget):
+            raise RuntimeError("The starbase-upgrade action has the wrong target type.")
+        return build_starbase_upgrade_record(
+            command_serial=command_serial,
+            actor=request.source_actor,
+            origin=request.request_origin,
+            target=request.target,
+        )
+    if request.action in {"set_starbase_module", "set_starbase_building"}:
+        if not isinstance(request.target, StarbaseComponentTarget):
+            raise RuntimeError("The starbase-component action has the wrong target type.")
+        return build_starbase_component_record(
+            kind="module" if request.action.endswith("module") else "building",
+            command_serial=command_serial,
+            actor=request.source_actor,
+            origin=request.request_origin,
+            target=request.target,
         )
     if request.action in {"start_research", "stop_research"}:
         if not isinstance(request.target, ResearchTarget):
@@ -1558,11 +1841,7 @@ def build_action_probe(
         document["template_record_hex"] = template_record_hex
     request = parse_arm_document(document, "offline-protocol-probe")
     record = _build_request_record(request, command_serial=1)
-    application_prefix = (
-        application_prefix_for_record(record)
-        if request.action == "create_ship_design"
-        else APPLICATION_COMMAND_PREFIX
-    )
+    application_prefix = application_prefix_for_record(record)
     if len(record) < 12:
         raise RuntimeError("The generated command record is too short.")
     return {
@@ -1630,7 +1909,11 @@ def retag_matching_response(
     for command in find_command_records(application):
         record = application[command.offset : command.offset + command.length]
         try:
-            if isinstance(request.target, DistrictConstructionTarget):
+            if isinstance(request.target, BuildingUpgradeTarget):
+                parsed_target = parse_building_upgrade_record(record)
+            elif isinstance(request.target, BuildingReplacementTarget):
+                parsed_target = parse_building_replacement_record(record)
+            elif isinstance(request.target, DistrictConstructionTarget):
                 parsed_target = _parse_district_target(
                     record,
                     request.target.district_type,
@@ -1641,6 +1924,27 @@ def retag_matching_response(
                 parsed_target = _parse_fleet_move_target(record)
             elif isinstance(request.target, FleetCoordinateMoveTarget):
                 parsed_target = _parse_fleet_coordinate_target(record)
+            elif isinstance(request.target, FleetAttackTarget):
+                parsed_target = parse_fleet_attack_record(record)
+            elif isinstance(request.target, ConstructionShipStarbaseTarget):
+                parsed_target = parse_construction_ship_starbase_record(record)
+            elif isinstance(request.target, ShipAutomationTarget):
+                parsed_target = parse_ship_automation_record(record)
+            elif isinstance(request.target, OrderColonyShipTarget):
+                parsed_target = parse_order_colony_ship_record(record)
+            elif isinstance(request.target, ExistingColonyShipTarget):
+                parsed_target = parse_existing_colony_ship_record(record)
+            elif isinstance(request.target, StarbaseUpgradeTarget):
+                parsed_target = parse_starbase_upgrade_record(record)
+            elif isinstance(request.target, StarbaseComponentTarget):
+                parsed_target = parse_starbase_component_record(
+                    record,
+                    kind=(
+                        "module"
+                        if request.action == "set_starbase_module"
+                        else "building"
+                    ),
+                )
             elif isinstance(request.target, ResearchTarget):
                 if _research_action(record) != request.action:
                     continue
@@ -1707,7 +2011,17 @@ def retag_matching_response(
         "carrier_offset": int(command.offset),
         "carrier_length": int(command.length),
     }
-    if isinstance(request.target, DistrictConstructionTarget):
+    if isinstance(request.target, BuildingUpgradeTarget):
+        metadata["build_queue_id"] = request.target.build_queue_id
+        metadata["building_object_id"] = request.target.building_object_id
+        metadata["building_id"] = request.target.building_id
+    elif isinstance(request.target, BuildingReplacementTarget):
+        metadata["build_queue_id"] = request.target.build_queue_id
+        metadata["source_building_object_id"] = (
+            request.target.source_building_object_id
+        )
+        metadata["building_id"] = request.target.building_id
+    elif isinstance(request.target, DistrictConstructionTarget):
         metadata["district_type"] = request.target.district_type
     elif isinstance(request.target, ZoneSpecializationTarget):
         metadata["zone_type"] = request.target.zone_type
@@ -1720,6 +2034,34 @@ def retag_matching_response(
         metadata["x_fixed"] = request.target.x_fixed
         metadata["y_fixed"] = request.target.y_fixed
         metadata["system_origin"] = request.target.system_origin
+    elif isinstance(request.target, FleetAttackTarget):
+        metadata["source_fleet_object"] = request.target.source_fleet_object
+        metadata["target_fleet_object"] = request.target.target_fleet_object
+    elif isinstance(request.target, ConstructionShipStarbaseTarget):
+        metadata["source_fleet_object"] = request.target.source_fleet_object
+        metadata["target_system_object"] = request.target.target_system_object
+    elif isinstance(request.target, ShipAutomationTarget):
+        metadata["source_fleet_object"] = request.target.source_fleet_object
+        metadata["context_822c"] = request.target.context_822c
+        metadata["automation_options"] = ",".join(request.target.options)
+    elif isinstance(request.target, OrderColonyShipTarget):
+        metadata["target_planet_id"] = request.target.target_planet_id
+        metadata["source_planet_id"] = request.target.source_planet_id
+        metadata["colony_designation"] = request.target.colony_designation
+        metadata["system_name_key"] = request.target.system_name_key
+    elif isinstance(request.target, ExistingColonyShipTarget):
+        metadata["source_fleet_object"] = request.target.source_fleet_object
+        metadata["target_planet_id"] = request.target.target_planet_id
+        metadata["system_name_key"] = request.target.system_name_key
+    elif isinstance(request.target, StarbaseUpgradeTarget):
+        metadata["build_queue_id"] = request.target.build_queue_id
+        metadata["target_level"] = request.target.target_level
+        metadata["starbase_object"] = request.target.starbase_object
+    elif isinstance(request.target, StarbaseComponentTarget):
+        metadata["build_queue_id"] = request.target.build_queue_id
+        metadata["component_id"] = request.target.component_id
+        metadata["slot_index"] = request.target.slot_index
+        metadata["starbase_object"] = request.target.starbase_object
     elif isinstance(request.target, ShipBuildTarget):
         metadata["build_queue_id"] = request.target.build_queue_id
         metadata["design_id"] = request.target.design_id
@@ -1755,11 +2097,7 @@ def inject_at_packet_boundary(
     if not is_reliable_packet(payload) or len(payload) != RELIABLE_HEADER_LENGTH:
         return None
     command = _build_request_record(request, command_serial)
-    application_prefix = (
-        application_prefix_for_record(command)
-        if request.action == "create_ship_design"
-        else APPLICATION_COMMAND_PREFIX
-    )
+    application_prefix = application_prefix_for_record(command)
     inserted_length = len(application_prefix) + len(command)
     if (
         len(payload) + inserted_length > max_payload_length

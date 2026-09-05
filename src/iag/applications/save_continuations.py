@@ -131,7 +131,7 @@ def _new_fleet_probe(
     if str(store.get_state("autonomy_mode", "paused")) != "execute":
         result["reason"] = "execution_not_authorized"
         return result
-    if str(config.get("execution_mode", "carrier_click")) != "session_proxy":
+    if str(config.get("execution_mode", "session_proxy")) != "session_proxy":
         result["reason"] = "session_proxy_not_selected"
         return result
     if not bool(config.get("experimental_new_fleet_tools_enabled", False)):

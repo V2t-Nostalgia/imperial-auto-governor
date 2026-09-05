@@ -22,7 +22,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-
 RELIABLE_HEADER_LENGTH = 25
 UINT24_MODULUS = 1 << 24
 UINT24_HALF_RANGE = 1 << 23
@@ -183,20 +182,29 @@ class CommandRecord:
 
 
 def find_command_records(data: bytes) -> list[CommandRecord]:
-    """Locate complete Clausewitz command records in one byte range."""
+    """Locate complete Clausewitz command records in one byte range.
+
+    Stellaris stores the low length byte in the record and, for records of at
+    least 256 bytes, the high page in the immediately preceding three-byte
+    application prefix ``00 00 PP``.  Older commands all had ``PP == 0``;
+    automation and colonization captures cross that boundary.
+    """
     records: list[CommandRecord] = []
     marker_offset = data.find(COMMAND_COMMON_MARKER)
     while marker_offset >= 0:
         record_offset = marker_offset - 12
         if record_offset >= 0 and record_offset + 60 <= len(data):
-            declared_length = int.from_bytes(
-                data[record_offset : record_offset + 2],
-                "little",
-            )
+            prefix_page = 0
+            if (
+                record_offset >= 3
+                and data[record_offset - 3 : record_offset - 1] == b"\x00\x00"
+            ):
+                prefix_page = data[record_offset - 1]
+            declared_length = (prefix_page << 8) | data[record_offset]
             record_length = declared_length + 1
             record_end = record_offset + record_length
             if (
-                60 <= record_length <= 512
+                60 <= record_length <= 0x10000
                 and record_end <= len(data)
                 and data[record_offset + 2 : record_offset + 6]
                 == COMMAND_ENVELOPE_TYPE

@@ -270,6 +270,17 @@ def anonymous_sections(text: str) -> list[str]:
     return output
 
 
+def hyperlane_neighbors(system_block: str) -> list[int]:
+    """Return the explicit neighboring system IDs from save hyperlane edges."""
+    neighbors = {
+        destination
+        for edge in anonymous_sections(optional_section(system_block, "hyperlane"))
+        if (destination := integer_scalar(edge, "to")) is not None
+        and destination != INVALID_OBJECT_ID
+    }
+    return sorted(neighbors)
+
+
 def fleet_template_profile(template_id: int, block: str) -> dict[str, Any]:
     """Parse desired fleet composition without inferring missing counts."""
     designs: list[dict[str, Any]] = []
@@ -393,7 +404,11 @@ def system_destination(
     starbases: dict[int, str | None],
 ) -> dict[str, Any] | None:
     system_planets = repeated_integer(system_block, "planet")
-    starbase_indices = integer_values(system_block, "starbases")
+    starbase_indices = [
+        value
+        for value in integer_values(system_block, "starbases")
+        if value != INVALID_OBJECT_ID
+    ]
     primary_star_id = next(
         (
             planet_id
@@ -459,8 +474,18 @@ def extract_fleet_profiles(text: str, owner: int | None = None) -> dict[str, Any
     planets = planet_map(text)
     starbases = starbase_map(text)
 
+    owned_fleet_id_values = owned_fleet_ids(country)
+    owned_fleet_id_set = set(owned_fleet_id_values)
+    owned_planet_ids = set(integer_values(country, "owned_planets"))
+    owned_starbase_indices = {
+        starbase_index
+        for starbase_index, starbase_block in starbases.items()
+        if starbase_block
+        and integer_scalar(starbase_block, "station") in owned_fleet_id_set
+    }
+
     fleet_output: list[dict[str, Any]] = []
-    for fleet_id in owned_fleet_ids(country):
+    for fleet_id in owned_fleet_id_values:
         block = fleets.get(fleet_id)
         if block is None:
             continue
@@ -573,14 +598,34 @@ def extract_fleet_profiles(text: str, owner: int | None = None) -> dict[str, Any
             continue
         planet_ids = repeated_integer(block, "planet")
         discovery = integer_values(block, "discovery")
+        starbase_indices = [
+            value
+            for value in integer_values(block, "starbases")
+            if value != INVALID_OBJECT_ID
+        ]
+        owned_colonies = sorted(owned_planet_ids.intersection(planet_ids))
+        owned_starbases = sorted(
+            owned_starbase_indices.intersection(starbase_indices)
+        )
+        ownership_evidence = []
+        if owned_colonies:
+            ownership_evidence.append("owned_colony")
+        if owned_starbases:
+            ownership_evidence.append("owned_starbase")
         system_output.append(
             {
                 "system_id": system_id,
                 "name_key": name_key(block),
+                "display_name_hint": name_hint(block),
                 "star_class": quoted_value(block, "star_class"),
                 "planet_ids": planet_ids,
-                "starbase_indices": integer_values(block, "starbases"),
+                "starbase_indices": starbase_indices,
                 "discovered_by_owner": owner in discovery,
+                "hyperlane_neighbors": hyperlane_neighbors(block),
+                "owned_by_owner": bool(ownership_evidence),
+                "owned_colony_ids": owned_colonies,
+                "owned_starbase_indices": owned_starbases,
+                "ownership_evidence": ownership_evidence,
                 "move_destination": system_destination(block, planets, starbases),
                 "coordinate_targets": [
                     {
@@ -911,16 +956,34 @@ def selected_move(
         raise ValueError(
             f"System {destination_system} has no unambiguous verified move target."
         )
+    current_system_id = fleet["movement"]["current_system_id"]
+    current_system = next(
+        (
+            item
+            for item in profile["systems"]
+            if item["system_id"] == current_system_id
+        ),
+        None,
+    )
     return {
         "action": "move_fleet",
         "source_fleet": {
             "fleet_id": source_fleet,
             "name_key": fleet["name_key"],
-            "current_system_id": fleet["movement"]["current_system_id"],
+            "display_name_hint": fleet.get("display_name_hint"),
+            "current_system_id": current_system_id,
         },
         "destination_system": {
             "system_id": destination_system,
             "name_key": system["name_key"],
+            "display_name_hint": system.get("display_name_hint"),
+            "discovered_by_owner": system.get("discovered_by_owner", False),
+            "owned_by_owner": system.get("owned_by_owner", False),
+            "adjacent_to_source": bool(
+                current_system
+                and destination_system
+                in current_system.get("hyperlane_neighbors", [])
+            ),
         },
         "target": {
             "source_fleet_object": source_fleet,
@@ -969,6 +1032,7 @@ def selected_coordinate_move(
         "source_fleet": {
             "fleet_id": source_fleet,
             "name_key": fleet["name_key"],
+            "display_name_hint": fleet.get("display_name_hint"),
             "current_system_id": system_origin,
             "current_coordinate": fleet["movement"].get("current_coordinate"),
         },

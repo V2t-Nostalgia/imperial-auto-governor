@@ -12,6 +12,7 @@ from iag.stellaris.execution.session_proxy_controller import (
     SessionProxyController,
     SessionProxyError,
 )
+from iag.stellaris.game_knowledge import detect_game_root
 from iag.stellaris.state.fleet_profiles import (
     extract_fleet_profiles,
     resolve_created_fleet_template,
@@ -68,8 +69,8 @@ PREPARE_ATTACK_TOOL = {
     "function": {
         "name": "prepare_fleet_attack",
         "description": (
-            "预检查舰队攻击意图。6b33 非房主请求尚缺成对在线样本，因此当前版本"
-            "只会明确拒绝执行，不会构造攻击包。"
+            "预检查舰队攻击意图。6b33 执行器已完成非房主成对验证并接入会话代理，"
+            "但确定性敌对目标映射尚未接入，因此当前版本只会明确拒绝执行。"
         ),
         "parameters": {
             "type": "object",
@@ -140,8 +141,8 @@ PREPARE_SHIP_DESIGN_TOOL = {
     "function": {
         "name": "prepare_ship_design_clone",
         "description": (
-            "从最新存档中的一份合法单区段护卫舰设计克隆新设计。组件只能替换为"
-            "同一舰种、区段和槽位中已经由存档证明合法的组件。"
+            "从最新存档中的一份合法单区段护卫舰设计克隆新设计。组件候选必须由"
+            "存档观察值，或本机区段规则与玩家已研究科技共同证明合法。"
         ),
         "parameters": {
             "type": "object",
@@ -278,6 +279,14 @@ def normalized_permissions(value: Any) -> dict[str, dict[str, bool]]:
     return result
 
 
+def fleet_label(fleet: dict[str, Any]) -> str:
+    return str(
+        fleet.get("display_name_hint")
+        or fleet.get("name_key")
+        or fleet.get("fleet_id")
+    )
+
+
 class FleetToolbox:
     """One model-turn view over fleet state and one prepared order."""
 
@@ -397,7 +406,10 @@ class FleetToolbox:
 
     def _ship_profile(self) -> tuple[Path, dict[str, Any]]:
         path = self._save_path()
-        return path, extract_ship_profiles(load_gamestate(path))
+        return path, extract_ship_profiles(
+            load_gamestate(path),
+            game_root=detect_game_root(self.config),
+        )
 
     def inspect_ships(self) -> dict[str, Any]:
         path, profile = self._ship_profile()
@@ -1136,8 +1148,8 @@ class FleetToolbox:
         if not permissions.get(str(fleet_id), {}).get("allow_attack", False):
             raise FleetToolError(f"玩家没有授权调用舰队 {fleet_id} 进行攻击。")
         raise FleetToolError(
-            "6b33 目前只有房主权威记录，缺少非房主请求/权威回包成对样本；"
-            "v0.5.9 不会猜测攻击请求格式。"
+            "6b33 构造器和房主权威回包匹配已接入会话代理，但确定性敌对目标映射"
+            "尚未接入舰队 Application；v0.5.9 不会发送未经状态校验的攻击命令。"
         )
 
     def execute(self, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -1219,24 +1231,39 @@ class FleetToolbox:
     ) -> tuple[dict[str, Any], str]:
         if name == "inspect_fleet_state":
             result = self.inspect()
+            authorized = sum(
+                any(fleet.get("permission", {}).values())
+                for fleet in result["fleets"]
+            )
+            callable_now = sum(
+                fleet.get("ai_callable_now") is True
+                and any(fleet.get("permission", {}).values())
+                for fleet in result["fleets"]
+            )
             summary = (
                 f"已读取 {len(result['fleets'])} 支玩家舰队；"
-                "新舰队默认不允许模型调用。"
+                f"{authorized} 支已获至少一项 AI 权限，"
+                f"其中 {callable_now} 支当前可调用。"
             )
         elif name == "prepare_fleet_move":
             result = self.prepare_move(arguments)
             source = result["order"]["source_fleet"]
             destination = result["order"]["destination_system"]
+            destination_label = str(
+                destination.get("display_name_hint")
+                or destination.get("name_key")
+                or destination["system_id"]
+            )
             summary = (
-                f"已准备舰队 {source['name_key'] or source['fleet_id']} 移动到 "
-                f"{destination['name_key'] or destination['system_id']}；尚未发包。"
+                f"已准备舰队 {fleet_label(source)} 移动到 "
+                f"{destination_label}；尚未发包。"
             )
         elif name == "prepare_fleet_coordinate_move":
             result = self.prepare_coordinate_move(arguments)
             source = result["order"]["source_fleet"]
             destination = result["order"]["destination_coordinate"]
             summary = (
-                f"已准备舰队 {source['name_key'] or source['fleet_id']} 在星系 "
+                f"已准备舰队 {fleet_label(source)} 在星系 "
                 f"{destination['system_origin']} 内移动到 "
                 f"({destination['x']}, {destination['y']})；尚未发包。"
             )

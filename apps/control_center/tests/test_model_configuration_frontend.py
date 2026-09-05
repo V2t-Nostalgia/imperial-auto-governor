@@ -7,7 +7,6 @@ import re
 import unittest
 from pathlib import Path
 
-
 WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
 
 
@@ -79,6 +78,60 @@ class ModelConfigurationFrontendTests(unittest.TestCase):
             "/api/protocol-compatibility/finish",
         ):
             self.assertIn(route, self.javascript)
+
+    def test_conversation_refresh_deduplicates_message_ids(self) -> None:
+        self.assertIn("renderedConversationMessageIds", self.javascript)
+        self.assertIn(
+            "renderedConversationMessageIds.has(messageKey)",
+            self.javascript,
+        )
+        self.assertIn("renderedConversationMessageIds.clear()", self.javascript)
+
+    def test_conversation_routes_messages_to_selected_application(self) -> None:
+        html_ids = set(re.findall(r'\bid="([^"]+)"', self.html))
+        self.assertIn("conversation-application", html_ids)
+        self.assertIn(
+            "selectedConversationApplicationId",
+            self.javascript,
+        )
+        self.assertIn(
+            "application_id: selectedConversationApplicationId",
+            self.javascript,
+        )
+        self.assertIn("application_agents", self.javascript)
+
+    def test_protocol_start_respects_backend_target_readiness(self) -> None:
+        self.assertIn("actions.can_start_live", self.javascript)
+        self.assertIn("待填写联机目标", self.javascript)
+
+    def test_host_bridge_download_prepares_archive_before_navigation(self) -> None:
+        html_ids = set(re.findall(r'\bid="([^"]+)"', self.html))
+        self.assertIn("download-host-bridge", html_ids)
+        self.assertIn("host-bridge-download-status", html_ids)
+        self.assertIn('method: "HEAD"', self.javascript)
+        self.assertIn("downloadPairedHostBridge", self.javascript)
+
+    def test_proxy_is_preferred_and_hides_click_calibration(self) -> None:
+        self.assertRegex(
+            self.html,
+            r'<select id="execution-mode"><option value="session_proxy">',
+        )
+        html_ids = set(re.findall(r'\bid="([^"]+)"', self.html))
+        self.assertIn("carrier-calibration-panel", html_ids)
+        self.assertIn("fixed-click-guard-row", html_ids)
+        self.assertIn("fixed-click-guard-hint", html_ids)
+        self.assertIn(
+            '$("carrier-calibration-panel").hidden = proxyMode;',
+            self.javascript,
+        )
+        self.assertIn(
+            '$("fixed-click-guard-row").hidden = proxyMode;',
+            self.javascript,
+        )
+        self.assertIn(
+            '$("fixed-click-guard-hint").hidden = proxyMode;',
+            self.javascript,
+        )
 
 
 if __name__ == "__main__":

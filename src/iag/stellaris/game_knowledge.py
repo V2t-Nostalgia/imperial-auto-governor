@@ -415,6 +415,154 @@ def _child_blocks(
     ]
 
 
+def _wrapped_definitions(
+    definition_root: Path,
+    wrappers: set[str],
+) -> list[tuple[str, str, list[tuple[str, Any]], Path, int]]:
+    output: list[
+        tuple[str, str, list[tuple[str, Any]], Path, int]
+    ] = []
+    if not definition_root.is_dir():
+        return output
+    for path in sorted(definition_root.rglob("*.txt")):
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
+        for wrapper, entries in parse_clausewitz(text):
+            if wrapper not in wrappers or not isinstance(entries, list):
+                continue
+            object_id = _scalar_value(entries, "key")
+            if not object_id:
+                continue
+            key_match = re.search(
+                rf'(?m)^\s*key\s*=\s*"{re.escape(object_id)}"',
+                text,
+            )
+            line = text.count("\n", 0, key_match.start()) + 1 if key_match else 1
+            output.append((wrapper, object_id, entries, path, line))
+    return output
+
+
+def _condition_leaves(
+    entries: list[tuple[str, Any]],
+) -> list[tuple[str, str]]:
+    leaves: list[tuple[str, str]] = []
+    for key, value in entries:
+        if isinstance(value, list):
+            leaves.extend(_condition_leaves(value))
+        elif key != "__value__":
+            leaves.append((str(key), str(value).lower()))
+    return leaves
+
+
+def _ship_component_potential_policy(
+    entries: list[tuple[str, Any]],
+) -> str:
+    potentials = _child_blocks(entries, "potential")
+    if not potentials:
+        return "unrestricted"
+    if len(potentials) != 1:
+        return "conditional_unresolved"
+    leaves = set(_condition_leaves(potentials[0]))
+    ordinary_conditions = {
+        ("country_uses_bio_ships", "no"),
+        ("is_arkship_ship", "yes"),
+    }
+    if (
+        ("country_uses_bio_ships", "no") in leaves
+        and leaves.issubset(ordinary_conditions)
+    ):
+        return "regular_ship_or_arkship"
+    return "conditional_unresolved"
+
+
+@lru_cache(maxsize=8)
+def ship_section_rules(game_root: Path) -> dict[str, dict[str, Any]]:
+    """Index installed section slot templates used to validate components."""
+    output: dict[str, dict[str, Any]] = {}
+    root = game_root / "common/section_templates"
+    for _wrapper, section_id, entries, path, line in _wrapped_definitions(
+        root,
+        {"ship_section_template"},
+    ):
+        explicit_slots: dict[str, str] = {}
+        for slot in _child_blocks(entries, "component_slot"):
+            name = _scalar_value(slot, "name")
+            template = _scalar_value(slot, "template")
+            if name and template:
+                explicit_slots[name] = template
+
+        def slot_count(field: str) -> int:
+            raw = _scalar_value(entries, field)
+            try:
+                return max(0, int(raw or 0))
+            except ValueError:
+                return 0
+
+        output[section_id] = {
+            "status": "available",
+            "section_template": section_id,
+            "ship_size": _scalar_value(entries, "ship_size"),
+            "fits_on_slot": _scalar_value(entries, "fits_on_slot"),
+            "component_slots": explicit_slots,
+            "small_utility_slots": slot_count("small_utility_slots"),
+            "medium_utility_slots": slot_count("medium_utility_slots"),
+            "large_utility_slots": slot_count("large_utility_slots"),
+            "aux_utility_slots": slot_count("aux_utility_slots"),
+            "source": {"path": str(path), "line": line},
+        }
+    return output
+
+
+def ship_section_rule(
+    game_root: Path,
+    section_template: str,
+) -> dict[str, Any]:
+    rule = ship_section_rules(game_root).get(section_template)
+    if rule is None:
+        return {"status": "missing", "section_template": section_template}
+    return rule
+
+
+@lru_cache(maxsize=8)
+def ship_component_catalog(game_root: Path) -> tuple[dict[str, Any], ...]:
+    """Return conservative source-backed weapon and utility component rules."""
+    wrappers = {
+        "weapon_component_template",
+        "utility_component_template",
+    }
+    output: list[dict[str, Any]] = []
+    root = game_root / "common/component_templates"
+    for definition_type, component_id, entries, path, line in (
+        _wrapped_definitions(root, wrappers)
+    ):
+        output.append(
+            {
+                "component_id": component_id,
+                "kind": (
+                    "weapon"
+                    if definition_type == "weapon_component_template"
+                    else "utility"
+                ),
+                "size": _scalar_value(entries, "size"),
+                "component_type": _scalar_value(entries, "type"),
+                "tags": _list_values(entries, "tags"),
+                "prerequisites": _list_values(entries, "prerequisites"),
+                "potential_policy": _ship_component_potential_policy(entries),
+                "hidden": _scalar_value(entries, "hidden") == "yes",
+                "source_family": (
+                    "mutation"
+                    if "mutation" in path.name.lower()
+                    else (
+                        "biological"
+                        if "biogenesis" in path.name.lower()
+                        else "standard"
+                    )
+                ),
+                "source": {"path": str(path), "line": line},
+            }
+        )
+    return tuple(output)
+
+
 def _referenced_rule_texts(
     game_root: Path,
     root_block: str,

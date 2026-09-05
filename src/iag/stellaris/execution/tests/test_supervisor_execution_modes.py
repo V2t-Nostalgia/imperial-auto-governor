@@ -47,11 +47,36 @@ class SupervisorExecutionModeTests(unittest.TestCase):
         self.assertEqual(zone["district_id"], 22)
         self.assertEqual(zone["slot_selector"], 2)
 
-    def test_upgrade_and_replacement_remain_on_click_mode(self) -> None:
-        for action_type in ("upgrade_building", "replace_building"):
-            with self.subTest(action_type=action_type):
-                with self.assertRaisesRegex(SupervisorError, "切回点击模式"):
-                    session_proxy_action_target({"type": action_type})
+    def test_upgrade_and_replacement_map_to_full_proxy_targets(self) -> None:
+        _, upgrade = session_proxy_action_target(
+            {
+                "type": "upgrade_building",
+                "build_queue_id": 8,
+                "colony_id": 12,
+                "zone_id": 15,
+                "building_object_id": 21,
+                "to_building_id": "building_research_lab_2",
+            }
+        )
+        self.assertEqual(upgrade["building_object_id"], 21)
+        self.assertEqual(upgrade["building_id"], "building_research_lab_2")
+
+        _, replacement = session_proxy_action_target(
+            {
+                "type": "replace_building",
+                "build_queue_id": 8,
+                "colony_id": 12,
+                "zone_id": 15,
+                "building_object_id": 22,
+                "to_building_id": "building_holo_theatres",
+            }
+        )
+        self.assertEqual(replacement["source_building_object_id"], 22)
+        self.assertEqual(replacement["building_id"], "building_holo_theatres")
+
+    def test_unknown_economy_action_is_rejected(self) -> None:
+        with self.assertRaisesRegex(SupervisorError, "不支持经济动作"):
+            session_proxy_action_target({"type": "demolish_planet"})
 
 
 if __name__ == "__main__":

@@ -37,8 +37,10 @@ class FakeToolbox:
     prepared_run_id = None
     executed = False
     review_recorded = True
+    last_allow_execute: bool | None = None
 
-    def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+    def __init__(self, *_args: Any, **kwargs: Any) -> None:
+        type(self).last_allow_execute = bool(kwargs.get("allow_execute"))
         self.successful_executions: list[dict[str, Any]] = []
         self.provisional_executions: list[dict[str, Any]] = []
 
@@ -106,6 +108,39 @@ class TestConversationAgent(ConversationAgent):
         return "system"
 
 
+class CompletedConstructionToolbox(FakeToolbox):
+    review_recorded = False
+
+    def __init__(self, *_args: Any, **kwargs: Any) -> None:
+        super().__init__(*_args, **kwargs)
+        self.turn_action_recorded = True
+
+    def confirmed_turn_actions(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "domain": "economy_governance",
+                "tool": "execute_prepared_construction",
+                "success": True,
+            }
+        ]
+
+    def provisional_turn_actions(self) -> list[dict[str, Any]]:
+        return []
+
+
+class FallbackTrackingAgent(TestConversationAgent):
+    fallback_called = False
+
+    def _record_fallback_noop(
+        self,
+        toolbox: Any,
+        *,
+        reason: str,
+    ) -> None:
+        del toolbox, reason
+        self.fallback_called = True
+
+
 class VisibleConversationEventTests(unittest.TestCase):
     def test_stream_events_exclude_reasoning_and_tool_results(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -153,6 +188,7 @@ class VisibleConversationEventTests(unittest.TestCase):
 
             rendered = repr(events)
             self.assertEqual(result["final_content"], "矿物收入需要修复。")
+            self.assertTrue(FakeToolbox.last_allow_execute)
             self.assertNotIn("private reasoning", rendered)
             self.assertNotIn("tool audit", rendered)
             self.assertEqual(
@@ -165,6 +201,102 @@ class VisibleConversationEventTests(unittest.TestCase):
                     "assistant_final",
                 ],
             )
+
+    def test_scheduled_advisory_review_does_not_expose_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            endpoint = ModelEndpoint.model_validate(
+                {
+                    "endpoint_id": "test",
+                    "model_id": "test-model",
+                    "model": "test-model",
+                    "model_transport": "openai_sdk",
+                    "provider": "chat_completions_compatible",
+                    "base_url": "https://example.test/v1",
+                    "supports_reasoning": False,
+                    "model_context_window_tokens": 64000,
+                    "auth_mode": "none",
+                    "max_output_tokens": 8000,
+                    "priority": 0,
+                    "enabled": True,
+                    "supports_tools": True,
+                }
+            )
+            pool = ModelPool(
+                pool_id="test",
+                display_name="Test",
+                endpoints=[endpoint],
+            )
+            store = ConversationStore(root / "conversation.sqlite3")
+
+            def completion(
+                _endpoint: ModelEndpoint,
+                _messages: list[dict[str, Any]],
+                **_kwargs: Any,
+            ) -> dict[str, Any]:
+                return {"role": "assistant", "content": "仅提供建议。"}
+
+            agent = TestConversationAgent(
+                FakeRuntimeConfig(root, pool),
+                store,
+                model_pool_runtime=ModelPoolRuntime(pool),
+                completion_fn=completion,
+                toolbox_factory=FakeToolbox,
+            )
+            agent.run_turn(
+                trigger="manual_review",
+                autonomy_mode="advisory",
+            )
+
+            self.assertFalse(FakeToolbox.last_allow_execute)
+
+    def test_confirmed_construction_suppresses_fallback_noop(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            endpoint = ModelEndpoint.model_validate(
+                {
+                    "endpoint_id": "test",
+                    "model_id": "test-model",
+                    "model": "test-model",
+                    "model_transport": "openai_sdk",
+                    "provider": "chat_completions_compatible",
+                    "base_url": "https://example.test/v1",
+                    "supports_reasoning": False,
+                    "model_context_window_tokens": 64000,
+                    "auth_mode": "none",
+                    "max_output_tokens": 8000,
+                    "priority": 0,
+                    "enabled": True,
+                    "supports_tools": True,
+                }
+            )
+            pool = ModelPool(
+                pool_id="test",
+                display_name="Test",
+                endpoints=[endpoint],
+            )
+            store = ConversationStore(root / "conversation.sqlite3")
+
+            def completion(
+                _endpoint: ModelEndpoint,
+                _messages: list[dict[str, Any]],
+                **_kwargs: Any,
+            ) -> dict[str, Any]:
+                return {"role": "assistant", "content": "建设命令已确认。"}
+
+            agent = FallbackTrackingAgent(
+                FakeRuntimeConfig(root, pool),
+                store,
+                model_pool_runtime=ModelPoolRuntime(pool),
+                completion_fn=completion,
+                toolbox_factory=CompletedConstructionToolbox,
+            )
+            agent.run_turn(
+                trigger="autonomous",
+                autonomy_mode="execute",
+            )
+
+            self.assertFalse(agent.fallback_called)
 
 
 if __name__ == "__main__":

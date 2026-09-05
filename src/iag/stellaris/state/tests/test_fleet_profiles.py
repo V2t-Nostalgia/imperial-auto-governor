@@ -26,10 +26,12 @@ country=
   {
    owned_fleets=
    {
+    { fleet=2829 }
     { fleet=3 }
     { fleet=16777283 }
    }
   }
+  owned_planets={ 3 }
   fleet_template_manager=
   {
    fleet_template={ 0 16777231 }
@@ -42,9 +44,14 @@ country=
 }
 fleet=
 {
- 3=
+3=
  {
-  name={ key="HUMAN1_FLEET_1" }
+  name=
+  {
+   key="%SEQ%"
+   variable={ key="fmt" value={ key="HUMAN1_FLEET" } }
+   variable={ key="num" value={ key="1" } }
+  }
   fleet_template=0
   military_power=417.25
   ships={ 4 5 }
@@ -125,7 +132,7 @@ fleet_template=
 }
 galactic_object=
 {
- 375=
+375=
  {
   name={ key="NAME_Alpha_Centauri" }
   planet=260
@@ -133,6 +140,7 @@ galactic_object=
   star_class="sc_binary_1"
   discovery={ 0 }
   starbases={ 118 }
+  hyperlane={ { to=486 length=10 } }
  }
  486=
  {
@@ -141,6 +149,7 @@ galactic_object=
   planet=3
   star_class="sc_g"
   discovery={ 0 }
+  hyperlane={ { to=375 length=10 } }
  }
 }
 planets=
@@ -219,8 +228,18 @@ class ExtractFleetProfilesTests(unittest.TestCase):
             12.25,
         )
         self.assertEqual(systems[375]["coordinate_targets"], [])
+        self.assertEqual(systems[375]["hyperlane_neighbors"], [486])
+        self.assertTrue(systems[375]["owned_by_owner"])
+        self.assertEqual(
+            systems[375]["ownership_evidence"],
+            ["owned_starbase"],
+        )
+        self.assertTrue(systems[486]["owned_by_owner"])
+        self.assertEqual(systems[486]["owned_colony_ids"], [3])
         fleets = {item["fleet_id"]: item for item in result["fleets"]}
         self.assertEqual(fleets[3]["military_power"], 417.25)
+        self.assertEqual(fleets[3]["name_key"], "%SEQ%")
+        self.assertEqual(fleets[3]["display_name_hint"], "HUMAN1_FLEET 1")
         self.assertTrue(fleets[3]["player_controllable"])
         self.assertEqual(
             fleets[3]["movement"]["current_coordinate"],
@@ -259,6 +278,12 @@ class ExtractFleetProfilesTests(unittest.TestCase):
                 "destination_object": 118,
             },
         )
+        self.assertEqual(
+            move["source_fleet"]["display_name_hint"],
+            "HUMAN1_FLEET_2",
+        )
+        self.assertTrue(move["destination_system"]["adjacent_to_source"])
+        self.assertTrue(move["destination_system"]["owned_by_owner"])
 
     def test_selects_bounded_same_system_coordinate(self) -> None:
         result = extract_fleet_profiles(FIXTURE)

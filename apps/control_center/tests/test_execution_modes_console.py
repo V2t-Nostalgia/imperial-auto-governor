@@ -87,6 +87,12 @@ class ExecutionModeConsoleTests(unittest.TestCase):
         )
         self.service = service
 
+    def test_new_configuration_prefers_session_proxy(self) -> None:
+        self.assertEqual(
+            self.service.public_execution_settings()["execution_mode"],
+            "session_proxy",
+        )
+
     def test_fleet_tools_require_session_proxy_mode(self) -> None:
         with self.assertRaisesRegex(ConsoleError, "只能在会话代理"):
             self.service.save_execution_settings(

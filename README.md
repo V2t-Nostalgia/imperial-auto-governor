@@ -2,14 +2,16 @@
 
 Imperial Auto Governor（IAG）正在从单一的《Stellaris》经济建设 Agent，演进为一个可承载多个领域 Application 的群星 Agent 平台。
 
-当前 `v0.5.9` Draft 在已跑通的 v0.5.8 建设链上增加了可选的会话代理执行模式，以及实验性的 `fleet_operations` 与 `research_strategy` Application。经济治理仍由 `economy_governance` 承担；外交等领域尚未实现。
+正式版 `v0.5.9` 在已跑通的 v0.5.8 建设链上，将 Windows 会话代理提升为推荐执行方式，并加入实验性的 `fleet_operations` 与 `research_strategy` Application。经济治理仍由 `economy_governance` 承担；外交等领域尚未实现。
+
+经济治理、科研策略和舰队行动现在分别由独立的持久 Agent 运行。三者拥有各自的角色提示词、工具白名单、会话历史和 Application 模型绑定；网页会话栏可以明确选择对话对象。旧配置只有经济模型绑定时，科研和舰队会临时沿用该模型，但不会取得经济工具，也不会自动改写玩家配置。所有游戏副作用仍通过同一个控制台任务锁串行执行。
 
 ## 核心链路
 
 IAG 的核心不是 Clausewitz Mod 直接修改玩家殖民地，而是经过验证的联机协作执行链。玩家可以选择两种执行方式：
 
-- `carrier_click`：稳定默认模式。载体星球产生合法命令，Host Bridge 在命令进入房主前做受约束改写。
-- `session_proxy`：Windows 实验模式。合作端进房前启动会话代理，先按本机 Stellaris/Steam UDP 端口发现局域网直连或公网中继的实际可靠流，再插入已验证的完整命令并持续维护偏移、ACK 与 actor serial 映射。
+- `session_proxy`：Windows 推荐模式。合作端进房前启动会话代理，先按本机 Stellaris/Steam UDP 端口发现局域网直连或公网中继的实际可靠流，再插入已验证的完整命令并持续维护偏移、ACK 与 actor serial 映射；不依赖载体 Mod 或固定点击校准。
+- `carrier_click`：兼容模式。载体 Mod 让载体星球产生合法命令，Host Bridge 在命令进入房主前做受约束改写；选择该模式后，网页才显示载体点击校准与固定点击校验设置。
 
 两种方式共同遵守以下状态与审计流程：
 
@@ -17,8 +19,8 @@ IAG 的核心不是 Clausewitz Mod 直接修改玩家殖民地，而是经过验
 2. 存档解析器生成帝国、殖民地、科研、舰队、区划、区域与建筑槽状态。
 3. 规则引擎生成游戏当前允许的候选，模型只从候选中决策。
 4. Execution Broker 根据玩家选择调用载体点击链或会话代理链。
-5. 房主权威实例处理经过确定性校验的命令。
-6. 房主处理并广播权威结果。
+5. 房主权威实例处理经过确定性校验的命令并广播结果。
+6. 执行链将广播与精确动作目标相关联，拒绝用相似回包冒充确认。
 7. 动作若依赖游戏新分配的 ID，新存档直接唤醒固定续接器，不再重复调用模型。
 8. 执行账本依据网络证据或后续存档确认结果，而不是相信模型自述。
 
@@ -45,6 +47,24 @@ flowchart LR
     E --> C
 ```
 
+## v0.5.9 协议执行覆盖
+
+会话代理目前登记 24 个可独立验收的动作。每个动作都具有结构化目标、离线 fixture、动态长度构造和房主权威回包相关性检查：
+
+| 领域 | 已接入会话代理的动作 |
+|---|---|
+| 殖民地经济 | 建筑建设、升级、替换，基础区划建设，区域特化 |
+| 科研 | 开始科研、停止科研 |
+| 舰队 | 跨对象移动、星系内坐标移动、攻击敌对舰队 |
+| 民用舰船 | 科研船／工程船自动化，工程船建造恒星基地 |
+| 殖民 | 订购殖民船并殖民、现成殖民船发起殖民 |
+| 恒星基地 | 升级，模块建造／替换，建筑建造／替换 |
+| 舰船与编制 | 船坞直接建造、创建舰船设计、创建舰队模板、目标编制增减、两阶段增援 |
+
+其中新增的 `6b33`、`8f32`、`e02c`、`3d37`、`e62c` 及恒星基地 `b43d` 子类型均来自 Stellaris 4.4.6 的非房主请求／房主权威广播配对。`8f32` 和 `3d37` 同时验证了超过 255 字节时的 `00 00 PP` 应用长度分帧。
+
+“已接入执行器”不等于“模型可以提交任意 ID”。经济、科研和舰队 Agent 只接收最新存档生成的合法候选与玩家授权；殖民、民用舰船自动化和恒星基地动作当前先进入无 LLM 的协议兼容性验收，待对应的存档状态验证器和 Application 候选层完成后再开放自主调用。自动化取消命令中的选择字段尚未确定，因此本版不构造该命令。
+
 ## 工程结构
 
 | 目录 | 职责 |
@@ -52,9 +72,9 @@ flowchart LR
 | `src/iag/core` | Agent 契约、Mandate、会话、上下文与 Application 注册机制 |
 | `src/iag/stellaris/state` | 存档接收、解析与游戏状态规范化 |
 | `src/iag/stellaris/execution` | 点击、端口发现、拦截、确认和执行监督 |
-| `src/iag/applications/economy_governance` | 当前可用的殖民地建设与经济治理 Application |
-| `src/iag/applications/fleet_operations` | 实验性舰队解析、逐舰队授权、移动、舰船设计与 Fleet Manager 编制增援工具 |
-| `src/iag/applications/research_strategy` | 实验性三系科研状态、候选验证与科技选择工具 |
+| `src/iag/applications/economy_governance` | 殖民地建设与经济治理 Agent、规则和工具 |
+| `src/iag/applications/fleet_operations` | 独立的实验性舰队 Agent、逐舰队授权、移动、舰船设计与 Fleet Manager 编制增援工具 |
+| `src/iag/applications/research_strategy` | 独立的实验性科研 Agent、三系科研状态、候选验证与科技选择工具 |
 | `src/iag/infrastructure` | 模型供应商和联网检索适配器 |
 | `apps/control_center` | 网页控制台和 Windows Agent 启动器 |
 | `apps/host_bridge` | 房主侧存档上传、入站改写和 GUI |
@@ -132,7 +152,7 @@ Linux 端可运行：
 - [逐文件代码地图](docs/code-map/FILE_INDEX.md)
 - [v0.5.8 原始运行文档](docs/reference/v0_5_8/AGENT_RUNTIME.md)
 - [游戏内对话叠加层](apps/game_overlay/README.md)
-- [v0.5.9 Draft 说明](docs/releases/v0.5.9.md)
+- [v0.5.9 版本说明](docs/releases/v0.5.9.md)
 
 ## 许可证
 

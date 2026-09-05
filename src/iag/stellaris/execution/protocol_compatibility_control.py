@@ -26,6 +26,7 @@ from iag.stellaris.execution.protocol_compatibility import (
     new_report_document,
     now_iso,
     target_fingerprint,
+    target_placeholder_paths,
     validate_plan_document,
     write_report,
 )
@@ -151,6 +152,11 @@ def _scenario_probe(scenario: Mapping[str, Any]) -> dict[str, Any]:
         "operator_verdict": "not_checked",
     }
     if not result["enabled"]:
+        return result
+    placeholder_paths = target_placeholder_paths(scenario["target"])
+    if placeholder_paths:
+        result["offline_status"] = "unconfigured"
+        result["placeholder_paths"] = placeholder_paths
         return result
     try:
         probe = build_action_probe(
@@ -475,7 +481,8 @@ class ProtocolCompatibilityControl:
                 item
                 for item in report["scenarios"]
                 if item.get("enabled") is True
-                and item.get("offline_status") != "passed"
+                and item.get("offline_status")
+                not in {"passed", "unconfigured"}
             ]
             passed = not fixture_failures and not scenario_failures
             report["status"] = "passed" if passed else "failed"
@@ -529,6 +536,17 @@ class ProtocolCompatibilityControl:
             ]
             if not enabled:
                 raise ProtocolCompatibilityError("至少启用一个联机验收动作。")
+            unconfigured = [
+                str(item["id"])
+                for item in enabled
+                if target_placeholder_paths(item["target"])
+            ]
+            if unconfigured:
+                raise ProtocolCompatibilityError(
+                    "以下启用动作仍含示例占位符，不能启动联机验收："
+                    + ", ".join(unconfigured)
+                    + "。请从当前存档填写真实目标，或禁用这些动作。"
+                )
             state = self._load_state()
             plan_sha256 = self._plan_sha256(plan)
             if state.get("offline_plan_sha256") != plan_sha256:
@@ -1001,11 +1019,24 @@ class ProtocolCompatibilityControl:
                 plan_sha256
                 and state.get("offline_plan_sha256") == plan_sha256
             )
+            unconfigured_enabled_ids = [
+                str(item["id"])
+                for item in (plan or {}).get("scenarios", [])
+                if item.get("enabled") is True
+                and target_placeholder_paths(item.get("target", {}))
+            ]
+            live_targets_ready = bool(
+                enabled_count and not unconfigured_enabled_ids
+            )
             workflow_messages = {
                 "idle": "尚未创建协议验收计划。",
                 "plan_ready": "计划可编辑；请填写当前存档目标并运行离线检查。",
                 "offline_running": "正在执行离线构包检查。",
-                "offline_passed": "当前计划离线检查通过，可以进房前启动代理。",
+                "offline_passed": (
+                    "离线构包器检查通过；请先填写或禁用仍含占位符的联机目标。"
+                    if unconfigured_enabled_ids
+                    else "当前计划离线检查通过，可以进房前启动代理。"
+                ),
                 "offline_failed": "离线检查失败；不会启动代理或触碰网络。",
                 "waiting_for_room": "代理已启动；现在进入测试房间并确认锁流。",
                 "ready_for_action": "可靠流已锁定；检查当前动作后单次执行。",
@@ -1027,6 +1058,8 @@ class ProtocolCompatibilityControl:
                     "live_active": live_active,
                     "current_scenario_id": current_id,
                     "enabled_count": enabled_count,
+                    "live_targets_ready": live_targets_ready,
+                    "unconfigured_enabled_ids": unconfigured_enabled_ids,
                     "workflow_message": workflow_messages.get(
                         phase,
                         phase,
@@ -1043,6 +1076,7 @@ class ProtocolCompatibilityControl:
                         and not live_active
                         and offline_current
                         and enabled_count > 0
+                        and live_targets_ready
                     ),
                     "can_confirm_room": phase == "waiting_for_room",
                     "can_execute": phase == "ready_for_action",

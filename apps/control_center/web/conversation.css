@@ -233,7 +233,7 @@
 
 .conversation-toolbar {
   display: grid;
-  grid-template-columns: minmax(230px, 1fr) auto auto;
+  grid-template-columns: minmax(190px, 1fr) minmax(190px, 1fr) auto auto auto;
   gap: 9px;
   align-items: end;
   margin-bottom: 12px;

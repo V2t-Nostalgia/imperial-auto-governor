@@ -13,6 +13,10 @@ import re
 from pathlib import Path
 from typing import Any
 
+from iag.stellaris.game_knowledge import (
+    ship_component_catalog,
+    ship_section_rule,
+)
 from iag.stellaris.state.extract_game_state import (
     construction_items,
     construction_queues,
@@ -34,6 +38,7 @@ from iag.stellaris.state.planet_profiles import (
     load_gamestate,
     parse_numeric_map,
 )
+from iag.stellaris.state.research_profiles import extract_research_profile
 
 
 INVALID_OBJECT_ID = 0xFFFFFFFF
@@ -196,10 +201,69 @@ def _design_profile(design_id: int, block: str) -> dict[str, Any]:
     }
 
 
+def _utility_slot_size(
+    component_slot: str,
+    section_rule: dict[str, Any],
+) -> str | None:
+    fields = {
+        "SMALL_UTILITY_": ("small", "small_utility_slots"),
+        "MEDIUM_UTILITY_": ("medium", "medium_utility_slots"),
+        "LARGE_UTILITY_": ("large", "large_utility_slots"),
+        "AUX_UTILITY_": ("aux", "aux_utility_slots"),
+    }
+    for prefix, (size, count_field) in fields.items():
+        if not component_slot.startswith(prefix):
+            continue
+        try:
+            position = int(component_slot.removeprefix(prefix))
+        except ValueError:
+            return None
+        if 1 <= position <= int(section_rule.get(count_field) or 0):
+            return size
+    return None
+
+
+def _component_matches_slot(
+    component: dict[str, Any],
+    *,
+    slot_template: str | None,
+    utility_size: str | None,
+) -> bool:
+    if utility_size is not None:
+        return (
+            component.get("kind") == "utility"
+            and component.get("size") == utility_size
+        )
+    if component.get("kind") != "weapon":
+        return False
+    tags = set(component.get("tags", []))
+    if slot_template == "small_turret":
+        return component.get("size") == "small" and "s_slot" in tags
+    if slot_template == "point_defence_turret":
+        return component.get("size") == "point_defence"
+    return False
+
+
 def _component_choice_index(
     designs: list[dict[str, Any]],
+    *,
+    game_root: Path | None = None,
+    known_technologies: set[str] | None = None,
 ) -> list[dict[str, Any]]:
-    choices: dict[tuple[str, str, str, str], set[str]] = {}
+    choices: dict[
+        tuple[str, str, str, str],
+        dict[str, set[str]],
+    ] = {}
+
+    def add_choice(
+        key: tuple[str, str, str, str],
+        component_id: str,
+        authority: str,
+    ) -> None:
+        choices.setdefault(key, {}).setdefault(component_id, set()).add(
+            authority
+        )
+
     for design in designs:
         for stage in design["growth_stages"]:
             ship_size = str(stage.get("ship_size") or "")
@@ -225,7 +289,51 @@ def _component_choice_index(
                         section_slot,
                         component_slot,
                     )
-                    choices.setdefault(key, set()).add(component_id)
+                    add_choice(key, component_id, "save_observed")
+
+    if game_root is not None:
+        known = known_technologies or set()
+        component_rules = [
+            component
+            for component in ship_component_catalog(game_root)
+            if not component.get("hidden", False)
+            and component.get("source_family") == "standard"
+            and bool(component.get("prerequisites"))
+            and set(component["prerequisites"]).issubset(known)
+            and component.get("potential_policy")
+            in {"unrestricted", "regular_ship_or_arkship"}
+        ]
+        for design in designs:
+            for stage in design["growth_stages"]:
+                ship_size = str(stage.get("ship_size") or "")
+                for section in stage["sections"]:
+                    section_template = str(section.get("template") or "")
+                    section_slot = str(section.get("slot") or "")
+                    rule = ship_section_rule(game_root, section_template)
+                    if rule.get("status") != "available":
+                        continue
+                    explicit_slots = rule.get("component_slots", {})
+                    for installed in section["components"]:
+                        component_slot = str(installed.get("slot") or "")
+                        key = (
+                            ship_size,
+                            section_template,
+                            section_slot,
+                            component_slot,
+                        )
+                        slot_template = explicit_slots.get(component_slot)
+                        utility_size = _utility_slot_size(component_slot, rule)
+                        for component in component_rules:
+                            if _component_matches_slot(
+                                component,
+                                slot_template=slot_template,
+                                utility_size=utility_size,
+                            ):
+                                add_choice(
+                                    key,
+                                    str(component["component_id"]),
+                                    "installed_rule_and_owned_technology",
+                                )
     return [
         {
             "ship_size": key[0],
@@ -233,6 +341,13 @@ def _component_choice_index(
             "section_slot": key[2],
             "component_slot": key[3],
             "component_ids": sorted(component_ids),
+            "component_evidence": [
+                {
+                    "component_id": component_id,
+                    "authorities": sorted(authorities),
+                }
+                for component_id, authorities in sorted(component_ids.items())
+            ],
         }
         for key, component_ids in sorted(choices.items())
     ]
@@ -292,7 +407,12 @@ def _system_index(text: str) -> dict[int, dict[str, Any]]:
     return output
 
 
-def extract_ship_profiles(text: str, owner: int | None = None) -> dict[str, Any]:
+def extract_ship_profiles(
+    text: str,
+    owner: int | None = None,
+    *,
+    game_root: Path | None = None,
+) -> dict[str, Any]:
     """Return player-owned active designs and direct shipyard queues."""
     players = player_countries(text)
     if owner is None:
@@ -315,16 +435,32 @@ def extract_ship_profiles(text: str, owner: int | None = None) -> dict[str, Any]
         for design_id in design_ids
         if (block := design_blocks.get(design_id)) is not None
     ]
+    try:
+        known_technologies = set(
+            extract_research_profile(text, owner=owner)["known_technologies"]
+        )
+    except ValueError:
+        known_technologies = set()
 
     queues = construction_queues(text)
     items = construction_items(text)
     starbases = starbase_map(text)
     systems = _system_index(text)
+    queue_to_starbase: dict[int, int] = {}
+    for starbase_index, starbase_block in starbases.items():
+        if not starbase_block:
+            continue
+        queue_id = integer_scalar(starbase_block, "shipyard_build_queue")
+        if queue_id not in (None, INVALID_OBJECT_ID):
+            queue_to_starbase[int(queue_id)] = starbase_index
+
     shipyards: list[dict[str, Any]] = []
     for queue_id, queue in sorted(queues.items()):
         if not queue or integer_scalar(queue, "owner") != owner:
             continue
-        if bare_scalar(queue, "type") != "ships":
+        referenced_starbase = queue_to_starbase.get(queue_id)
+        legacy_ship_queue = bare_scalar(queue, "type") == "ships"
+        if referenced_starbase is None and not legacy_ship_queue:
             continue
         location = optional_section(queue, "location")
         if integer_scalar(location, "type") != 0:
@@ -332,12 +468,23 @@ def extract_ship_profiles(text: str, owner: int | None = None) -> dict[str, Any]
         starbase_index = integer_scalar(location, "id")
         if starbase_index is None:
             continue
+        if (
+            referenced_starbase is not None
+            and starbase_index != referenced_starbase
+        ):
+            continue
         starbase = starbases.get(starbase_index) or ""
         queued_handles = integer_values(queue, "items")
         modules = re.findall(r"\b\d+=([A-Za-z0-9_]+)", optional_section(starbase, "modules"))
         shipyards.append(
             {
                 "build_queue_id": queue_id,
+                "queue_type": bare_scalar(queue, "type"),
+                "queue_link_authority": (
+                    "starbase_shipyard_build_queue"
+                    if referenced_starbase is not None
+                    else "legacy_symbolic_queue_type"
+                ),
                 "owner_country_id": owner,
                 "starbase_index": starbase_index,
                 "station_object": integer_scalar(starbase, "station"),
@@ -363,7 +510,17 @@ def extract_ship_profiles(text: str, owner: int | None = None) -> dict[str, Any]
         "game_date": date_match.group(1) if date_match else None,
         "owner_country_id": owner,
         "designs": designs,
-        "component_choice_index": _component_choice_index(designs),
+        "component_choice_index": _component_choice_index(
+            designs,
+            game_root=game_root,
+            known_technologies=known_technologies,
+        ),
+        "component_choice_authority": (
+            "save_observed_plus_installed_rules_and_owned_technology"
+            if game_root is not None
+            else "save_observed_only"
+        ),
+        "known_technologies": sorted(known_technologies),
         "shipyards": shipyards,
         "design_protocol_state": "fb2d_single_section_corvette_verified_experimental",
         "construction_protocol_state": "b43d_one_command_per_ship_verified_experimental",
@@ -440,7 +597,8 @@ def clone_ship_design(
         )
         if component_id not in choices.get(choice_key, set()):
             raise ValueError(
-                f"{component_id} has not appeared in the same legal save-backed slot."
+                f"{component_id} is not legal for the same save-backed slot under "
+                "the observed design and installed game rules."
             )
         old_component = str(component.get("component_id") or "")
         if component_id == old_component:
@@ -526,5 +684,11 @@ def selected_ship_construction(
 def extract_ship_profiles_from_save(
     save_path: Path,
     owner: int | None = None,
+    *,
+    game_root: Path | None = None,
 ) -> dict[str, Any]:
-    return extract_ship_profiles(load_gamestate(save_path), owner=owner)
+    return extract_ship_profiles(
+        load_gamestate(save_path),
+        owner=owner,
+        game_root=game_root,
+    )

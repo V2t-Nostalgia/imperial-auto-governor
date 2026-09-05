@@ -7,12 +7,15 @@ let captureAction = "build_building";
 let captureStage = "open";
 let initialized = false;
 let conversationLastId = 0;
+const renderedConversationMessageIds = new Set();
 let activeConversationId = null;
 let loadedConversationId = null;
 let campaignCatalog = null;
 let campaignEditorMode = "create";
 let campaignEditorConversationId = null;
 let currentJobRunning = false;
+let latestStatus = null;
+let selectedConversationApplicationId = "economy_governance";
 let modelTemplates = [];
 let selectedTemplateId = "custom";
 let modelPools = [];
@@ -175,6 +178,46 @@ async function post(path, body = {}) {
 function message(text, isError = false) {
   $("footer-message").textContent = text;
   $("footer-message").style.color = isError ? "var(--red)" : "var(--muted)";
+}
+
+async function downloadPairedHostBridge(event) {
+  event.preventDefault();
+  const link = $("download-host-bridge");
+  if (link.getAttribute("aria-disabled") === "true") return;
+  const status = $("host-bridge-download-status");
+  const originalText = link.textContent;
+  const downloadPath = link.getAttribute("href");
+  link.setAttribute("aria-disabled", "true");
+  link.textContent = "正在生成配对包...";
+  status.textContent = "正在准备当前 Agent 的地址、证书指纹和连接令牌，请稍候。";
+  try {
+    const probeUrl = new URL(downloadPath, window.location.href);
+    probeUrl.searchParams.set("prepare", Date.now().toString());
+    const response = await fetch(probeUrl, {
+      method: "HEAD",
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      throw new Error("HTTP " + response.status);
+    }
+
+    const trigger = document.createElement("a");
+    trigger.href = probeUrl.href;
+    trigger.download = "IAGHostBridge-paired-windows-x64.zip";
+    trigger.hidden = true;
+    document.body.appendChild(trigger);
+    trigger.click();
+    trigger.remove();
+    status.textContent = "配对包已就绪，浏览器下载已经开始。";
+    message("Windows 房主执行桥下载已开始");
+  } catch (error) {
+    status.textContent = "配对包下载失败：" + error.message + "。可以再次点击重试。";
+    message("房主执行桥下载失败：" + error.message, true);
+  } finally {
+    link.removeAttribute("aria-disabled");
+    link.textContent = originalText;
+  }
 }
 
 function formatAction(manifest) {
@@ -972,12 +1015,15 @@ function renderStrategy(strategy, conversationId, running = false) {
 function updateExecutionModeVisibility() {
   const proxyMode = $("execution-mode").value === "session_proxy";
   $("session-proxy-settings").hidden = !proxyMode;
+  $("carrier-calibration-panel").hidden = proxyMode;
+  $("fixed-click-guard-row").hidden = proxyMode;
+  $("fixed-click-guard-hint").hidden = proxyMode;
   $("fixed-click-guard-enabled").disabled = proxyMode;
 }
 
 function renderExecutionSettings(settings, proxy = {}, running = false) {
   if (!executionSettingsInitialized) {
-    $("execution-mode").value = settings.execution_mode || "carrier_click";
+    $("execution-mode").value = settings.execution_mode || "session_proxy";
     $("fixed-click-guard-enabled").checked =
       settings.fixed_click_guard_enabled !== false;
     $("maximum-source-save-lag-versions").value =
@@ -1531,7 +1577,45 @@ function renderAutonomy(status) {
     "status-tag " + (mode === "execute" ? "good" : (mode === "advisory" ? "warn" : ""));
 }
 
+function renderConversationApplicationSelector(model, running) {
+  const select = $("conversation-application");
+  const routes = model?.application_agents || [];
+  const previous = selectedConversationApplicationId || select.value;
+  select.replaceChildren();
+  for (const route of routes) {
+    const option = document.createElement("option");
+    option.value = route.application_id;
+    const suffixes = [];
+    if (route.binding_mode === "inherited") suffixes.push("沿用经济模型");
+    if (!route.tools_enabled) suffixes.push("功能未启用");
+    if (!route.conversation_supported) suffixes.push("模型不支持工具");
+    option.textContent = route.display_name +
+      (suffixes.length ? " · " + suffixes.join(" · ") : "");
+    option.disabled = !route.tools_enabled || !route.conversation_supported;
+    select.appendChild(option);
+  }
+  const preferred = routes.find(
+    (route) => route.application_id === previous &&
+      route.tools_enabled && route.conversation_supported,
+  );
+  const fallback = routes.find(
+    (route) => route.application_id === "economy_governance",
+  ) || routes.find((route) => route.tools_enabled && route.conversation_supported);
+  selectedConversationApplicationId =
+    preferred?.application_id || fallback?.application_id || "economy_governance";
+  select.value = selectedConversationApplicationId;
+  select.disabled = running || !routes.length;
+  const selected = routes.find(
+    (route) => route.application_id === selectedConversationApplicationId,
+  );
+  $("chat-input").placeholder = selected
+    ? "向" + selected.display_name + "下达要求或询问本领域状态。Enter 发送，Shift+Enter 换行。"
+    : "告诉灰风新的要求。Enter 发送，Shift+Enter 换行。";
+  return selected;
+}
+
 function renderStatus(status) {
+  latestStatus = status;
   const network = status.network || {};
   const bridgeClient = status.save_ingest?.client || {};
   const bridgeReady = Boolean(
@@ -1644,13 +1728,17 @@ function renderStatus(status) {
   currentJobRunning = running;
   const binding = status.campaign_binding || {};
   const executionAllowed = Boolean(binding.execution_allowed);
+  const selectedConversationRoute = renderConversationApplicationSelector(
+    status.model || {},
+    running,
+  );
   $("job-state").textContent = running
     ? job.kind + " 运行中"
     : (job.message || job.state || "空闲");
   for (const id of ["plan-button", "send-message", "review-button", "save-autonomy"]) {
     $(id).disabled = running;
   }
-  if (!status.model?.conversation_supported) {
+  if (!selectedConversationRoute?.conversation_supported) {
     $("send-message").disabled = true;
     $("review-button").disabled = true;
   }
@@ -1733,14 +1821,24 @@ function renderStatus(status) {
 }
 
 function conversationRoleLabel(item) {
-  if (item.kind === "autonomy_trigger") return "自主巡检";
-  if (item.role === "user") return "玩家";
-  if (item.role === "assistant") return "灰风";
-  if (item.role === "tool") return "工具审计";
+  const applicationName = item.metadata?.application_display_name;
+  if (item.kind === "autonomy_trigger") {
+    return applicationName ? applicationName + "巡检" : "自主巡检";
+  }
+  if (item.role === "user") {
+    return applicationName ? "玩家 → " + applicationName : "玩家";
+  }
+  if (item.role === "assistant") return applicationName || "灰风";
+  if (item.role === "tool") {
+    return applicationName ? applicationName + "工具审计" : "工具审计";
+  }
   return "系统";
 }
 
 function appendConversationMessage(item) {
+  const messageKey = String(loadedConversationId || "unknown") + ":" + item.id;
+  if (renderedConversationMessageIds.has(messageKey)) return false;
+  renderedConversationMessageIds.add(messageKey);
   const log = $("conversation-log");
   const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
   const article = document.createElement("article");
@@ -1763,6 +1861,7 @@ function appendConversationMessage(item) {
   article.append(heading, body);
   log.appendChild(article);
   if (nearBottom) log.scrollTop = log.scrollHeight;
+  return true;
 }
 
 async function loadConversation(reset = false) {
@@ -1771,6 +1870,7 @@ async function loadConversation(reset = false) {
     (activeConversationId && loadedConversationId !== activeConversationId)
   ) {
     conversationLastId = 0;
+    renderedConversationMessageIds.clear();
     $("conversation-log").replaceChildren();
   }
   const requestedAfterId = conversationLastId;
@@ -1783,6 +1883,7 @@ async function loadConversation(reset = false) {
   ) {
     loadedConversationId = value.conversation_id;
     conversationLastId = 0;
+    renderedConversationMessageIds.clear();
     $("conversation-log").replaceChildren();
     if (requestedAfterId !== 0) return loadConversation(false);
   } else {
@@ -1866,6 +1967,9 @@ function protocolScenarioResult(scenario, reportItem) {
     return ["等待玩家核对", "warn"];
   }
   if (reportItem.offline_status === "passed") return ["离线通过", "good"];
+  if (reportItem.offline_status === "unconfigured") {
+    return ["待填写联机目标", "warn"];
+  }
   if (reportItem.offline_status === "build_failed") return ["构包失败", "bad"];
   return [reportItem.offline_status || "等待检查", "warn"];
 }
@@ -1894,7 +1998,11 @@ function renderProtocolSuite(payload) {
   $("protocol-detected-version").textContent = detected;
   $("protocol-plan-integrity").textContent = !plan
     ? "尚未创建计划"
-    : (payload.offline_current ? "当前计划离线检查有效" : "计划尚未通过离线检查");
+    : (payload.offline_current
+      ? (state.live_targets_ready
+        ? "离线检查有效，联机目标已就绪"
+        : "离线检查有效，仍有联机目标待填写")
+      : "计划尚未通过离线检查");
   $("protocol-enabled-count").textContent =
     enabledCount + " / " +
     Number(payload?.catalog?.commands?.length || 0);
@@ -2003,8 +2111,7 @@ function renderProtocolSuite(payload) {
   $("run-protocol-offline-check").disabled =
     protocolSuiteBusy || !actions.can_run_offline;
   $("start-protocol-suite").disabled =
-    protocolSuiteBusy || liveActive || !plan ||
-    enabledCount === 0 ||
+    protocolSuiteBusy || !actions.can_start_live ||
     !$("protocol-disposable-authorized").checked;
   $("confirm-protocol-room").disabled =
     protocolSuiteBusy || !actions.can_confirm_room;
@@ -2074,6 +2181,8 @@ async function loadPrompt() {
     (value.versions?.length || 0) + " 历史版本";
 }
 
+$("download-host-bridge").addEventListener("click", downloadPairedHostBridge);
+
 $("new-campaign").addEventListener("click", () => {
   openCampaignEditor("create");
 });
@@ -2140,13 +2249,28 @@ $("show-archived-campaigns").addEventListener("change", () => {
     .catch((error) => message(error.message, true));
 });
 
+$("conversation-application").addEventListener("change", (event) => {
+  selectedConversationApplicationId = event.currentTarget.value;
+  const route = (latestStatus?.model?.application_agents || []).find(
+    (item) => item.application_id === selectedConversationApplicationId,
+  );
+  if (route) {
+    $("chat-input").placeholder =
+      "向" + route.display_name + "下达要求或询问本领域状态。" +
+      "Enter 发送，Shift+Enter 换行。";
+  }
+});
+
 $("send-message").addEventListener("click", async () => {
   const text = $("chat-input").value.trim();
   if (!text) return;
   try {
-    await post("/api/conversation/message", {text});
+    await post("/api/conversation/message", {
+      text,
+      application_id: selectedConversationApplicationId,
+    });
     $("chat-input").value = "";
-    message("消息已发送，灰风正在处理");
+    message("消息已发送，所选 Agent 正在处理");
     await Promise.all([refresh(), loadConversation()]);
   } catch (error) {
     message(error.message, true);
@@ -2162,8 +2286,10 @@ $("chat-input").addEventListener("keydown", (event) => {
 
 $("review-button").addEventListener("click", async () => {
   try {
-    await post("/api/conversation/review");
-    message("已触发一次立即巡检");
+    await post("/api/conversation/review", {
+      application_id: selectedConversationApplicationId,
+    });
+    message("已触发所选领域的立即巡检");
     await Promise.all([refresh(), loadConversation()]);
   } catch (error) {
     message(error.message, true);

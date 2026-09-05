@@ -10,7 +10,7 @@
         "model_id": "primary-model",
         "model": "YOUR_MODEL",
         "model_transport": "openai_sdk",
-        "provider": "responses_compatible",
+        "provider": "chat_completions_compatible",
         "base_url": "https://api.openai.com/v1",
         "supports_reasoning": false,
         "model_context_window_tokens": 128000,
@@ -64,10 +64,48 @@
           "reddit.com"
         ]
       }
+    },
+    {
+      "profile_id": "research-default",
+      "display_name": "科研战略默认配置",
+      "application_id": "research_strategy",
+      "pool_id": "primary",
+      "model_id": "primary-model",
+      "request_options": {
+        "temperature": 0.15,
+        "request_body_overrides": {}
+      },
+      "application_options": {
+        "tool_calling_enabled": true,
+        "context_compression_enabled": true,
+        "context_compression_trigger_percent": 80,
+        "context_compression_target_percent": 35,
+        "context_compression_min_recent_segments": 8
+      }
+    },
+    {
+      "profile_id": "fleet-default",
+      "display_name": "舰队行动默认配置",
+      "application_id": "fleet_operations",
+      "pool_id": "primary",
+      "model_id": "primary-model",
+      "request_options": {
+        "temperature": 0.15,
+        "request_body_overrides": {}
+      },
+      "application_options": {
+        "tool_calling_enabled": true,
+        "context_compression_enabled": true,
+        "context_compression_trigger_percent": 80,
+        "context_compression_target_percent": 35,
+        "context_compression_min_recent_segments": 8
+      }
     }
   ],
   "application_model_bindings": {
-    "economy_governance": "economy-default"
+    "economy_governance": "economy-default",
+    "research_strategy": "research-default",
+    "fleet_operations": "fleet-default"
   },
   "minimum_confidence": 0.72,
   "mineral_reserve": 1000,
@@ -115,7 +153,7 @@
   "host_discovery_timeout_seconds": 20,
   "host_discovery_poll_seconds": 0.5,
   "network_telemetry_max_age_seconds": 15,
-  "execution_mode": "carrier_click",
+  "execution_mode": "session_proxy",
   "execution_transport": "windows_host_bridge",
   "session_proxy_local_ip": "",
   "session_proxy_host_ip": "",

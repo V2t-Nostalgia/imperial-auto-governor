@@ -333,7 +333,9 @@ class ConversationAgent:
                 metadata={"trigger": trigger},
             )
 
-        allow_execute = autonomy_mode == "execute"
+        # Autonomy controls scheduled reviews. A direct player message remains
+        # an explicit authorization channel even while autonomous work is paused.
+        allow_execute = trigger == "chat" or autonomy_mode == "execute"
         toolbox = self.toolbox_factory(
             config,
             self.store,
@@ -524,7 +526,14 @@ class ConversationAgent:
                 visible=True,
             )
 
-        if trigger in {"manual_review", "autonomous"} and not toolbox.review_recorded:
+        turn_action_recorded = bool(
+            getattr(toolbox, "turn_action_recorded", False)
+        )
+        if (
+            trigger in {"manual_review", "autonomous"}
+            and not toolbox.review_recorded
+            and not turn_action_recorded
+        ):
             self._record_fallback_noop(
                 toolbox,
                 reason="模型没有在工具轮次上限内完成 prepare 或 noop 记录。",
@@ -538,11 +547,21 @@ class ConversationAgent:
                 visible=True,
             )
 
-        confirmed_items = list(
-            getattr(toolbox, "successful_executions", [])
+        confirmed_reader = getattr(toolbox, "confirmed_turn_actions", None)
+        confirmed_items = (
+            list(confirmed_reader())
+            if callable(confirmed_reader)
+            else list(getattr(toolbox, "successful_executions", []))
         )
-        provisional_items = list(
-            getattr(toolbox, "provisional_executions", [])
+        provisional_reader = getattr(
+            toolbox,
+            "provisional_turn_actions",
+            None,
+        )
+        provisional_items = (
+            list(provisional_reader())
+            if callable(provisional_reader)
+            else list(getattr(toolbox, "provisional_executions", []))
         )
         if confirmed_items or provisional_items:
             fact_lines = ["本地执行事实账本："]
@@ -552,8 +571,8 @@ class ConversationAgent:
                 )
             if provisional_items:
                 fact_lines.append(
-                    f"- 本轮暂定提交 {len(provisional_items)} 项；均未确认，"
-                    "只能在新存档中逐项核验，不能视为已完成。"
+                    f"- 本轮有 {len(provisional_items)} 项尚待完整确认或仅部分执行；"
+                    "只能按逐项记录和新存档核验，不能视为完整动作已完成。"
                 )
             fact_lines.append(
                 "- 规划事实以本条机器记录和后续存档为准，不以模型自然语言自述为准。"
