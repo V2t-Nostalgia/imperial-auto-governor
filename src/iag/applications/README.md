@@ -5,7 +5,7 @@ Application 是平台原生的专业能力模块。每个 Application 拥有受�
 当前内置注册表明确登记：
 
 - `economy_governance`：殖民地建设与经济治理。
-- `fleet_operations`：默认关闭的实验性舰队观察、移动、舰船设计与逐舰队编制增援。
+- `fleet_operations`：默认关闭的实验性舰队、民用船、殖民、恒星基地、舰船设计与逐舰队编制增援。
 - `research_strategy`：默认关闭的实验性科研候选读取和科技选择。
 
 三个 Application 由独立的持久模型 Agent 驱动：各自读取自己的模型配置、角色提示词、

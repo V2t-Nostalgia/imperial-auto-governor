@@ -5,7 +5,7 @@
 - Python 3.11+
 - Pydantic v2 用于跨 Agent 和执行边界的结构化契约
 - `asyncio` 作为后续并发调度基础
-- OpenAI Python SDK 作为 OpenAI-compatible 模型的默认传输实现
+- OpenAI 与 Anthropic Python SDK 分别作为 OpenAI-compatible 和 Anthropic Messages 模型的原生传输实现
 - Application 使用显式静态注册表
 - Content Pack 使用 TOML/JSON/YAML 等声明数据，不加载任意 Python
 

@@ -68,12 +68,18 @@ from iag.stellaris.execution.packet.expansion_commands import (
 from iag.stellaris.execution.packet.fleet_operation_commands import (
     ConstructionShipStarbaseTarget,
     FleetAttackTarget,
+    FleetRepairTarget,
+    FleetUpgradeTarget,
     ShipAutomationTarget,
     build_construction_ship_starbase_record,
     build_fleet_attack_record,
+    build_fleet_repair_record,
+    build_fleet_upgrade_record,
     build_ship_automation_record,
     parse_construction_ship_starbase_record,
     parse_fleet_attack_record,
+    parse_fleet_repair_record,
+    parse_fleet_upgrade_record,
     parse_ship_automation_record,
 )
 from iag.stellaris.execution.packet.fleet_reinforcement_commands import (
@@ -81,10 +87,10 @@ from iag.stellaris.execution.packet.fleet_reinforcement_commands import (
     FleetTemplateAddTarget,
     FleetTemplateCreationTarget,
     FleetTemplateRemoveTarget,
-    build_reinforcement_stage_record,
+    build_selected_fleet_reinforcement_record,
     build_template_creation_record,
     build_template_edit_record,
-    parse_reinforcement_stage,
+    parse_selected_fleet_reinforcement,
     parse_template_creation,
     parse_template_edit,
 )
@@ -672,6 +678,8 @@ def parse_arm_document(raw: Any, expected_session_id: str) -> ArmRequest:
             | FleetTemplateRemoveTarget
             | FleetReinforcementTarget
             | FleetAttackTarget
+            | FleetRepairTarget
+            | FleetUpgradeTarget
             | ConstructionShipStarbaseTarget
             | ShipAutomationTarget
             | OrderColonyShipTarget
@@ -780,6 +788,32 @@ def parse_arm_document(raw: Any, expected_session_id: str) -> ArmRequest:
                 "target_fleet_object",
             ),
         )
+    elif action == "repair_fleet":
+        target = FleetRepairTarget(
+            context_822c=_validate_u32(
+                int(target_raw.get("context_822c", 0)),
+                "context_822c",
+            ),
+            source_fleet_object=_validate_u32(
+                int(target_raw["source_fleet_object"]),
+                "source_fleet_object",
+            ),
+        )
+    elif action == "upgrade_fleet":
+        target = FleetUpgradeTarget(
+            context_822c=_validate_u32(
+                int(target_raw.get("context_822c", 0)),
+                "context_822c",
+            ),
+            source_fleet_object=_validate_u32(
+                int(target_raw["source_fleet_object"]),
+                "source_fleet_object",
+            ),
+            shipyard_build_queue_id=_validate_u32(
+                int(target_raw["shipyard_build_queue_id"]),
+                "shipyard_build_queue_id",
+            ),
+        )
     elif action == "build_starbase":
         target = ConstructionShipStarbaseTarget(
             source_fleet_object=_validate_u32(
@@ -827,9 +861,9 @@ def parse_arm_document(raw: Any, expected_session_id: str) -> ArmRequest:
                 int(target_raw["target_planet_id"]),
                 "target_planet_id",
             ),
-            source_planet_id=_validate_u32(
-                int(target_raw["source_planet_id"]),
-                "source_planet_id",
+            source_shipyard_build_queue_id=_validate_u32(
+                int(target_raw["source_shipyard_build_queue_id"]),
+                "source_shipyard_build_queue_id",
             ),
             system_name_key=str(target_raw["system_name_key"]),
         )
@@ -937,7 +971,7 @@ def parse_arm_document(raw: Any, expected_session_id: str) -> ArmRequest:
                 "growth_stage",
             ),
         )
-    elif action in {"reinforce_fleet_stage_1", "reinforce_fleet_stage_2"}:
+    elif action == "reinforce_selected_fleet":
         target = FleetReinforcementTarget(
             context_822c=_validate_u32(
                 int(target_raw.get("context_822c", 0)),
@@ -1689,6 +1723,24 @@ def _build_request_record(request: ArmRequest, command_serial: int) -> bytes:
             origin=request.request_origin,
             target=request.target,
         )
+    if request.action == "repair_fleet":
+        if not isinstance(request.target, FleetRepairTarget):
+            raise RuntimeError("The fleet-repair action has the wrong target type.")
+        return build_fleet_repair_record(
+            command_serial=command_serial,
+            actor=request.source_actor,
+            origin=request.request_origin,
+            target=request.target,
+        )
+    if request.action == "upgrade_fleet":
+        if not isinstance(request.target, FleetUpgradeTarget):
+            raise RuntimeError("The fleet-upgrade action has the wrong target type.")
+        return build_fleet_upgrade_record(
+            command_serial=command_serial,
+            actor=request.source_actor,
+            origin=request.request_origin,
+            target=request.target,
+        )
     if request.action == "build_starbase":
         if not isinstance(request.target, ConstructionShipStarbaseTarget):
             raise RuntimeError("The starbase-build action has the wrong target type.")
@@ -1802,14 +1854,10 @@ def _build_request_record(request: ArmRequest, command_serial: int) -> bytes:
             origin=request.request_origin,
             target=request.target,
         )
-    if request.action in {
-        "reinforce_fleet_stage_1",
-        "reinforce_fleet_stage_2",
-    }:
+    if request.action == "reinforce_selected_fleet":
         if not isinstance(request.target, FleetReinforcementTarget):
             raise RuntimeError("The reinforcement action has the wrong target type.")
-        return build_reinforcement_stage_record(
-            stage=1 if request.action.endswith("_1") else 2,
+        return build_selected_fleet_reinforcement_record(
             command_serial=command_serial,
             actor=request.source_actor,
             origin=request.request_origin,
@@ -1926,6 +1974,10 @@ def retag_matching_response(
                 parsed_target = _parse_fleet_coordinate_target(record)
             elif isinstance(request.target, FleetAttackTarget):
                 parsed_target = parse_fleet_attack_record(record)
+            elif isinstance(request.target, FleetRepairTarget):
+                parsed_target = parse_fleet_repair_record(record)
+            elif isinstance(request.target, FleetUpgradeTarget):
+                parsed_target = parse_fleet_upgrade_record(record)
             elif isinstance(request.target, ConstructionShipStarbaseTarget):
                 parsed_target = parse_construction_ship_starbase_record(record)
             elif isinstance(request.target, ShipAutomationTarget):
@@ -1966,13 +2018,9 @@ def retag_matching_response(
                     continue
                 parsed_target = parsed[1]
             elif isinstance(request.target, FleetReinforcementTarget):
-                parsed = parse_reinforcement_stage(record)
-                expected_stage = (
-                    1 if request.action == "reinforce_fleet_stage_1" else 2
-                )
-                if parsed is None or parsed[0] != expected_stage:
+                parsed_target = parse_selected_fleet_reinforcement(record)
+                if parsed_target is None:
                     continue
-                parsed_target = parsed[1]
             else:
                 raise TypeError("Unsupported correlated response target.")
             actor, origin = _actor_origin(record)
@@ -2037,6 +2085,15 @@ def retag_matching_response(
     elif isinstance(request.target, FleetAttackTarget):
         metadata["source_fleet_object"] = request.target.source_fleet_object
         metadata["target_fleet_object"] = request.target.target_fleet_object
+    elif isinstance(request.target, FleetRepairTarget):
+        metadata["source_fleet_object"] = request.target.source_fleet_object
+        metadata["context_822c"] = request.target.context_822c
+    elif isinstance(request.target, FleetUpgradeTarget):
+        metadata["source_fleet_object"] = request.target.source_fleet_object
+        metadata["context_822c"] = request.target.context_822c
+        metadata["shipyard_build_queue_id"] = (
+            request.target.shipyard_build_queue_id
+        )
     elif isinstance(request.target, ConstructionShipStarbaseTarget):
         metadata["source_fleet_object"] = request.target.source_fleet_object
         metadata["target_system_object"] = request.target.target_system_object
@@ -2046,7 +2103,9 @@ def retag_matching_response(
         metadata["automation_options"] = ",".join(request.target.options)
     elif isinstance(request.target, OrderColonyShipTarget):
         metadata["target_planet_id"] = request.target.target_planet_id
-        metadata["source_planet_id"] = request.target.source_planet_id
+        metadata["source_shipyard_build_queue_id"] = (
+            request.target.source_shipyard_build_queue_id
+        )
         metadata["colony_designation"] = request.target.colony_designation
         metadata["system_name_key"] = request.target.system_name_key
     elif isinstance(request.target, ExistingColonyShipTarget):

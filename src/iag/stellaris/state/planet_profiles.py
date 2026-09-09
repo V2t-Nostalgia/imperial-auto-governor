@@ -11,6 +11,7 @@ from pathlib import Path
 
 
 ENTRY_RE = re.compile(r"^\s*(\d+)=\s*$")
+INLINE_ENTRY_RE = re.compile(r"^\s*(\d+)=\s*\{(.*)\}\s*$")
 
 
 def find_braced_section(
@@ -54,6 +55,11 @@ def parse_numeric_map(section: str) -> dict[int, str | None]:
     depth = 0
     while index < len(lines):
         line = lines[index]
+        inline_entry = INLINE_ENTRY_RE.match(line) if depth == 0 else None
+        if inline_entry:
+            result[int(inline_entry.group(1))] = inline_entry.group(2).strip()
+            index += 1
+            continue
         entry = ENTRY_RE.match(line) if depth == 0 else None
         if entry and index + 1 < len(lines):
             object_id = int(entry.group(1))

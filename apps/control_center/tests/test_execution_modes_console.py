@@ -27,6 +27,7 @@ def settings_payload(**overrides: object) -> dict[str, object]:
         "session_proxy_acknowledged": False,
         "experimental_fleet_tools_enabled": False,
         "experimental_fleet_attack_enabled": False,
+        "experimental_fleet_maintenance_tools_enabled": False,
         "experimental_fleet_coordinate_tools_enabled": False,
         "fleet_coordinate_max_abs": 1000,
         "experimental_ship_design_tools_enabled": False,
@@ -34,6 +35,11 @@ def settings_payload(**overrides: object) -> dict[str, object]:
         "maximum_fleet_reinforcement_increase": 5,
         "experimental_new_fleet_tools_enabled": False,
         "maximum_new_fleet_initial_ships": 5,
+        "experimental_civilian_ship_tools_enabled": False,
+        "experimental_colonization_tools_enabled": False,
+        "minimum_colonization_habitability": 0.30,
+        "experimental_starbase_tools_enabled": False,
+        "experimental_starbase_replacement_enabled": False,
         "experimental_research_tools_enabled": False,
         "experimental_research_reselection_enabled": False,
     }
@@ -115,17 +121,26 @@ class ExecutionModeConsoleTests(unittest.TestCase):
                 session_proxy_acknowledged=True,
                 experimental_fleet_tools_enabled=True,
                 experimental_fleet_attack_enabled=True,
+                experimental_fleet_maintenance_tools_enabled=True,
                 experimental_fleet_coordinate_tools_enabled=True,
                 experimental_ship_design_tools_enabled=True,
                 experimental_fleet_reinforcement_tools_enabled=True,
                 maximum_fleet_reinforcement_increase=7,
                 experimental_new_fleet_tools_enabled=True,
                 maximum_new_fleet_initial_ships=4,
+                experimental_civilian_ship_tools_enabled=True,
+                experimental_colonization_tools_enabled=True,
+                minimum_colonization_habitability=0.45,
+                experimental_starbase_tools_enabled=True,
+                experimental_starbase_replacement_enabled=True,
                 experimental_research_tools_enabled=True,
             )
         )
         self.assertEqual(result["execution_mode"], "session_proxy")
         self.assertTrue(result["experimental_fleet_tools_enabled"])
+        self.assertTrue(
+            result["experimental_fleet_maintenance_tools_enabled"]
+        )
         self.assertTrue(result["experimental_fleet_coordinate_tools_enabled"])
         self.assertTrue(result["experimental_ship_design_tools_enabled"])
         self.assertTrue(
@@ -134,6 +149,11 @@ class ExecutionModeConsoleTests(unittest.TestCase):
         self.assertEqual(result["maximum_fleet_reinforcement_increase"], 7)
         self.assertTrue(result["experimental_new_fleet_tools_enabled"])
         self.assertEqual(result["maximum_new_fleet_initial_ships"], 4)
+        self.assertTrue(result["experimental_civilian_ship_tools_enabled"])
+        self.assertTrue(result["experimental_colonization_tools_enabled"])
+        self.assertEqual(result["minimum_colonization_habitability"], 0.45)
+        self.assertTrue(result["experimental_starbase_tools_enabled"])
+        self.assertTrue(result["experimental_starbase_replacement_enabled"])
         self.assertTrue(result["experimental_research_tools_enabled"])
         reloaded = RuntimeConfig.load(self.path).snapshot().settings
         self.assertEqual(reloaded["execution_mode"], "session_proxy")
@@ -152,6 +172,14 @@ class ExecutionModeConsoleTests(unittest.TestCase):
                 )
             )
 
+    def test_fleet_maintenance_requires_session_proxy_mode(self) -> None:
+        with self.assertRaisesRegex(ConsoleError, "舰队维修与升级工具"):
+            self.service.save_execution_settings(
+                settings_payload(
+                    experimental_fleet_maintenance_tools_enabled=True,
+                )
+            )
+
     def test_new_fleet_requires_session_proxy_mode(self) -> None:
         with self.assertRaisesRegex(ConsoleError, "新建舰队工具"):
             self.service.save_execution_settings(
@@ -164,6 +192,25 @@ class ExecutionModeConsoleTests(unittest.TestCase):
                 settings_payload(maximum_new_fleet_initial_ships=21)
             )
 
+    def test_colonization_and_starbase_tools_require_proxy_mode(self) -> None:
+        with self.assertRaisesRegex(ConsoleError, "自动殖民工具"):
+            self.service.save_execution_settings(
+                settings_payload(experimental_colonization_tools_enabled=True)
+            )
+        with self.assertRaisesRegex(ConsoleError, "恒星基地工具"):
+            self.service.save_execution_settings(
+                settings_payload(experimental_starbase_tools_enabled=True)
+            )
+
+    def test_starbase_replacement_requires_starbase_tools(self) -> None:
+        with self.assertRaisesRegex(ConsoleError, "必须先启用"):
+            self.service.save_execution_settings(
+                settings_payload(
+                    execution_mode="session_proxy",
+                    experimental_starbase_replacement_enabled=True,
+                )
+            )
+
     def test_reinforcement_permission_is_saved_per_fleet(self) -> None:
         self.service.fleet_payload = lambda: {"fleets": [{"fleet_id": 7}]}
         result = self.service.save_fleet_permission(
@@ -172,6 +219,10 @@ class ExecutionModeConsoleTests(unittest.TestCase):
                 "allow_move": False,
                 "allow_attack": False,
                 "allow_reinforce": True,
+                "allow_repair": True,
+                "allow_upgrade": True,
+                "allow_automation": True,
+                "allow_build_starbase": True,
             }
         )
         self.assertTrue(result["saved"])
@@ -180,6 +231,10 @@ class ExecutionModeConsoleTests(unittest.TestCase):
             {},
         )
         self.assertTrue(permissions["7"]["allow_reinforce"])
+        self.assertTrue(permissions["7"]["allow_repair"])
+        self.assertTrue(permissions["7"]["allow_upgrade"])
+        self.assertTrue(permissions["7"]["allow_automation"])
+        self.assertTrue(permissions["7"]["allow_build_starbase"])
 
     def test_research_reselection_requires_research_tools(self) -> None:
         with self.assertRaisesRegex(ConsoleError, "科研工具"):

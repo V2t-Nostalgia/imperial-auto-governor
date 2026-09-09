@@ -58,6 +58,7 @@ LEGACY_ENDPOINT_KEYS = {
     "endpoint_id",
     "extra_headers",
     "max_output_tokens",
+    "messages_path",
     "model",
     "model_context_window_tokens",
     "model_id",
@@ -245,6 +246,7 @@ class RuntimeConfig:
                 document.get("chat_completions_path", "/chat/completions")
             ),
             responses_path=str(document.get("responses_path", "/responses")),
+            messages_path=str(document.get("messages_path", "/messages")),
             models_path=document.get("models_path", "/models"),
             timeout_seconds=int(document.get("timeout_seconds", 120)),
             probe_timeout_seconds=int(

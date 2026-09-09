@@ -3,11 +3,20 @@
 
 from __future__ import annotations
 
+import json
 import re
 import unittest
 from pathlib import Path
 
 WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
+TEMPLATES_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "src"
+    / "iag"
+    / "infrastructure"
+    / "llm"
+    / "model_templates.json"
+)
 
 
 class ModelConfigurationFrontendTests(unittest.TestCase):
@@ -54,6 +63,23 @@ class ModelConfigurationFrontendTests(unittest.TestCase):
             "/api/model/probe",
         ):
             self.assertIn(route, self.javascript)
+
+    def test_only_openai_and_anthropic_endpoint_templates_are_offered(self) -> None:
+        document = json.loads(TEMPLATES_PATH.read_text(encoding="utf-8"))
+        templates = document["templates"]
+
+        self.assertEqual(
+            [(item["id"], item["label"]) for item in templates],
+            [
+                ("custom", "OpenAI Compatible"),
+                ("anthropic_api", "Anthropic API"),
+            ],
+        )
+        self.assertNotIn("deepseek", json.dumps(document).lower())
+        self.assertIn('value="anthropic_sdk"', self.html)
+        self.assertIn('value="anthropic_messages_compatible"', self.html)
+        self.assertIn('id="messages-path"', self.html)
+        self.assertIn('$("messages-path").value', self.javascript)
 
     def test_protocol_suite_has_a_non_llm_control_surface(self) -> None:
         required = {
@@ -120,6 +146,7 @@ class ModelConfigurationFrontendTests(unittest.TestCase):
         self.assertIn("carrier-calibration-panel", html_ids)
         self.assertIn("fixed-click-guard-row", html_ids)
         self.assertIn("fixed-click-guard-hint", html_ids)
+        self.assertIn("experimental-fleet-maintenance-tools-enabled", html_ids)
         self.assertIn(
             '$("carrier-calibration-panel").hidden = proxyMode;',
             self.javascript,
@@ -132,6 +159,8 @@ class ModelConfigurationFrontendTests(unittest.TestCase):
             '$("fixed-click-guard-hint").hidden = proxyMode;',
             self.javascript,
         )
+        self.assertIn('["allow_repair", "返港维修"]', self.javascript)
+        self.assertIn('["allow_upgrade", "舰队升级"]', self.javascript)
 
 
 if __name__ == "__main__":

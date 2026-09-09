@@ -321,6 +321,7 @@ class ConversationStore:
             len(str(row["content"] or ""))
             + len(str(row["reasoning_content"] or ""))
             + len(str(row["tool_calls_json"] or ""))
+            + len(str(row["metadata_json"] or ""))
             + 96
         )
 
@@ -375,6 +376,14 @@ class ConversationStore:
             # DeepSeek requires this field to be replayed for tool-call turns.
             if row["reasoning_content"] is not None:
                 message["reasoning_content"] = str(row["reasoning_content"])
+        metadata = ConversationStore._json_value(row["metadata_json"], {})
+        anthropic_content = (
+            metadata.get("anthropic_content")
+            if isinstance(metadata, dict)
+            else None
+        )
+        if role == "assistant" and isinstance(anthropic_content, list):
+            message["anthropic_content"] = anthropic_content
         if role == "tool":
             message["tool_call_id"] = str(row["tool_call_id"] or "")
         return message

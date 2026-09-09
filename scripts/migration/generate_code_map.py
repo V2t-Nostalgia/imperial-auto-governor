@@ -23,16 +23,18 @@ IGNORED_PARTS = {
     ".pytest_cache",
     ".ruff_cache",
     "__pycache__",
-    "build",
-    "dist",
-    "runtime",
-    "state",
-    "logs",
-    "captures",
-    "saves",
-    "databases",
+}
+IGNORED_ROOTS = {
     "artifacts",
+    "build",
+    "captures",
+    "databases",
+    "dist",
+    "logs",
     "public_release",
+    "runtime",
+    "saves",
+    "state",
 }
 IGNORED_FILES = {OUTPUT.relative_to(ROOT).as_posix(), "ENGINEERING_MANIFEST.json"}
 
@@ -44,15 +46,16 @@ FILE_NOTES = {
     "src/iag/applications/economy_governance/planner.py": "把存档事实与 Content Pack 映射转换为合法建设候选。",
     "src/iag/applications/economy_governance/agent_tools.py": "向模型暴露受控工具，并维护准备、执行与事实账本。",
     "src/iag/applications/economy_governance/conversation_agent.py": "运行带工具调用的持续战役会话与自主巡检。",
-    "src/iag/applications/fleet_operations/agent_tools.py": "向模型暴露逐舰队授权的移动、舰船设计与编制增援工具；攻击在敌对目标映射完成前保持失败关闭。",
+    "src/iag/applications/fleet_operations/agent_tools.py": "向模型暴露存档候选约束的舰队、民用船、殖民、恒星基地、舰船设计与编制工具。",
     "src/iag/applications/research_strategy/agent_tools.py": "向模型暴露存档约束的三系科研状态、准备与串行确认工具。",
     "src/iag/applications/save_continuations.py": "在新存档到达后续接已授权的确定性跨存档工作流，不重新调用模型。",
     "src/iag/infrastructure/llm/model_client.py": "保持规划器同步接口，并编排异步模型协议调用与 JSON 解析。",
     "src/iag/infrastructure/llm/chat_stream.py": "重组流式正文、私有推理和工具参数，只向叠加层发布普通正文。",
-    "src/iag/infrastructure/llm/providers.py": "以 AsyncOpenAI 为默认传输，并保留显式 raw HTTP 兼容实现。",
+    "src/iag/infrastructure/llm/providers.py": "使用 AsyncOpenAI 与 AsyncAnthropic 官方传输，并保留显式 raw HTTP 兼容实现。",
     "src/iag/stellaris/state/extract_game_state.py": "解包 Stellaris 存档并生成标准化帝国状态。",
     "src/iag/stellaris/state/planet_profiles.py": "解析殖民地、区域、槽位、容量、拥有者和建设队列。",
-    "src/iag/stellaris/state/fleet_profiles.py": "解析玩家舰队、军力、位置、模板编制、增援队列和已验证动作目标。",
+    "src/iag/stellaris/state/fleet_profiles.py": "解析玩家舰队、军力、聚合耐久、位置、模板编制、增援队列和已验证动作目标。",
+    "src/iag/stellaris/state/expansion_profiles.py": "解析物种宜居度、殖民来源、可殖民行星与恒星基地操作候选。",
     "src/iag/stellaris/state/ship_profiles.py": "解析玩家舰船设计、部件槽和直接船坞协议证据。",
     "src/iag/stellaris/state/research_profiles.py": "分离已完成科技、当前研究、合法候选和储存研究点。",
     "src/iag/stellaris/execution/iag_supervisor.py": "在载体点击与会话代理之间编排准备、执行、确认和失败保护。",
@@ -86,7 +89,7 @@ PREFIX_NOTES = (
     ("src/iag/stellaris/execution/packet/", "协作命令的离线解析、精确构造与受约束改写。"),
     ("src/iag/stellaris/execution/", "游戏侧点击、网络发现、执行监督和确认。"),
     ("src/iag/applications/economy_governance/", "经济治理 Application 的规则、工具和提示词。"),
-    ("src/iag/applications/fleet_operations/", "实验性舰队状态、逐舰队权限、移动、设计与编制增援工具。"),
+    ("src/iag/applications/fleet_operations/", "实验性舰队、民用船、扩张、设计与编制工具。"),
     ("src/iag/applications/research_strategy/", "实验性科研状态、合法候选与科技选择工具。"),
     ("src/iag/applications/", "平台原生 Application 注册、跨域调度与确定性续接。"),
     ("src/iag/infrastructure/llm/", "模型供应商协议和请求模板适配。"),
@@ -126,13 +129,15 @@ def migration_sources() -> dict[str, str]:
 def maintained_files() -> list[Path]:
     values: list[Path] = []
     for path in ROOT.rglob("*"):
+        relative_path = path.relative_to(ROOT)
         if (
             not path.is_file()
             or any(part in IGNORED_PARTS for part in path.parts)
+            or relative_path.parts[0] in IGNORED_ROOTS
             or any(part.endswith(".egg-info") for part in path.parts)
         ):
             continue
-        relative = path.relative_to(ROOT).as_posix()
+        relative = relative_path.as_posix()
         if relative in IGNORED_FILES or path.suffix.lower() in {".pyc", ".pyo"}:
             continue
         values.append(path)

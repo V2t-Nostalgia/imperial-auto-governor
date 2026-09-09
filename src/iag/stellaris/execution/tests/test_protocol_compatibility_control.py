@@ -221,16 +221,11 @@ class ProtocolCompatibilityControlTests(unittest.TestCase):
             self.assertFalse(halted["actions"]["can_execute"])
             self.control.finish(room_exited=True)
 
-    def test_reinforcement_stage_two_cannot_run_after_stage_one_is_skipped(
-        self,
-    ) -> None:
+    def test_selected_fleet_reinforcement_runs_as_one_scenario(self) -> None:
         self.control.new_plan(game_version="4.4.6")
         plan = self.control.payload()["plan"]
         for scenario in plan["scenarios"]:
-            if scenario["action"] not in {
-                "reinforce_fleet_stage_1",
-                "reinforce_fleet_stage_2",
-            }:
+            if scenario["action"] != "reinforce_selected_fleet":
                 continue
             scenario["enabled"] = True
             scenario["acknowledge_side_effects"] = True
@@ -252,13 +247,13 @@ class ProtocolCompatibilityControlTests(unittest.TestCase):
             self.control.start_live(disposable_authorized=True)
             FakeSessionProxyController.flow_locked = True
             self.control.confirm_room()
-            self.control.skip_current()
-            with self.assertRaisesRegex(
-                ProtocolCompatibilityError,
-                "第一阶段",
-            ):
-                self.control.execute_current()
-            self.control.skip_current()
+            executed = self.control.execute_current()
+            self.assertEqual(
+                executed["state"]["phase"],
+                "awaiting_operator_verdict",
+            )
+            completed = self.control.record_verdict("passed")
+            self.assertEqual(completed["state"]["phase"], "completed")
             self.control.finish(room_exited=True)
 
 

@@ -5,10 +5,15 @@ import unittest
 from iag.stellaris.state.fleet_profiles import (
     extract_fleet_profiles,
     resolve_created_fleet_template,
+    selected_attack,
+    selected_construction_ship_starbase,
     selected_coordinate_move,
+    selected_fleet_repair,
     selected_fleet_reinforcement,
+    selected_fleet_upgrade,
     selected_move,
     selected_new_fleet_reinforcement,
+    selected_ship_automation,
 )
 
 FIXTURE = """
@@ -18,6 +23,13 @@ player=
  { name="Vertin" country=0 }
  { name="LLM" country=0 }
 }
+council_positions=
+{
+ council_positions=
+ {
+  17={ country=0 type="councilor_research" leader=70 }
+ }
+}
 country=
 {
  0=
@@ -26,9 +38,10 @@ country=
   {
    owned_fleets=
    {
-    { fleet=2829 }
     { fleet=3 }
     { fleet=16777283 }
+    { fleet=8 }
+    { fleet=9 }
    }
   }
   owned_planets={ 3 }
@@ -39,6 +52,28 @@ country=
   ship_design_collection=
   {
    ship_design={ 100 101 }
+  }
+  intel=
+  {
+   {
+    object=375
+    hostile=
+    {
+     {
+      owner=2
+      name={ key="ALIEN_FLEET" }
+      coordinate={ x=11 y=12 origin=375 }
+      military_power=250
+     }
+    }
+   }
+  }
+ }
+ 2=
+ {
+  fleets_manager=
+  {
+   owned_fleets={ { fleet=99 } }
   }
  }
 }
@@ -54,7 +89,7 @@ fleet=
   }
   fleet_template=0
   military_power=417.25
-  ships={ 4 5 }
+  ships={ 4 5 7 }
   ship_class=shipclass_military
   movement_manager=
   {
@@ -80,20 +115,103 @@ fleet=
   }
   settings={ mobile=yes valid_for_combat=yes }
  }
+ 8=
+ {
+  name={ key="SCIENCE_SHIP" }
+  ships={ 8 }
+  ship_class=shipclass_science_ship
+  movement_manager=
+  {
+   coordinate={ x=0 y=0 origin=486 }
+   state=move_idle
+   orbit={ }
+  }
+  settings={ mobile=yes valid_for_combat=no }
+ }
+ 9=
+ {
+  name={ key="CONSTRUCTION_SHIP" }
+  ships={ 9 }
+  ship_class=shipclass_constructor
+  movement_manager=
+  {
+   coordinate={ x=0 y=0 origin=486 }
+   state=move_idle
+   orbit={ }
+  }
+  settings={ mobile=yes valid_for_combat=no }
+ }
+ 99=
+ {
+  name={ key="HOSTILE_FLEET" }
+  military_power=250
+  ships={ 99 }
+  ship_class=shipclass_military
+  movement_manager=
+  {
+   coordinate={ x=11 y=12 origin=375 }
+   state=move_idle
+   orbit={ }
+  }
+  settings={ mobile=yes valid_for_combat=yes }
+ }
 }
 ships=
 {
  4=
  {
   ship_design_implementation={ design=100 upgrade=4294967295 growth_stage=0 }
+  hitpoints=200
+  max_hitpoints=200
+  armor_hitpoints=100
+  max_armor_hitpoints=100
+  shield_hitpoints=200
+  max_shield_hitpoints=200
  }
  5=
  {
   ship_design_implementation={ design=100 upgrade=4294967295 growth_stage=0 }
+  hitpoints=100
+  max_hitpoints=200
+  max_armor_hitpoints=100
+  shield_hitpoints=50
+  max_shield_hitpoints=200
+ }
+ 7=
+ {
+  ship_design_implementation={ design=100 upgrade=4294967295 growth_stage=0 }
+  hitpoints=50
+  max_hitpoints=200
+  armor_hitpoints=50
+  max_armor_hitpoints=100
+  max_shield_hitpoints=200
  }
  6=
  {
-  ship_design_implementation={ design=101 upgrade=4294967295 growth_stage=0 }
+  ship_design_implementation={ design=101 upgrade=100 growth_stage=0 }
+  hitpoints=75
+  max_hitpoints=100
+  armor_hitpoints=100
+  max_armor_hitpoints=100
+  shield_hitpoints=100
+  max_shield_hitpoints=100
+ }
+ 8=
+ {
+  ship_design_implementation={ design=100 upgrade=4294967295 growth_stage=0 }
+  leader=70
+ }
+ 9={ ship_design_implementation={ design=100 upgrade=4294967295 growth_stage=0 } }
+ 99={ ship_design_implementation={ design=100 upgrade=4294967295 growth_stage=0 } }
+}
+construction=
+{
+ queue_mgr=
+ {
+  queues=
+  {
+   900={ owner=0 type=0 items={ } }
+  }
  }
 }
 fleet_template=
@@ -149,7 +267,15 @@ galactic_object=
   planet=3
   star_class="sc_g"
   discovery={ 0 }
-  hyperlane={ { to=375 length=10 } }
+  hyperlane={ { to=375 length=10 } { to=600 length=12 } }
+ }
+ 600=
+ {
+  name={ key="NAME_Barnards_Star" }
+  planet=600
+  star_class="sc_m"
+  discovery={ 0 }
+  hyperlane={ { to=486 length=12 } }
  }
 }
 planets=
@@ -180,6 +306,13 @@ planets=
    name={ key="NAME_Alpha_Centauri_B" }
    coordinate={ x=15 y=2 origin=375 }
   }
+  600=
+  {
+   planet_class="pc_m_star"
+   name={ key="NAME_Barnards_Star" }
+   surveyed_by=1
+   coordinate={ x=0 y=0 origin=600 }
+  }
  }
 }
 starbase_mgr=
@@ -190,7 +323,9 @@ starbase_mgr=
   {
    level="starbase_level_outpost"
    build_queue=8380
+   shipyard_build_queue=900
    station=2829
+   modules={ 0=shipyard 1=anchorage }
   }
  }
 }
@@ -247,6 +382,33 @@ class ExtractFleetProfilesTests(unittest.TestCase):
         )
         self.assertEqual(fleets[3]["availability"], "BUSY")
         self.assertEqual(fleets[16777283]["availability"], "AVAILABLE")
+        self.assertTrue(fleets[16777283]["needs_repair"])
+        self.assertEqual(fleets[16777283]["upgradeable_ship_count"], 1)
+        self.assertEqual(result["shipyards"][0]["shipyard_build_queue_id"], 900)
+        self.assertEqual(fleets[8]["leader_ids"], [70])
+        self.assertTrue(fleets[8]["has_council_leader"])
+        self.assertFalse(fleets[8]["can_automate_astral_rifts"])
+        self.assertEqual(
+            fleets[3]["durability_summary"],
+            {
+                "basis": "per_ship_current_divided_by_max_percent",
+                "hull": {
+                    "mean_percent": 58.33,
+                    "median_percent": 50.0,
+                    "sample_count": 3,
+                },
+                "armor": {
+                    "mean_percent": 50.0,
+                    "median_percent": 50.0,
+                    "sample_count": 3,
+                },
+                "shield": {
+                    "mean_percent": 41.67,
+                    "median_percent": 25.0,
+                    "sample_count": 3,
+                },
+            },
+        )
         self.assertEqual(
             fleets[3]["fleet_composition"],
             [
@@ -256,8 +418,8 @@ class ExtractFleetProfilesTests(unittest.TestCase):
                     "growth_stage": 0,
                     "target_count": 5,
                     "target_count_was_omitted": False,
-                    "current_count": 2,
-                    "missing_count": 3,
+                    "current_count": 3,
+                    "missing_count": 2,
                 }
             ],
         )
@@ -300,6 +462,54 @@ class ExtractFleetProfilesTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "configured"):
             selected_coordinate_move(result, 16777283, 1001, 0)
 
+    def test_resolves_hostile_intel_and_selects_attack(self) -> None:
+        result = extract_fleet_profiles(FIXTURE)
+        self.assertEqual(
+            [item["fleet_id"] for item in result["hostile_targets"]],
+            [99],
+        )
+        attack = selected_attack(result, 16777283, 99)
+        self.assertEqual(
+            attack["target"],
+            {"source_fleet_object": 16777283, "target_fleet_object": 99},
+        )
+
+    def test_selects_verified_civilian_ship_actions(self) -> None:
+        result = extract_fleet_profiles(FIXTURE)
+        automation = selected_ship_automation(
+            result,
+            8,
+            ["AUTOMATION_EXPLORE", "AUTOMATION_SURVEY"],
+        )
+        self.assertEqual(automation["target"]["source_fleet_object"], 8)
+        with self.assertRaisesRegex(ValueError, "not valid"):
+            selected_ship_automation(
+                result,
+                8,
+                ["AUTOMATION_MINING_STATIONS"],
+            )
+        gravity = selected_ship_automation(
+            result,
+            8,
+            ["AUTOMATION_SEND_GRAVITY_SNARES"],
+        )
+        self.assertEqual(
+            gravity["target"]["options"],
+            ["AUTOMATION_SEND_GRAVITY_SNARES"],
+        )
+        with self.assertRaisesRegex(ValueError, "council member"):
+            selected_ship_automation(
+                result,
+                8,
+                ["AUTOMATION_ASTRAL_RIFTS"],
+            )
+
+        starbase = selected_construction_ship_starbase(result, 9, 600)
+        self.assertEqual(
+            starbase["target"],
+            {"source_fleet_object": 9, "target_system_object": 600},
+        )
+
     def test_selects_exact_fleet_template_target_and_reinforcement(self) -> None:
         result = extract_fleet_profiles(FIXTURE)
         selection = selected_fleet_reinforcement(
@@ -319,10 +529,28 @@ class ExtractFleetProfilesTests(unittest.TestCase):
                 "add_fleet_template_ship",
                 "add_fleet_template_ship",
                 "add_fleet_template_ship",
-                "reinforce_fleet_stage_1",
-                "reinforce_fleet_stage_2",
+                "reinforce_selected_fleet",
             ],
         )
+
+    def test_selects_save_backed_repair_and_upgrade_targets(self) -> None:
+        result = extract_fleet_profiles(FIXTURE)
+        repair = selected_fleet_repair(result, 16777283)
+        self.assertEqual(
+            repair["target"],
+            {"context_822c": 0, "source_fleet_object": 16777283},
+        )
+        upgrade = selected_fleet_upgrade(result, 16777283, 900)
+        self.assertEqual(
+            upgrade["target"],
+            {
+                "context_822c": 0,
+                "source_fleet_object": 16777283,
+                "shipyard_build_queue_id": 900,
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "not an owned"):
+            selected_fleet_upgrade(result, 16777283, 901)
 
     def test_resolves_one_new_template_then_builds_initial_composition(self) -> None:
         result = extract_fleet_profiles(FIXTURE)
@@ -357,8 +585,7 @@ class ExtractFleetProfilesTests(unittest.TestCase):
                 "add_fleet_template_ship",
                 "add_fleet_template_ship",
                 "add_fleet_template_ship",
-                "reinforce_fleet_stage_1",
-                "reinforce_fleet_stage_2",
+                "reinforce_selected_fleet",
             ],
         )
 

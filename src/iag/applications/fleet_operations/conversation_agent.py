@@ -35,7 +35,7 @@ class FleetConversationAgent(SpecialistConversationAgent):
             store,
             action_store,
             application_id="fleet_operations",
-            display_name="舰队行动",
+            display_name="舰队与扩张行动",
             role_prompt_path=(
                 Path(__file__).resolve().parent
                 / "prompts"
@@ -49,6 +49,7 @@ class FleetConversationAgent(SpecialistConversationAgent):
             fact_state_keys={
                 "fleet_permissions",
                 "last_fleet_execution",
+                "last_expansion_execution",
                 "last_ship_execution",
                 "last_new_fleet_creation",
                 "pending_new_fleet_creation",

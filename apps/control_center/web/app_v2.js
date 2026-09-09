@@ -275,7 +275,7 @@ function setTemplateFields(templateId, applyDefaults) {
   selectedTemplateId = templateId;
   $("template-description").textContent = template.description || "";
   const config = template.config || {};
-  if (applyDefaults && templateId !== "custom") {
+  if (applyDefaults) {
     $("model-transport").value = config.model_transport || "openai_sdk";
     $("provider").value = config.provider || "chat_completions_compatible";
     $("base-url").value = config.base_url || "";
@@ -284,15 +284,33 @@ function setTemplateFields(templateId, applyDefaults) {
       $("endpoint-logical-model-id").value = config.model;
     }
     $("supports-reasoning").checked = config.supports_reasoning !== false;
-    $("supports-tools").checked = config.tool_calling_enabled !== false;
+    $("supports-tools").checked = config.supports_tools !== false;
+    $("auth-mode").value = config.auth_mode || "bearer";
+    $("api-key").disabled = $("auth-mode").value === "none";
+    $("chat-completions-path").value =
+      config.chat_completions_path || "/chat/completions";
+    $("responses-path").value = config.responses_path || "/responses";
+    $("messages-path").value = config.messages_path || "/messages";
+    $("api-key-header").value = config.api_key_header || "Authorization";
+    $("api-key-prefix").value = config.api_key_prefix ?? "Bearer ";
+    $("endpoint-extra-headers").value = JSON.stringify(
+      config.extra_headers || {},
+      null,
+      2,
+    );
     if (config.models_path !== undefined) {
       $("models-path").value = config.models_path || "";
     }
     if (config.model_context_window_tokens) {
       $("context-window-tokens").value = config.model_context_window_tokens;
     }
-    if (config.context_output_reserve_tokens) {
-      $("context-output-reserve").value = config.context_output_reserve_tokens;
+    const maximumOutput = config.max_output_tokens ??
+      config.context_output_reserve_tokens;
+    if (maximumOutput) {
+      $("context-output-reserve").value = maximumOutput;
+    }
+    if (config.sdk_max_retries !== undefined) {
+      $("sdk-max-retries").value = config.sdk_max_retries;
     }
   }
   for (const id of ["model-transport", "provider", "base-url", "model", "supports-reasoning", "supports-tools"]) {
@@ -414,6 +432,7 @@ function writeModelEndpointForm(endpoint) {
   $("chat-completions-path").value =
     endpoint.chat_completions_path || "/chat/completions";
   $("responses-path").value = endpoint.responses_path || "/responses";
+  $("messages-path").value = endpoint.messages_path || "/messages";
   $("api-key-header").value = endpoint.api_key_header || "Authorization";
   $("api-key-prefix").value = endpoint.api_key_prefix ?? "Bearer ";
   $("endpoint-extra-headers").value = JSON.stringify(
@@ -466,6 +485,7 @@ function readModelEndpointForm() {
     $("chat-completions-path").value.trim() || "/chat/completions";
   endpoint.responses_path =
     $("responses-path").value.trim() || "/responses";
+  endpoint.messages_path = $("messages-path").value.trim() || "/messages";
   endpoint.api_key_header = $("api-key-header").value.trim() || "Authorization";
   endpoint.api_key_prefix = $("api-key-prefix").value;
   try {
@@ -623,6 +643,7 @@ function defaultModelEndpoint(pool) {
     enabled: false,
     chat_completions_path: "/chat/completions",
     responses_path: "/responses",
+    messages_path: "/messages",
     models_path: "/models",
     timeout_seconds: 120,
     probe_timeout_seconds: 10,
@@ -678,7 +699,7 @@ function modelEndpointPayload(endpoint) {
     "model", "model_transport", "provider", "base_url",
     "supports_reasoning", "supports_tools", "model_context_window_tokens",
     "auth_mode", "api_key", "max_output_tokens", "chat_completions_path",
-    "responses_path", "models_path", "timeout_seconds",
+    "responses_path", "messages_path", "models_path", "timeout_seconds",
     "probe_timeout_seconds", "rate_limit_cooldown_seconds",
     "sdk_max_retries", "extra_headers", "api_key_header",
     "api_key_prefix", "clear_api_key",
@@ -1049,6 +1070,8 @@ function renderExecutionSettings(settings, proxy = {}, running = false) {
       settings.experimental_fleet_tools_enabled === true;
     $("experimental-fleet-attack-enabled").checked =
       settings.experimental_fleet_attack_enabled === true;
+    $("experimental-fleet-maintenance-tools-enabled").checked =
+      settings.experimental_fleet_maintenance_tools_enabled === true;
     $("experimental-fleet-coordinate-tools-enabled").checked =
       settings.experimental_fleet_coordinate_tools_enabled === true;
     $("fleet-coordinate-max-abs").value =
@@ -1063,6 +1086,17 @@ function renderExecutionSettings(settings, proxy = {}, running = false) {
       settings.experimental_new_fleet_tools_enabled === true;
     $("maximum-new-fleet-initial-ships").value =
       settings.maximum_new_fleet_initial_ships ?? 5;
+    $("experimental-civilian-ship-tools-enabled").checked =
+      settings.experimental_civilian_ship_tools_enabled === true;
+    $("experimental-colonization-tools-enabled").checked =
+      settings.experimental_colonization_tools_enabled === true;
+    $("minimum-colonization-habitability").value = Math.round(
+      Number(settings.minimum_colonization_habitability ?? 0.30) * 100,
+    );
+    $("experimental-starbase-tools-enabled").checked =
+      settings.experimental_starbase_tools_enabled === true;
+    $("experimental-starbase-replacement-enabled").checked =
+      settings.experimental_starbase_replacement_enabled === true;
     $("experimental-research-tools-enabled").checked =
       settings.experimental_research_tools_enabled === true;
     $("experimental-research-reselection-enabled").checked =
@@ -1149,9 +1183,12 @@ function renderFleetState(fleetState = {}, running = false) {
     title.textContent = fleet.display_name_hint || fleet.name_key ||
       ("Fleet " + fleet.fleet_id);
     const detail = document.createElement("small");
+    const availability = fleet.civilian_role
+      ? fleet.civilian_availability
+      : fleet.availability;
     detail.textContent = "ID " + fleet.fleet_id + " · 军力 " +
       Math.round(Number(fleet.military_power || 0)) + " · " +
-      (fleet.availability || "UNKNOWN");
+      (availability || "UNKNOWN");
     identity.append(title, detail);
     const controls = document.createElement("div");
     controls.className = "fleet-permission-controls";
@@ -1159,35 +1196,52 @@ function renderFleetState(fleetState = {}, running = false) {
       ["allow_move", "移动"],
       ["allow_attack", "攻击"],
       ["allow_reinforce", "编制增援"],
+      ["allow_repair", "返港维修"],
+      ["allow_upgrade", "舰队升级"],
+      ["allow_automation", "自动化"],
+      ["allow_build_starbase", "工程船建站"],
     ]) {
       const label = document.createElement("label");
       label.className = "check-line";
       const input = document.createElement("input");
       input.type = "checkbox";
       input.checked = fleet.permission?.[field] === true;
-      const movementPermission = field === "allow_move" || field === "allow_attack";
-      const reinforcementPermission = field === "allow_reinforce";
-      const hasVerifiedMovement = fleet.d32c_move_verified_family === true;
+      const supported = {
+        allow_move: fleet.d32c_move_verified_family === true,
+        allow_attack: fleet.attack_verified_family === true,
+        allow_reinforce: fleet.ship_class === "shipclass_military" &&
+          fleet.fleet_template_id !== null && fleet.fleet_template_id !== undefined,
+        allow_repair: fleet.repair_verified_family === true,
+        allow_upgrade: fleet.upgrade_verified_family === true,
+        allow_automation: fleet.automation_verified_family === true,
+        allow_build_starbase: fleet.build_starbase_verified_family === true,
+      }[field] === true;
       const hasFleetTemplate = fleet.fleet_template_id !== null &&
         fleet.fleet_template_id !== undefined;
-      input.disabled = running ||
-        (movementPermission && !hasVerifiedMovement) ||
-        (reinforcementPermission && !hasFleetTemplate);
-      if (movementPermission && !hasVerifiedMovement) {
-        input.title = "该船队不属于当前已验证的军用 d32c 移动命令族";
-      } else if (reinforcementPermission && !hasFleetTemplate) {
+      input.disabled = running || !supported;
+      if (field === "allow_reinforce" && !hasFleetTemplate) {
         input.title = "最新存档中没有找到该舰队的 Fleet Manager 模板";
+      } else if (!supported) {
+        input.title = "该船队不属于此操作当前已验证的命令族";
       }
       input.addEventListener("change", async () => {
         const moveInput = controls.querySelector('[data-permission="allow_move"]');
         const attackInput = controls.querySelector('[data-permission="allow_attack"]');
         const reinforceInput = controls.querySelector('[data-permission="allow_reinforce"]');
+        const repairInput = controls.querySelector('[data-permission="allow_repair"]');
+        const upgradeInput = controls.querySelector('[data-permission="allow_upgrade"]');
+        const automationInput = controls.querySelector('[data-permission="allow_automation"]');
+        const buildStarbaseInput = controls.querySelector('[data-permission="allow_build_starbase"]');
         try {
           await post("/api/fleet-permission", {
             fleet_id: fleet.fleet_id,
             allow_move: moveInput.checked,
             allow_attack: attackInput.checked,
             allow_reinforce: reinforceInput.checked,
+            allow_repair: repairInput.checked,
+            allow_upgrade: upgradeInput.checked,
+            allow_automation: automationInput.checked,
+            allow_build_starbase: buildStarbaseInput.checked,
           });
           message("舰队 " + fleet.fleet_id + " 的调用权限已保存");
           await refresh();
@@ -2806,6 +2860,8 @@ $("save-execution-settings").addEventListener("click", async () => {
       session_proxy_acknowledged: $("session-proxy-acknowledged").checked,
       experimental_fleet_tools_enabled: $("experimental-fleet-tools-enabled").checked,
       experimental_fleet_attack_enabled: $("experimental-fleet-attack-enabled").checked,
+      experimental_fleet_maintenance_tools_enabled:
+        $("experimental-fleet-maintenance-tools-enabled").checked,
       experimental_fleet_coordinate_tools_enabled:
         $("experimental-fleet-coordinate-tools-enabled").checked,
       fleet_coordinate_max_abs: Number($("fleet-coordinate-max-abs").value || 1000),
@@ -2821,6 +2877,16 @@ $("save-execution-settings").addEventListener("click", async () => {
       maximum_new_fleet_initial_ships: Number(
         $("maximum-new-fleet-initial-ships").value || 5,
       ),
+      experimental_civilian_ship_tools_enabled:
+        $("experimental-civilian-ship-tools-enabled").checked,
+      experimental_colonization_tools_enabled:
+        $("experimental-colonization-tools-enabled").checked,
+      minimum_colonization_habitability:
+        Number($("minimum-colonization-habitability").value || 30) / 100,
+      experimental_starbase_tools_enabled:
+        $("experimental-starbase-tools-enabled").checked,
+      experimental_starbase_replacement_enabled:
+        $("experimental-starbase-replacement-enabled").checked,
       experimental_research_tools_enabled:
         $("experimental-research-tools-enabled").checked,
       experimental_research_reselection_enabled:

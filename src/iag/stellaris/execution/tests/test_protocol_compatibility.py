@@ -68,21 +68,10 @@ class ProtocolCompatibilityTests(unittest.TestCase):
             "host_ack_or_authoritative_response_missing",
         )
 
-    def test_reinforcement_second_stage_requires_matching_first_stage(self) -> None:
-        plan = new_plan_document(game_version="4.4.6")
-        by_action = {item["action"]: item for item in plan["scenarios"]}
-        second = by_action["reinforce_fleet_stage_2"]
-        second["enabled"] = True
-        second["acknowledge_side_effects"] = True
-        second["target"] = OFFLINE_FIXTURE_TARGETS["reinforce_fleet_stage_2"]
-        with self.assertRaisesRegex(ValueError, "requires an enabled stage 1"):
-            validate_plan_document(plan, require_live_acknowledgements=True)
-
-        first = by_action["reinforce_fleet_stage_1"]
-        first["enabled"] = True
-        first["acknowledge_side_effects"] = True
-        first["target"] = OFFLINE_FIXTURE_TARGETS["reinforce_fleet_stage_1"]
-        validate_plan_document(plan, require_live_acknowledgements=True)
+    def test_selected_fleet_reinforcement_is_one_catalog_action(self) -> None:
+        self.assertIn("reinforce_selected_fleet", SUPPORTED_SESSION_PROXY_ACTIONS)
+        self.assertNotIn("reinforce_fleet_stage_1", SUPPORTED_SESSION_PROXY_ACTIONS)
+        self.assertNotIn("reinforce_fleet_stage_2", SUPPORTED_SESSION_PROXY_ACTIONS)
 
 
 if __name__ == "__main__":

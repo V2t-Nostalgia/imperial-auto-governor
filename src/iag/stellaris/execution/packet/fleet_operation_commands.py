@@ -26,6 +26,7 @@ COMMAND_PAYLOAD = bytes.fromhex("410001000300")
 FLEET_ATTACK_FAMILY = bytes.fromhex("6b3301000300")
 BUILD_STARBASE_FAMILY = bytes.fromhex("e02c01000300")
 SHIP_AUTOMATION_FAMILY = bytes.fromhex("8f3201000300")
+FLEET_UPGRADE_FAMILY = bytes.fromhex("8f2f01000300")
 
 SOURCE_FLEET_TAG = bytes.fromhex("502c01001400")
 ATTACK_TARGET_TAG = bytes.fromhex("d62e01001400")
@@ -42,12 +43,18 @@ AUTOMATION_ENABLED_TAG = bytes.fromhex("b03801000e00")
 AUTOMATION_UNKNOWN_ID_TAG = bytes.fromhex("624501001400")
 AUTOMATION_OPTIONS_OBJECT = bytes.fromhex("1e3f01000300")
 BARE_STRING_TAG = bytes.fromhex("0f00")
+REPAIR_SETTINGS_OBJECT = bytes.fromhex("203001000300")
+REPAIR_FLAG_9232_TAG = bytes.fromhex("923201000e00")
+REPAIR_FLAG_163B_TAG = bytes.fromhex("163b01000e00")
+SHIPYARD_BUILD_QUEUE_TAG = bytes.fromhex("c33d01001400")
 
 AUTOMATION_COMPLETE_SPECIAL_PROJECTS = "AUTOMATION_COMPLETE_SPECIAL_PROJECTS"
 AUTOMATION_EXPLORE = "AUTOMATION_EXPLORE"
 AUTOMATION_SURVEY = "AUTOMATION_SURVEY"
 AUTOMATION_ANOMALIES = "AUTOMATION_ANOMALIES"
+AUTOMATION_ASTRAL_RIFTS = "AUTOMATION_ASTRAL_RIFTS"
 AUTOMATION_DIGSITES = "AUTOMATION_DIGSITES"
+AUTOMATION_SEND_GRAVITY_SNARES = "AUTOMATION_SEND_GRAVITY_SNARES"
 AUTOMATION_MINING_STATIONS = "AUTOMATION_MINING_STATIONS"
 AUTOMATION_RESEARCH_STATIONS = "AUTOMATION_RESEARCH_STATIONS"
 AUTOMATION_OBSERVATION_POSTS = "AUTOMATION_OBSERVATION_POSTS"
@@ -57,7 +64,9 @@ AUTOMATION_OPTION_FLAG_TAGS = {
     AUTOMATION_EXPLORE: bytes.fromhex("473001000e00"),
     AUTOMATION_SURVEY: bytes.fromhex("483001000e00"),
     AUTOMATION_ANOMALIES: bytes.fromhex("493001000e00"),
+    AUTOMATION_ASTRAL_RIFTS: bytes.fromhex("4a3001000e00"),
     AUTOMATION_DIGSITES: bytes.fromhex("4b3001000e00"),
+    AUTOMATION_SEND_GRAVITY_SNARES: bytes.fromhex("8d4301000e00"),
     AUTOMATION_MINING_STATIONS: bytes.fromhex("3d4601000e00"),
     AUTOMATION_RESEARCH_STATIONS: bytes.fromhex("3e4601000e00"),
     AUTOMATION_OBSERVATION_POSTS: bytes.fromhex("3f4601000e00"),
@@ -67,16 +76,12 @@ AUTOMATION_FLAG_ORDER = (
     AUTOMATION_EXPLORE,
     AUTOMATION_SURVEY,
     AUTOMATION_ANOMALIES,
-    None,
+    AUTOMATION_ASTRAL_RIFTS,
     AUTOMATION_DIGSITES,
-    None,
+    AUTOMATION_SEND_GRAVITY_SNARES,
     AUTOMATION_MINING_STATIONS,
     AUTOMATION_RESEARCH_STATIONS,
     AUTOMATION_OBSERVATION_POSTS,
-)
-AUTOMATION_UNKNOWN_FLAG_TAGS = (
-    bytes.fromhex("4a3001000e00"),
-    bytes.fromhex("8d4301000e00"),
 )
 
 
@@ -97,6 +102,19 @@ class ShipAutomationTarget:
     context_822c: int
     source_fleet_object: int
     options: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FleetRepairTarget:
+    context_822c: int
+    source_fleet_object: int
+
+
+@dataclass(frozen=True)
+class FleetUpgradeTarget:
+    context_822c: int
+    source_fleet_object: int
+    shipyard_build_queue_id: int
 
 
 def _common_command(actor: int, origin: int, command_serial: int) -> bytes:
@@ -204,6 +222,128 @@ def parse_fleet_attack_record(record: bytes) -> FleetAttackTarget | None:
         return None
 
 
+def build_fleet_repair_record(
+    *,
+    command_serial: int,
+    actor: int,
+    origin: int,
+    target: FleetRepairTarget,
+) -> bytes:
+    """Build the paired 8f32 return-to-base repair order."""
+    body = b"".join(
+        (
+            SHIP_AUTOMATION_FAMILY,
+            _common_command(actor, origin, command_serial),
+            COMMAND_PAYLOAD,
+            AUTOMATION_COMMAND_OBJECT,
+            REPAIR_SETTINGS_OBJECT,
+            _u8(REPAIR_FLAG_9232_TAG, 0, "repair_flag_9232"),
+            _u8(REPAIR_FLAG_163B_TAG, 0, "repair_flag_163b"),
+            _u8(AUTOMATION_ENABLED_TAG, 1, "repair_enabled"),
+            _u32(AUTOMATION_UNKNOWN_ID_TAG, 0xFFFFFFFF, "repair_unknown_id"),
+            END_OBJECT,
+            END_OBJECT,
+            _u32(CONTEXT_TAG, target.context_822c, "context_822c"),
+            _u32(
+                SOURCE_FLEET_TAG,
+                target.source_fleet_object,
+                "source_fleet_object",
+            ),
+            END_OBJECT,
+            END_OBJECT,
+        )
+    )
+    result = _record(body)
+    if parse_fleet_repair_record(result) != target:
+        raise RuntimeError("The fleet-repair target changed during construction.")
+    return result
+
+
+def parse_fleet_repair_record(record: bytes) -> FleetRepairTarget | None:
+    if record[6 : 6 + len(SHIP_AUTOMATION_FAMILY)] != SHIP_AUTOMATION_FAMILY:
+        return None
+    if REPAIR_SETTINGS_OBJECT not in record:
+        return None
+    try:
+        if _tagged_u8(record, REPAIR_FLAG_9232_TAG, "repair_flag_9232") != 0:
+            return None
+        if _tagged_u8(record, REPAIR_FLAG_163B_TAG, "repair_flag_163b") != 0:
+            return None
+        if _tagged_u8(record, AUTOMATION_ENABLED_TAG, "repair_enabled") != 1:
+            return None
+        if _tagged_u32(record, AUTOMATION_UNKNOWN_ID_TAG, "repair_unknown_id") != (
+            0xFFFFFFFF
+        ):
+            return None
+        return FleetRepairTarget(
+            context_822c=_tagged_u32(record, CONTEXT_TAG, "context_822c"),
+            source_fleet_object=_tagged_u32(
+                record, SOURCE_FLEET_TAG, "source_fleet_object"
+            ),
+        )
+    except ValueError:
+        return None
+
+
+def build_fleet_upgrade_record(
+    *,
+    command_serial: int,
+    actor: int,
+    origin: int,
+    target: FleetUpgradeTarget,
+) -> bytes:
+    """Build the paired 8f2f order to upgrade a fleet at one shipyard queue."""
+    body = b"".join(
+        (
+            FLEET_UPGRADE_FAMILY,
+            _common_command(actor, origin, command_serial),
+            COMMAND_PAYLOAD,
+            _u32(CONTEXT_TAG, target.context_822c, "context_822c"),
+            _u32(
+                SOURCE_FLEET_TAG,
+                target.source_fleet_object,
+                "source_fleet_object",
+            ),
+            _u32(
+                SHIPYARD_BUILD_QUEUE_TAG,
+                target.shipyard_build_queue_id,
+                "shipyard_build_queue_id",
+            ),
+            _u8(FLAG_6340_TAG, 0, "flag_6340"),
+            _u8(FLAG_DE35_TAG, 0, "flag_de35"),
+            END_OBJECT,
+            END_OBJECT,
+        )
+    )
+    result = _record(body)
+    if parse_fleet_upgrade_record(result) != target:
+        raise RuntimeError("The fleet-upgrade target changed during construction.")
+    return result
+
+
+def parse_fleet_upgrade_record(record: bytes) -> FleetUpgradeTarget | None:
+    if record[6 : 6 + len(FLEET_UPGRADE_FAMILY)] != FLEET_UPGRADE_FAMILY:
+        return None
+    try:
+        if _tagged_u8(record, FLAG_6340_TAG, "flag_6340") != 0:
+            return None
+        if _tagged_u8(record, FLAG_DE35_TAG, "flag_de35") != 0:
+            return None
+        return FleetUpgradeTarget(
+            context_822c=_tagged_u32(record, CONTEXT_TAG, "context_822c"),
+            source_fleet_object=_tagged_u32(
+                record, SOURCE_FLEET_TAG, "source_fleet_object"
+            ),
+            shipyard_build_queue_id=_tagged_u32(
+                record,
+                SHIPYARD_BUILD_QUEUE_TAG,
+                "shipyard_build_queue_id",
+            ),
+        )
+    except ValueError:
+        return None
+
+
 def build_construction_ship_starbase_record(
     *,
     command_serial: int,
@@ -298,20 +438,14 @@ def build_ship_automation_record(
     options = _validated_automation_options(target.options)
     enabled = set(options)
     flags: list[bytes] = []
-    unknown_index = 0
     for option in AUTOMATION_FLAG_ORDER:
-        if option is None:
-            tag = AUTOMATION_UNKNOWN_FLAG_TAGS[unknown_index]
-            unknown_index += 1
-            flags.append(_u8(tag, 0, "unknown_automation_flag"))
-        else:
-            flags.append(
-                _u8(
-                    AUTOMATION_OPTION_FLAG_TAGS[option],
-                    int(option in enabled),
-                    option,
-                )
+        flags.append(
+            _u8(
+                AUTOMATION_OPTION_FLAG_TAGS[option],
+                int(option in enabled),
+                option,
             )
+        )
     body = b"".join(
         (
             SHIP_AUTOMATION_FAMILY,
@@ -387,9 +521,6 @@ def parse_ship_automation_record(record: bytes) -> ShipAutomationTarget | None:
         enabled = set(options)
         for option, tag in AUTOMATION_OPTION_FLAG_TAGS.items():
             if _tagged_u8(record, tag, option) != int(option in enabled):
-                return None
-        for index, tag in enumerate(AUTOMATION_UNKNOWN_FLAG_TAGS):
-            if _tagged_u8(record, tag, f"unknown_flag_{index}") != 0:
                 return None
         return ShipAutomationTarget(
             context_822c=_tagged_u32(record, CONTEXT_TAG, "context_822c"),

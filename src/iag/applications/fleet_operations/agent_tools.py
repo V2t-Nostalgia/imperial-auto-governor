@@ -13,13 +13,23 @@ from iag.stellaris.execution.session_proxy_controller import (
     SessionProxyError,
 )
 from iag.stellaris.game_knowledge import detect_game_root
+from iag.stellaris.state.expansion_profiles import (
+    extract_expansion_profiles,
+    selected_colonization,
+    selected_starbase_operation,
+)
 from iag.stellaris.state.fleet_profiles import (
     extract_fleet_profiles,
     resolve_created_fleet_template,
+    selected_attack,
+    selected_construction_ship_starbase,
     selected_coordinate_move,
+    selected_fleet_repair,
     selected_fleet_reinforcement,
+    selected_fleet_upgrade,
     selected_move,
     selected_new_fleet_reinforcement,
+    selected_ship_automation,
 )
 from iag.stellaris.state.planet_profiles import load_gamestate
 from iag.stellaris.state.save_ingest import resolve_current_save
@@ -36,8 +46,9 @@ INSPECT_FLEETS_TOOL = {
     "function": {
         "name": "inspect_fleet_state",
         "description": (
-            "读取最新同步存档中的全部玩家舰队、军力、位置、忙碌/交战/MIA 状态，"
-            "以及玩家对每支舰队授予的移动和攻击权限。"
+            "读取最新同步存档中的玩家舰队和民用船、军力、位置、忙碌/交战/MIA "
+            "状态、舰船船体/装甲/护盾剩余百分比的舰队平均数与中位数，以及玩家"
+            "逐船队授予的移动、攻击、维修、升级、增援、自动化与建站权限。"
         ),
         "parameters": {"type": "object", "properties": {}},
     },
@@ -69,8 +80,8 @@ PREPARE_ATTACK_TOOL = {
     "function": {
         "name": "prepare_fleet_attack",
         "description": (
-            "预检查舰队攻击意图。6b33 执行器已完成非房主成对验证并接入会话代理，"
-            "但确定性敌对目标映射尚未接入，因此当前版本只会明确拒绝执行。"
+            "准备一条 6b33 舰队攻击命令。目标必须由最新存档中的玩家 hostile "
+            "情报与当前全局舰队位置唯一匹配，来源舰队还必须获得逐舰队攻击授权。"
         ),
         "parameters": {
             "type": "object",
@@ -80,6 +91,47 @@ PREPARE_ATTACK_TOOL = {
                 "reason": {"type": "string", "maxLength": 300},
             },
             "required": ["fleet_id", "target_fleet_id", "reason"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+PREPARE_REPAIR_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "prepare_fleet_repair",
+        "description": (
+            "准备一条 8f32 返港维修命令。来源必须是最新存档确认受损、空闲、"
+            "未失踪、未交战，并获玩家逐舰队维修授权的军用舰队。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "fleet_id": {"type": "integer"},
+                "reason": {"type": "string", "maxLength": 300},
+            },
+            "required": ["fleet_id", "reason"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+PREPARE_UPGRADE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "prepare_fleet_upgrade",
+        "description": (
+            "准备一条 8f2f 舰队升级命令。来源舰队必须有存档确认的升级设计，"
+            "目标必须是 inspect_fleet_state 返回的己方船坞建设队列。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "fleet_id": {"type": "integer"},
+                "shipyard_build_queue_id": {"type": "integer"},
+                "reason": {"type": "string", "maxLength": 300},
+            },
+            "required": ["fleet_id", "shipyard_build_queue_id", "reason"],
             "additionalProperties": False,
         },
     },
@@ -112,13 +164,116 @@ EXECUTE_FLEET_TOOL = {
     "function": {
         "name": "execute_prepared_fleet_order",
         "description": (
-            "执行本回合刚由 prepare_fleet_move 生成的命令。执行前会重新读取存档、"
-            "复查逐舰队权限和可用状态，并要求会话代理已经锁定本局流量。"
+            "执行本回合刚准备的舰队、民用船、殖民或恒星基地命令。执行前会重新"
+            "读取存档、重建同一候选、复查玩家权限，并要求会话代理锁定本局流量。"
         ),
         "parameters": {
             "type": "object",
             "properties": {"run_id": {"type": "string"}},
             "required": ["run_id"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+PREPARE_SHIP_AUTOMATION_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "prepare_ship_automation",
+        "description": (
+            "为一艘玩家已授权的科研船或工程船配置 8f32 自动化。只接受该船型"
+            "已经实机验证的选项；由内阁科学官带队时会拒绝星界裂隙自动化。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "fleet_id": {"type": "integer"},
+                "options": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": True,
+                    "items": {"type": "string"},
+                },
+                "reason": {"type": "string", "maxLength": 300},
+            },
+            "required": ["fleet_id", "options", "reason"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+PREPARE_CONSTRUCTION_STARBASE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "prepare_construction_ship_starbase",
+        "description": (
+            "准备工程船 e02c 前哨建设命令。首版只允许最新存档中已完全勘探、"
+            "无恒星基地、无可见敌军并与工程船当前位置直接相邻的星系。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "fleet_id": {"type": "integer"},
+                "destination_system_id": {"type": "integer"},
+                "reason": {"type": "string", "maxLength": 300},
+            },
+            "required": ["fleet_id", "destination_system_id", "reason"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+INSPECT_EXPANSION_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "inspect_expansion_state",
+        "description": (
+            "读取存档和匹配版本原版规则生成殖民与恒星基地候选，包括宜居度依据、"
+            "殖民物种/设计/来源，以及恒星基地队列、等级、模块和建筑槽。"
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+
+PREPARE_COLONIZATION_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "prepare_colonization",
+        "description": (
+            "从 inspect_expansion_state 返回的候选中准备 3d37 订购殖民船并殖民。"
+            "只支持已经差分验证的 col_city 与 col_mining 初始规划。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "candidate_id": {"type": "string"},
+                "designation": {
+                    "type": "string",
+                    "enum": ["col_city", "col_mining"],
+                },
+                "reason": {"type": "string", "maxLength": 300},
+            },
+            "required": ["candidate_id", "designation", "reason"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+PREPARE_STARBASE_OPERATION_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "prepare_starbase_operation",
+        "description": (
+            "从 inspect_expansion_state 返回的候选中准备恒星基地升级、模块或建筑"
+            "操作。已占用槽替换还要求玩家单独开启高影响替换开关。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "candidate_id": {"type": "string"},
+                "reason": {"type": "string", "maxLength": 300},
+            },
+            "required": ["candidate_id", "reason"],
             "additionalProperties": False,
         },
     },
@@ -186,7 +341,8 @@ PREPARE_FLEET_REINFORCEMENT_TOOL = {
         "name": "prepare_fleet_reinforcement",
         "description": (
             "把指定玩家舰队中某一设计的目标总数调整为 target_count，然后按舰队"
-            "管理器的两阶段协议请求增援。每次增加目标编制均会独立等待房主确认。"
+            "管理器的 123b 选中舰队协议请求增援。每次增加目标编制均会独立等待"
+            "房主确认。"
         ),
         "parameters": {
             "type": "object",
@@ -234,7 +390,7 @@ EXECUTE_SHIP_TOOL = {
         "name": "execute_prepared_ship_action",
         "description": (
             "执行本回合刚准备的舰船设计、指定舰队增援或新舰队阶段。执行前"
-            "重新读取存档；模板增量和两阶段增援逐项确认，首个失败后立即停止。"
+            "重新读取存档；模板增量和选中舰队增援逐项确认，首个失败后立即停止。"
         ),
         "parameters": {
             "type": "object",
@@ -275,6 +431,14 @@ def normalized_permissions(value: Any) -> dict[str, dict[str, bool]]:
             "allow_reinforce": bool(
                 permission.get("allow_reinforce", False)
             ),
+            "allow_repair": bool(permission.get("allow_repair", False)),
+            "allow_upgrade": bool(permission.get("allow_upgrade", False)),
+            "allow_automation": bool(
+                permission.get("allow_automation", False)
+            ),
+            "allow_build_starbase": bool(
+                permission.get("allow_build_starbase", False)
+            ),
         }
     return result
 
@@ -292,9 +456,16 @@ class FleetToolbox:
 
     tool_names: ClassVar[frozenset[str]] = frozenset({
         "inspect_fleet_state",
+        "inspect_expansion_state",
         "prepare_fleet_move",
         "prepare_fleet_coordinate_move",
         "prepare_fleet_attack",
+        "prepare_fleet_repair",
+        "prepare_fleet_upgrade",
+        "prepare_ship_automation",
+        "prepare_construction_ship_starbase",
+        "prepare_colonization",
+        "prepare_starbase_operation",
         "execute_prepared_fleet_order",
         "inspect_ship_state",
         "prepare_ship_design_clone",
@@ -319,6 +490,12 @@ class FleetToolbox:
         self.attack_enabled = bool(
             self.config.get("experimental_fleet_attack_enabled", False)
         )
+        self.maintenance_enabled = bool(
+            self.config.get(
+                "experimental_fleet_maintenance_tools_enabled",
+                False,
+            )
+        )
         self.coordinate_enabled = bool(
             self.config.get(
                 "experimental_fleet_coordinate_tools_enabled",
@@ -340,6 +517,28 @@ class FleetToolbox:
         self.new_fleet_enabled = bool(
             self.config.get("experimental_new_fleet_tools_enabled", False)
         )
+        self.civilian_ship_enabled = bool(
+            self.config.get("experimental_civilian_ship_tools_enabled", False)
+        )
+        self.colonization_enabled = bool(
+            self.config.get("experimental_colonization_tools_enabled", False)
+        )
+        self.starbase_enabled = bool(
+            self.config.get("experimental_starbase_tools_enabled", False)
+        )
+        self.starbase_replacement_enabled = bool(
+            self.config.get(
+                "experimental_starbase_replacement_enabled",
+                False,
+            )
+        )
+        self.minimum_colonization_habitability = float(
+            self.config.get("minimum_colonization_habitability", 0.30)
+        )
+        if not 0 <= self.minimum_colonization_habitability <= 1:
+            raise FleetToolError(
+                "minimum_colonization_habitability 必须在 0 到 1 之间。"
+            )
         self.maximum_target_increase = max(
             1,
             min(
@@ -364,8 +563,33 @@ class FleetToolbox:
                 value.append(PREPARE_COORDINATE_MOVE_TOOL)
             if self.attack_enabled:
                 value.append(PREPARE_ATTACK_TOOL)
-            if self.allow_execute:
-                value.append(EXECUTE_FLEET_TOOL)
+        if self.maintenance_enabled:
+            if not self.enabled:
+                value.append(INSPECT_FLEETS_TOOL)
+            value.extend([PREPARE_REPAIR_TOOL, PREPARE_UPGRADE_TOOL])
+        if self.civilian_ship_enabled:
+            if not self.enabled:
+                value.append(INSPECT_FLEETS_TOOL)
+            value.extend(
+                [
+                    PREPARE_SHIP_AUTOMATION_TOOL,
+                    PREPARE_CONSTRUCTION_STARBASE_TOOL,
+                ]
+            )
+        if self.colonization_enabled or self.starbase_enabled:
+            value.append(INSPECT_EXPANSION_TOOL)
+        if self.colonization_enabled:
+            value.append(PREPARE_COLONIZATION_TOOL)
+        if self.starbase_enabled:
+            value.append(PREPARE_STARBASE_OPERATION_TOOL)
+        if self.allow_execute and (
+            self.enabled
+            or self.maintenance_enabled
+            or self.civilian_ship_enabled
+            or self.colonization_enabled
+            or self.starbase_enabled
+        ):
+            value.append(EXECUTE_FLEET_TOOL)
         if (
             self.ship_design_enabled
             or self.fleet_reinforcement_enabled
@@ -389,7 +613,14 @@ class FleetToolbox:
             )
         ):
             value.append(EXECUTE_SHIP_TOOL)
-        return value
+        unique: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for schema in value:
+            name = str(schema["function"]["name"])
+            if name not in seen:
+                unique.append(schema)
+                seen.add(name)
+        return unique
 
     def _save_path(self) -> Path:
         campaign_id = self.store.conversation_metadata().get("campaign_id")
@@ -409,6 +640,14 @@ class FleetToolbox:
         return path, extract_ship_profiles(
             load_gamestate(path),
             game_root=detect_game_root(self.config),
+        )
+
+    def _expansion_profile(self) -> tuple[Path, dict[str, Any]]:
+        path = self._save_path()
+        return path, extract_expansion_profiles(
+            load_gamestate(path),
+            game_root=detect_game_root(self.config),
+            minimum_habitability=self.minimum_colonization_habitability,
         )
 
     def inspect_ships(self) -> dict[str, Any]:
@@ -974,14 +1213,10 @@ class FleetToolbox:
             confirmed_increase = confirmed_actions.count(
                 "add_fleet_template_ship"
             )
-            reinforcement_required = "reinforce_fleet_stage_1" in sequence
+            reinforcement_required = "reinforce_selected_fleet" in sequence
             reinforcement_confirmed = (
                 reinforcement_required
-                and confirmed_actions[-2:]
-                == [
-                    "reinforce_fleet_stage_1",
-                    "reinforce_fleet_stage_2",
-                ]
+                and "reinforce_selected_fleet" in confirmed_actions
             )
             execution = {
                 "schema": "iag.tool_result.ship_action.v1",
@@ -1047,9 +1282,14 @@ class FleetToolbox:
             if not fleet.get("player_controllable", False):
                 continue
             permission = permissions.get(str(fleet["fleet_id"]), {})
+            fleet_view = {
+                key: value
+                for key, value in fleet.items()
+                if key != "ship_ids"
+            }
             fleets.append(
                 {
-                    **fleet,
+                    **fleet_view,
                     "permission": {
                         "allow_move": bool(permission.get("allow_move", False)),
                         "allow_attack": bool(
@@ -1057,6 +1297,18 @@ class FleetToolbox:
                         ),
                         "allow_reinforce": bool(
                             permission.get("allow_reinforce", False)
+                        ),
+                        "allow_repair": bool(
+                            permission.get("allow_repair", False)
+                        ),
+                        "allow_upgrade": bool(
+                            permission.get("allow_upgrade", False)
+                        ),
+                        "allow_automation": bool(
+                            permission.get("allow_automation", False)
+                        ),
+                        "allow_build_starbase": bool(
+                            permission.get("allow_build_starbase", False)
                         ),
                     },
                 }
@@ -1066,13 +1318,41 @@ class FleetToolbox:
             "source_save": str(path),
             "source_save_sha256": sha256_file(path),
             "fleets": fleets,
-            "attack_protocol_state": "paired_non_host_sample_required",
+            "attack_protocol_state": (
+                "save_backed_hostile_mapping_and_paired_6b33_verified"
+            ),
+            "civilian_automation_protocol_state": (
+                "paired_8f32_verified_options_only"
+            ),
+            "construction_starbase_protocol_state": (
+                "paired_e02c_adjacent_surveyed_targets_only"
+            ),
             "coordinate_protocol_state": (
                 "paired_non_host_samples_verified_experimental"
             ),
             "coordinate_limit": self.coordinate_limit,
+            "fleet_maintenance_enabled": self.maintenance_enabled,
             "reinforcement_protocol_state": (
-                "paired_non_host_samples_verified_experimental"
+                "selected_fleet_123b_paired_and_save_backed"
+            ),
+            "fleet_maintenance_protocol_state": (
+                "repair_8f32_and_upgrade_8f2f_paired_and_save_backed"
+            ),
+        }
+
+    def inspect_expansion(self) -> dict[str, Any]:
+        path, profile = self._expansion_profile()
+        return {
+            **profile,
+            "source_save": str(path),
+            "source_save_sha256": sha256_file(path),
+            "colonization_enabled": self.colonization_enabled,
+            "starbase_operations_enabled": self.starbase_enabled,
+            "starbase_replacement_enabled": (
+                self.starbase_replacement_enabled
+            ),
+            "minimum_colonization_habitability": (
+                self.minimum_colonization_habitability
             ),
         }
 
@@ -1141,16 +1421,239 @@ class FleetToolbox:
         return dict(self.prepared)
 
     def prepare_attack(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        if not self.enabled or not self.attack_enabled:
+            raise FleetToolError("玩家没有启用实验性舰队攻击工具。")
         fleet_id = int(arguments["fleet_id"])
+        target_fleet_id = int(arguments["target_fleet_id"])
+        reason = str(arguments["reason"]).strip()
+        path, profile = self._profile()
         permissions = normalized_permissions(
             self.store.get_state(FLEET_PERMISSIONS_KEY, {})
         )
         if not permissions.get(str(fleet_id), {}).get("allow_attack", False):
             raise FleetToolError(f"玩家没有授权调用舰队 {fleet_id} 进行攻击。")
-        raise FleetToolError(
-            "6b33 构造器和房主权威回包匹配已接入会话代理，但确定性敌对目标映射"
-            "尚未接入舰队 Application；v0.5.9 不会发送未经状态校验的攻击命令。"
+        try:
+            order = selected_attack(profile, fleet_id, target_fleet_id)
+        except ValueError as error:
+            raise FleetToolError(str(error)) from error
+        run_id = "fleet_attack_" + datetime.now(UTC).strftime(
+            "%Y%m%d_%H%M%S_%f"
         )
+        self.prepared = {
+            "run_id": run_id,
+            "action": "attack_fleet",
+            "reason": reason,
+            "order": order,
+            "source_save_sha256": sha256_file(path),
+            "source_game_date": profile.get("game_date"),
+            "prepared_at": now_iso(),
+        }
+        return dict(self.prepared)
+
+    def prepare_fleet_repair(
+        self,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not self.maintenance_enabled:
+            raise FleetToolError("玩家没有启用实验性舰队维修与升级工具。")
+        fleet_id = int(arguments["fleet_id"])
+        path, profile = self._profile()
+        permissions = normalized_permissions(
+            self.store.get_state(FLEET_PERMISSIONS_KEY, {})
+        )
+        if not permissions.get(str(fleet_id), {}).get("allow_repair", False):
+            raise FleetToolError(f"玩家没有授权舰队 {fleet_id} 返港维修。")
+        try:
+            order = selected_fleet_repair(profile, fleet_id)
+        except ValueError as error:
+            raise FleetToolError(str(error)) from error
+        run_id = "fleet_repair_" + datetime.now(UTC).strftime(
+            "%Y%m%d_%H%M%S_%f"
+        )
+        self.prepared = {
+            "run_id": run_id,
+            "action": "repair_fleet",
+            "reason": str(arguments["reason"]).strip(),
+            "order": order,
+            "source_save_sha256": sha256_file(path),
+            "source_game_date": profile.get("game_date"),
+            "prepared_at": now_iso(),
+        }
+        return dict(self.prepared)
+
+    def prepare_fleet_upgrade(
+        self,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not self.maintenance_enabled:
+            raise FleetToolError("玩家没有启用实验性舰队维修与升级工具。")
+        fleet_id = int(arguments["fleet_id"])
+        queue_id = int(arguments["shipyard_build_queue_id"])
+        path, profile = self._profile()
+        permissions = normalized_permissions(
+            self.store.get_state(FLEET_PERMISSIONS_KEY, {})
+        )
+        if not permissions.get(str(fleet_id), {}).get("allow_upgrade", False):
+            raise FleetToolError(f"玩家没有授权舰队 {fleet_id} 执行升级。")
+        try:
+            order = selected_fleet_upgrade(profile, fleet_id, queue_id)
+        except ValueError as error:
+            raise FleetToolError(str(error)) from error
+        run_id = "fleet_upgrade_" + datetime.now(UTC).strftime(
+            "%Y%m%d_%H%M%S_%f"
+        )
+        self.prepared = {
+            "run_id": run_id,
+            "action": "upgrade_fleet",
+            "reason": str(arguments["reason"]).strip(),
+            "order": order,
+            "source_save_sha256": sha256_file(path),
+            "source_game_date": profile.get("game_date"),
+            "prepared_at": now_iso(),
+        }
+        return dict(self.prepared)
+
+    def prepare_ship_automation(
+        self,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not self.civilian_ship_enabled:
+            raise FleetToolError("玩家没有启用实验性民用船工具。")
+        fleet_id = int(arguments["fleet_id"])
+        options = arguments.get("options")
+        if not isinstance(options, list):
+            raise FleetToolError("options 必须是数组。")
+        path, profile = self._profile()
+        permissions = normalized_permissions(
+            self.store.get_state(FLEET_PERMISSIONS_KEY, {})
+        )
+        if not permissions.get(str(fleet_id), {}).get(
+            "allow_automation", False
+        ):
+            raise FleetToolError(
+                f"玩家没有授权调用民用船 {fleet_id} 的自动化。"
+            )
+        try:
+            order = selected_ship_automation(profile, fleet_id, options)
+        except (TypeError, ValueError) as error:
+            raise FleetToolError(str(error)) from error
+        run_id = "ship_automation_" + datetime.now(UTC).strftime(
+            "%Y%m%d_%H%M%S_%f"
+        )
+        self.prepared = {
+            "run_id": run_id,
+            "action": "configure_ship_automation",
+            "reason": str(arguments["reason"]).strip(),
+            "order": order,
+            "source_save_sha256": sha256_file(path),
+            "source_game_date": profile.get("game_date"),
+            "prepared_at": now_iso(),
+        }
+        return dict(self.prepared)
+
+    def prepare_construction_starbase(
+        self,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not self.civilian_ship_enabled:
+            raise FleetToolError("玩家没有启用实验性民用船工具。")
+        fleet_id = int(arguments["fleet_id"])
+        destination_system_id = int(arguments["destination_system_id"])
+        path, profile = self._profile()
+        permissions = normalized_permissions(
+            self.store.get_state(FLEET_PERMISSIONS_KEY, {})
+        )
+        if not permissions.get(str(fleet_id), {}).get(
+            "allow_build_starbase", False
+        ):
+            raise FleetToolError(
+                f"玩家没有授权工程船 {fleet_id} 建造恒星基地。"
+            )
+        try:
+            order = selected_construction_ship_starbase(
+                profile,
+                fleet_id,
+                destination_system_id,
+            )
+        except ValueError as error:
+            raise FleetToolError(str(error)) from error
+        run_id = "construction_starbase_" + datetime.now(UTC).strftime(
+            "%Y%m%d_%H%M%S_%f"
+        )
+        self.prepared = {
+            "run_id": run_id,
+            "action": "build_starbase",
+            "reason": str(arguments["reason"]).strip(),
+            "order": order,
+            "source_save_sha256": sha256_file(path),
+            "source_game_date": profile.get("game_date"),
+            "prepared_at": now_iso(),
+        }
+        return dict(self.prepared)
+
+    def prepare_colonization(
+        self,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not self.colonization_enabled:
+            raise FleetToolError("玩家没有启用实验性自动殖民工具。")
+        candidate_id = str(arguments["candidate_id"])
+        designation = str(arguments["designation"])
+        path, profile = self._expansion_profile()
+        try:
+            order = selected_colonization(
+                profile,
+                candidate_id=candidate_id,
+                designation=designation,
+            )
+        except ValueError as error:
+            raise FleetToolError(str(error)) from error
+        run_id = "colonization_" + datetime.now(UTC).strftime(
+            "%Y%m%d_%H%M%S_%f"
+        )
+        self.prepared = {
+            "run_id": run_id,
+            "action": "order_colony_ship_and_colonize",
+            "reason": str(arguments["reason"]).strip(),
+            "candidate_id": candidate_id,
+            "designation": designation,
+            "order": order,
+            "source_save_sha256": sha256_file(path),
+            "source_game_date": profile.get("game_date"),
+            "prepared_at": now_iso(),
+        }
+        return dict(self.prepared)
+
+    def prepare_starbase_operation(
+        self,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not self.starbase_enabled:
+            raise FleetToolError("玩家没有启用实验性恒星基地工具。")
+        candidate_id = str(arguments["candidate_id"])
+        path, profile = self._expansion_profile()
+        try:
+            order = selected_starbase_operation(
+                profile,
+                candidate_id=candidate_id,
+                allow_replacement=self.starbase_replacement_enabled,
+            )
+        except ValueError as error:
+            raise FleetToolError(str(error)) from error
+        run_id = "starbase_" + datetime.now(UTC).strftime(
+            "%Y%m%d_%H%M%S_%f"
+        )
+        self.prepared = {
+            "run_id": run_id,
+            "action": str(order["action"]),
+            "reason": str(arguments["reason"]).strip(),
+            "candidate_id": candidate_id,
+            "order": order,
+            "source_save_sha256": sha256_file(path),
+            "source_game_date": profile.get("game_date"),
+            "prepared_at": now_iso(),
+        }
+        return dict(self.prepared)
 
     def execute(self, arguments: dict[str, Any]) -> dict[str, Any]:
         if not self.allow_execute:
@@ -1158,15 +1661,19 @@ class FleetToolbox:
         run_id = str(arguments.get("run_id", ""))
         if self.prepared is None or run_id != self.prepared["run_id"]:
             raise FleetToolError("run_id 必须来自本回合刚准备的舰队命令。")
-        fleet_id = int(self.prepared["order"]["source_fleet"]["fleet_id"])
         action = str(self.prepared["action"])
-        _, profile = self._profile()
         permissions = normalized_permissions(
             self.store.get_state(FLEET_PERMISSIONS_KEY, {})
         )
-        if not permissions.get(str(fleet_id), {}).get("allow_move", False):
-            raise FleetToolError("玩家在执行前撤销了该舰队的移动权限。")
+        fleet_id: int | None = None
+        destination_system_id: int | None = None
         if action == "move_fleet":
+            if not self.enabled:
+                raise FleetToolError("玩家在执行前关闭了实验性舰队工具。")
+            _, profile = self._profile()
+            fleet_id = int(self.prepared["order"]["source_fleet"]["fleet_id"])
+            if not permissions.get(str(fleet_id), {}).get("allow_move", False):
+                raise FleetToolError("玩家在执行前撤销了该舰队的移动权限。")
             destination_system_id = int(
                 self.prepared["order"]["destination_system"]["system_id"]
             )
@@ -1175,6 +1682,12 @@ class FleetToolbox:
             except ValueError as error:
                 raise FleetToolError(str(error)) from error
         elif action == "move_fleet_to_coordinate":
+            if not self.enabled or not self.coordinate_enabled:
+                raise FleetToolError("玩家在执行前关闭了星系内坐标移动。")
+            _, profile = self._profile()
+            fleet_id = int(self.prepared["order"]["source_fleet"]["fleet_id"])
+            if not permissions.get(str(fleet_id), {}).get("allow_move", False):
+                raise FleetToolError("玩家在执行前撤销了该舰队的移动权限。")
             destination = self.prepared["order"]["destination_coordinate"]
             try:
                 refreshed = selected_coordinate_move(
@@ -1187,6 +1700,128 @@ class FleetToolbox:
             except ValueError as error:
                 raise FleetToolError(str(error)) from error
             destination_system_id = int(destination["system_origin"])
+        elif action == "attack_fleet":
+            if not self.enabled or not self.attack_enabled:
+                raise FleetToolError("玩家在执行前关闭了舰队攻击工具。")
+            _, profile = self._profile()
+            fleet_id = int(self.prepared["order"]["source_fleet"]["fleet_id"])
+            if not permissions.get(str(fleet_id), {}).get("allow_attack", False):
+                raise FleetToolError("玩家在执行前撤销了该舰队的攻击权限。")
+            target_fleet_id = int(
+                self.prepared["order"]["hostile_target"]["fleet_id"]
+            )
+            try:
+                refreshed = selected_attack(
+                    profile,
+                    fleet_id,
+                    target_fleet_id,
+                )
+            except ValueError as error:
+                raise FleetToolError(str(error)) from error
+            destination_system_id = refreshed["hostile_target"].get("system_id")
+        elif action == "repair_fleet":
+            if not self.maintenance_enabled:
+                raise FleetToolError("玩家在执行前关闭了舰队维修与升级工具。")
+            _, profile = self._profile()
+            fleet_id = int(self.prepared["order"]["source_fleet"]["fleet_id"])
+            if not permissions.get(str(fleet_id), {}).get("allow_repair", False):
+                raise FleetToolError("玩家在执行前撤销了该舰队的维修权限。")
+            try:
+                refreshed = selected_fleet_repair(profile, fleet_id)
+            except ValueError as error:
+                raise FleetToolError(str(error)) from error
+        elif action == "upgrade_fleet":
+            if not self.maintenance_enabled:
+                raise FleetToolError("玩家在执行前关闭了舰队维修与升级工具。")
+            _, profile = self._profile()
+            fleet_id = int(self.prepared["order"]["source_fleet"]["fleet_id"])
+            if not permissions.get(str(fleet_id), {}).get("allow_upgrade", False):
+                raise FleetToolError("玩家在执行前撤销了该舰队的升级权限。")
+            queue_id = int(
+                self.prepared["order"]["target"]["shipyard_build_queue_id"]
+            )
+            try:
+                refreshed = selected_fleet_upgrade(profile, fleet_id, queue_id)
+            except ValueError as error:
+                raise FleetToolError(str(error)) from error
+            destination_system_id = refreshed["destination_shipyard"].get(
+                "system_id"
+            )
+        elif action == "configure_ship_automation":
+            if not self.civilian_ship_enabled:
+                raise FleetToolError("玩家在执行前关闭了民用船工具。")
+            _, profile = self._profile()
+            fleet_id = int(self.prepared["order"]["source_fleet"]["fleet_id"])
+            if not permissions.get(str(fleet_id), {}).get(
+                "allow_automation", False
+            ):
+                raise FleetToolError("玩家在执行前撤销了该民用船的自动化权限。")
+            try:
+                refreshed = selected_ship_automation(
+                    profile,
+                    fleet_id,
+                    list(self.prepared["order"]["options"]),
+                )
+            except (TypeError, ValueError) as error:
+                raise FleetToolError(str(error)) from error
+        elif action == "build_starbase":
+            if not self.civilian_ship_enabled:
+                raise FleetToolError("玩家在执行前关闭了民用船工具。")
+            _, profile = self._profile()
+            fleet_id = int(self.prepared["order"]["source_fleet"]["fleet_id"])
+            if not permissions.get(str(fleet_id), {}).get(
+                "allow_build_starbase", False
+            ):
+                raise FleetToolError("玩家在执行前撤销了工程船建站权限。")
+            destination_system_id = int(
+                self.prepared["order"]["destination_system"]["system_id"]
+            )
+            try:
+                refreshed = selected_construction_ship_starbase(
+                    profile,
+                    fleet_id,
+                    destination_system_id,
+                )
+            except ValueError as error:
+                raise FleetToolError(str(error)) from error
+        elif action == "order_colony_ship_and_colonize":
+            if not self.colonization_enabled:
+                raise FleetToolError("玩家在执行前关闭了自动殖民工具。")
+            _, profile = self._expansion_profile()
+            try:
+                refreshed = selected_colonization(
+                    profile,
+                    candidate_id=str(self.prepared["candidate_id"]),
+                    designation=str(self.prepared["designation"]),
+                )
+            except ValueError as error:
+                raise FleetToolError(str(error)) from error
+            destination_system_id = refreshed["target_planet"].get("system_id")
+        elif action in {
+            "upgrade_starbase",
+            "set_starbase_module",
+            "set_starbase_building",
+        }:
+            if not self.starbase_enabled:
+                raise FleetToolError("玩家在执行前关闭了恒星基地工具。")
+            _, profile = self._expansion_profile()
+            try:
+                refreshed = selected_starbase_operation(
+                    profile,
+                    candidate_id=str(self.prepared["candidate_id"]),
+                    allow_replacement=self.starbase_replacement_enabled,
+                )
+            except ValueError as error:
+                raise FleetToolError(str(error)) from error
+            destination_system_id = next(
+                (
+                    item.get("system_id")
+                    for item in profile.get("starbases", [])
+                    if int(item["starbase_index"])
+                    == int(refreshed["target"]["starbase_object"])
+                ),
+                None,
+            )
         else:
             raise FleetToolError(f"不支持的已准备舰队动作：{action}。")
         try:
@@ -1200,19 +1835,28 @@ class FleetToolbox:
         success = result.get("outcome") == "confirmed"
         if not success:
             raise FleetToolError(
-                str(result.get("error") or "舰队移动未获房主权威确认。")
+                str(result.get("error") or "命令未获房主权威确认。")
             )
-        self.store.set_state(
-            "last_fleet_execution",
-            {
-                "run_id": run_id,
-                "action": action,
-                "fleet_id": fleet_id,
-                "destination_system_id": destination_system_id,
-                "recorded_at": now_iso(),
-                "proxy_result": result,
-            },
+        fact = {
+            "run_id": run_id,
+            "action": action,
+            "fleet_id": fleet_id,
+            "destination_system_id": destination_system_id,
+            "recorded_at": now_iso(),
+            "proxy_result": result,
+        }
+        fact_key = (
+            "last_expansion_execution"
+            if action
+            in {
+                "order_colony_ship_and_colonize",
+                "upgrade_starbase",
+                "set_starbase_module",
+                "set_starbase_building",
+            }
+            else "last_fleet_execution"
         )
+        self.store.set_state(fact_key, fact)
         self.prepared = None
         return {
             "schema": "iag.tool_result.fleet_execution.v1",
@@ -1221,6 +1865,7 @@ class FleetToolbox:
             "fleet_id": fleet_id,
             "destination_system_id": destination_system_id,
             "action": action,
+            "order": refreshed,
             "confirmation": result,
         }
 
@@ -1236,7 +1881,10 @@ class FleetToolbox:
                 for fleet in result["fleets"]
             )
             callable_now = sum(
-                fleet.get("ai_callable_now") is True
+                (
+                    fleet.get("ai_callable_now") is True
+                    or fleet.get("civilian_callable_now") is True
+                )
                 and any(fleet.get("permission", {}).values())
                 for fleet in result["fleets"]
             )
@@ -1269,11 +1917,70 @@ class FleetToolbox:
             )
         elif name == "prepare_fleet_attack":
             result = self.prepare_attack(arguments)
-            summary = "攻击命令已准备。"
+            source = result["order"]["source_fleet"]
+            target = result["order"]["hostile_target"]
+            summary = (
+                f"已准备舰队 {fleet_label(source)} 攻击敌对舰队 "
+                f"{fleet_label(target)}；尚未发包。"
+            )
+        elif name == "prepare_fleet_repair":
+            result = self.prepare_fleet_repair(arguments)
+            source = result["order"]["source_fleet"]
+            summary = (
+                f"已准备舰队 {fleet_label(source)} 返港维修；尚未发包。"
+            )
+        elif name == "prepare_fleet_upgrade":
+            result = self.prepare_fleet_upgrade(arguments)
+            source = result["order"]["source_fleet"]
+            shipyard = result["order"]["destination_shipyard"]
+            destination = (
+                shipyard.get("system_display_name_hint")
+                or shipyard.get("system_name_key")
+                or shipyard.get("system_id")
+            )
+            summary = (
+                f"已准备舰队 {fleet_label(source)} 前往 {destination} 升级；"
+                "尚未发包。"
+            )
+        elif name == "prepare_ship_automation":
+            result = self.prepare_ship_automation(arguments)
+            source = result["order"]["source_fleet"]
+            summary = (
+                f"已准备民用船 {fleet_label(source)} 的自动化选项："
+                f"{', '.join(result['order']['options'])}；尚未发包。"
+            )
+        elif name == "prepare_construction_ship_starbase":
+            result = self.prepare_construction_starbase(arguments)
+            source = result["order"]["source_fleet"]
+            destination = result["order"]["destination_system"]
+            summary = (
+                f"已准备工程船 {fleet_label(source)} 在 "
+                f"{fleet_label(destination)} 建造恒星基地；尚未发包。"
+            )
+        elif name == "inspect_expansion_state":
+            result = self.inspect_expansion()
+            summary = (
+                f"已生成 {len(result['colonization_candidates'])} 个殖民候选和 "
+                f"{len(result['starbase_operation_candidates'])} 个恒星基地候选。"
+            )
+        elif name == "prepare_colonization":
+            result = self.prepare_colonization(arguments)
+            target = result["order"]["target_planet"]
+            summary = (
+                f"已准备殖民 {fleet_label(target)}，初始规划为 "
+                f"{result['designation']}；尚未发包。"
+            )
+        elif name == "prepare_starbase_operation":
+            result = self.prepare_starbase_operation(arguments)
+            summary = (
+                f"已准备恒星基地操作 {result['action']}："
+                f"{result['candidate_id']}；尚未发包。"
+            )
         elif name == "execute_prepared_fleet_order":
             result = self.execute(arguments)
             summary = (
-                f"舰队 {result['fleet_id']} 的移动命令已获房主权威确认。"
+                f"{result['action']} 已获房主权威确认；"
+                "最终游戏状态仍以后续新存档为准。"
             )
         elif name == "inspect_ship_state":
             result = self.inspect_ships()

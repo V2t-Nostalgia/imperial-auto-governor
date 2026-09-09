@@ -11,12 +11,20 @@ from pydantic import (
     model_validator,
 )
 
-TransportName = Literal["openai_sdk", "raw_http"]
+TransportName = Literal["openai_sdk", "anthropic_sdk", "raw_http"]
 
 ProtocolName = Literal[
     "chat_completions_compatible",
     "responses_compatible",
+    "anthropic_messages_compatible",
 ]
+
+TOOL_CALL_PROTOCOLS = frozenset(
+    {
+        "chat_completions_compatible",
+        "anthropic_messages_compatible",
+    }
+)
 
 
 class ModelEndpoint(BaseModel):
@@ -38,6 +46,7 @@ class ModelEndpoint(BaseModel):
     supports_tools: bool
     chat_completions_path: str = "/chat/completions"
     responses_path: str = "/responses"
+    messages_path: str = "/messages"
     models_path: str | None = "/models"
     timeout_seconds: PositiveInt = 120
     probe_timeout_seconds: PositiveInt = 10
@@ -63,6 +72,7 @@ class ModelEndpoint(BaseModel):
     @field_validator(
         "chat_completions_path",
         "responses_path",
+        "messages_path",
         "models_path",
     )
     @classmethod
@@ -79,6 +89,35 @@ class ModelEndpoint(BaseModel):
         if self.max_output_tokens > self.model_context_window_tokens:
             raise ValueError(
                 "max_output_tokens cannot exceed model_context_window_tokens"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_transport_protocol_pair(self) -> "ModelEndpoint":
+        if self.model_transport == "anthropic_sdk":
+            if self.provider != "anthropic_messages_compatible":
+                raise ValueError(
+                    "anthropic_sdk requires anthropic_messages_compatible"
+                )
+            if (
+                self.auth_mode != "bearer"
+                or self.api_key_header.lower() != "x-api-key"
+                or self.api_key_prefix
+            ):
+                raise ValueError(
+                    "anthropic_sdk requires API-key auth with x-api-key and "
+                    "an empty prefix; use raw_http for custom authentication"
+                )
+            if not self.messages_path.endswith("/v1/messages"):
+                raise ValueError(
+                    "anthropic_sdk requires messages_path ending in "
+                    "'/v1/messages'; use raw_http for an arbitrary path"
+                )
+        elif self.provider == "anthropic_messages_compatible" and (
+            self.model_transport == "openai_sdk"
+        ):
+            raise ValueError(
+                "anthropic_messages_compatible cannot use openai_sdk"
             )
         return self
 

@@ -14,7 +14,7 @@
 玩家 `operator_message`、模型可见正文和正文增量；工具结果、系统审计与
 `reasoning_content` 不会进入该接口。网页控制台继续保留完整的审计展示方式。
 
-“模型配置面板”使用左侧模型池目录和右侧配置区。模型池名称由玩家决定；池内可以添加官方、中转站、OpenRouter 等多个 OpenAI-compatible 端点，分别设置供应商模型名、Base URL、API Key、优先级、协议和传输。点击任何现有端点卡片即可重新编辑这些参数，模板只提供可继续修改的初始值。多个端点只要具有相同 `model_id`，就会为同一个逻辑模型提供按成本顺序排列的回退来源；数字较小的端点先用。DeepSeek 工具模板使用 Chat Completions + OpenAI SDK。
+“模型配置面板”使用左侧模型池目录和右侧配置区。模型池名称由玩家决定；池内可以添加 OpenAI-compatible 或 Anthropic Messages 端点，分别设置供应商模型名、Base URL、API Key、优先级、协议和传输。点击任何现有端点卡片即可重新编辑这些参数，`OpenAI Compatible` 和 `Anthropic API` 两个模板只提供可继续修改的初始值。多个端点只要具有相同 `model_id`，就会为同一个逻辑模型提供按成本顺序排列的回退来源；数字较小的端点先用。
 
 “保存并检测端点/检测此池端点”只调用配置的模型列表路径，不发送聊天消息。健康状态属于当前进程；持久化的启停和优先级只由玩家修改。API Key 会写入被 Git 忽略的运行配置，但公开状态只返回 `api_key_configured`。
 

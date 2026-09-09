@@ -11,6 +11,10 @@ from concurrent.futures import Future
 from typing import Any, TypeVar
 
 from iag.applications.economy_governance.planner import SYSTEM_PROMPT
+from iag.infrastructure.llm.anthropic_adapter import (
+    anthropic_message_body,
+    anthropic_message_to_assistant,
+)
 from iag.infrastructure.llm.model_pool import ModelEndpoint
 from iag.infrastructure.llm.providers import (
     LLMTransport,
@@ -45,6 +49,7 @@ PROTECTED_REQUEST_KEYS = {
     "text",
     "stream",
     "stream_options",
+    "system",
 }
 
 
@@ -112,7 +117,14 @@ def chat_completion_body(
     options = request_options or {}
     body: dict[str, Any] = {
         "model": endpoint.model,
-        "messages": messages,
+        "messages": [
+            {
+                key: value
+                for key, value in message.items()
+                if key != "anthropic_content"
+            }
+            for message in messages
+        ],
     }
     overrides = request_body_overrides(options)
     body.update(overrides)
@@ -148,8 +160,57 @@ async def async_chat_completion_message(
     transport: LLMTransport | None = None,
     visible_delta_callback: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """Return the raw assistant message, including DeepSeek reasoning/tool fields."""
+    """Return one normalized assistant message for a persistent tool loop."""
     selected = transport or transport_from_endpoint(endpoint)
+    if endpoint.provider == "anthropic_messages_compatible":
+        body = anthropic_message_body(
+            endpoint,
+            messages,
+            request_options=request_options,
+            tools=tools,
+            overrides=request_body_overrides(request_options),
+        )
+        if visible_delta_callback is not None:
+            emitted = False
+
+            def forward_anthropic(delta: str) -> None:
+                nonlocal emitted
+                if not delta:
+                    return
+                emitted = True
+                visible_delta_callback(delta)
+
+            stream_method = getattr(
+                selected,
+                "create_anthropic_message_stream",
+                None,
+            )
+            if callable(stream_method):
+                try:
+                    raw = await stream_method(endpoint, body, forward_anthropic)
+                except Exception as error:
+                    if emitted:
+                        raise LLMPartialResponseError(
+                            "The model stream failed after visible output was "
+                            "emitted; the request will not be replayed on another "
+                            "endpoint."
+                        ) from error
+                    raise
+                return anthropic_message_to_assistant(raw)
+        method = getattr(selected, "create_anthropic_message", None)
+        if not callable(method):
+            raise RuntimeError(
+                "The selected transport does not implement Anthropic Messages."
+            )
+        raw = await method(endpoint, body)
+        message = anthropic_message_to_assistant(raw)
+        if visible_delta_callback is not None and message["content"]:
+            visible_delta_callback(str(message["content"]))
+        return message
+    if endpoint.provider != "chat_completions_compatible":
+        raise ValueError(
+            f"Provider {endpoint.provider!r} cannot run the persistent tool loop."
+        )
     body = chat_completion_body(
         endpoint,
         messages,
@@ -183,7 +244,12 @@ async def async_chat_completion_message(
                 )
             return message
 
-    raw = await selected.create_chat_completion(endpoint, body)
+    method = getattr(selected, "create_chat_completion", None)
+    if not callable(method):
+        raise NotImplementedError(
+            "The selected transport does not implement Chat Completions."
+        )
+    raw = await method(endpoint, body)
     choices = raw.get("choices")
     if not isinstance(choices, list) or not choices:
         raise RuntimeError("Chat Completions API returned no choices.")
@@ -221,7 +287,12 @@ async def async_call_model(
             "text": {"format": {"type": "json_object"}},
         }
         body.update(request_body_overrides(request_options))
-        raw = await selected.create_response(endpoint, body)
+        method = getattr(selected, "create_response", None)
+        if not callable(method):
+            raise NotImplementedError(
+                "The selected transport does not implement Responses."
+            )
+        raw = await method(endpoint, body)
         output_text = response_output_text(raw)
         if not output_text:
             raise RuntimeError("Responses-compatible API returned no text.")
@@ -237,10 +308,30 @@ async def async_call_model(
             request_options=request_options,
             response_format={"type": "json_object"},
         )
-        raw = await selected.create_chat_completion(endpoint, body)
+        method = getattr(selected, "create_chat_completion", None)
+        if not callable(method):
+            raise NotImplementedError(
+                "The selected transport does not implement Chat Completions."
+            )
+        raw = await method(endpoint, body)
         return parse_model_json(
             str(raw["choices"][0]["message"]["content"])
         )
+
+    if provider == "anthropic_messages_compatible":
+        message = await async_chat_completion_message(
+            endpoint,
+            [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_text},
+            ],
+            request_options=request_options,
+            transport=selected,
+        )
+        content = str(message.get("content") or "")
+        if not content:
+            raise RuntimeError("Anthropic Messages API returned no text.")
+        return parse_model_json(content)
 
     raise ValueError(f"Unsupported provider: {provider}")
 

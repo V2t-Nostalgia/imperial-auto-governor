@@ -719,19 +719,6 @@ class ProtocolCompatibilityControl:
                 raise ProtocolCompatibilityError(
                     "当前动作没有通过离线构包，未触碰网络。"
                 )
-            if scenario.get("action") == "reinforce_fleet_stage_2":
-                first_stage = self._report_item(
-                    report,
-                    "reinforce_fleet_stage_1",
-                )
-                if not first_stage or not (
-                    first_stage.get("network_stage") == "network_confirmed"
-                    and first_stage.get("operator_verdict") == "passed"
-                ):
-                    raise ProtocolCompatibilityError(
-                        "增援第二阶段要求同一轮第一阶段已通过网络与玩家确认；"
-                        "未向网络发送内容。"
-                    )
             controller = self._controller()
             proxy_status = controller.status()
             if not proxy_status.get("flow") or proxy_status.get("armed"):

@@ -2,6 +2,7 @@
 # Python 3.11+；平台专属抓包依赖通过环境标记隔离。
 pydantic>=2.9,<3
 openai>=2.0,<3
+anthropic>=1.4,<2
 cryptography>=45.0,<47
 numpy>=2.1,<3
 psutil>=6.1,<8

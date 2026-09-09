@@ -13,6 +13,7 @@ authors = [{name = "Nostalgia"}]
 dependencies = [
   "pydantic>=2.9,<3",
   "openai>=2.0,<3",
+  "anthropic>=1.4,<2",
   "cryptography>=45.0,<47",
   "numpy>=2.1,<3",
   "psutil>=6.1,<8",

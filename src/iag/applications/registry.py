@@ -40,8 +40,10 @@ def builtin_application_registry() -> ApplicationRegistry:
                 schema_version="iag.application_manifest.v1",
                 application_id="fleet_operations",
                 version="0.5.9",
-                display_name_zh="舰队行动",
-                description_zh="读取舰队状态并执行玩家逐舰队授权的实验性命令。",
+                display_name_zh="舰队与扩张行动",
+                description_zh=(
+                    "管理玩家授权的舰队、民用船、殖民与恒星基地命令。"
+                ),
                 agent_roles=("fleet_operator",),
                 message_types=(
                     "fleet_assessment",
@@ -52,12 +54,19 @@ def builtin_application_registry() -> ApplicationRegistry:
                     "move_fleet",
                     "move_fleet_to_coordinate",
                     "attack_fleet",
+                    "configure_ship_automation",
+                    "build_starbase",
+                    "order_colony_ship_and_colonize",
+                    "upgrade_starbase",
+                    "set_starbase_module",
+                    "set_starbase_building",
                     "create_ship_design",
                     "create_new_fleet",
                     "reinforce_fleet_to_target",
                 ),
                 required_platform_capabilities=(
                     "stellaris_fleet_state_v1",
+                    "stellaris_expansion_state_v1",
                     "session_proxy_v1",
                 ),
             ),

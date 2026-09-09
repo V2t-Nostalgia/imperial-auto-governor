@@ -5,18 +5,18 @@ import unittest
 from iag.stellaris.execution.packet.fleet_reinforcement_commands import (
     ADD_TEMPLATE_SHIP_RECORD,
     CREATE_FLEET_TEMPLATE_RECORD,
-    REINFORCE_STAGE_ONE_RECORD,
-    REINFORCE_STAGE_TWO_RECORD,
+    EMPIRE_REINFORCE_ALL_RECORD,
     REMOVE_TEMPLATE_SHIP_RECORD,
+    SELECTED_FLEET_REINFORCEMENT_RECORD,
     FleetReinforcementTarget,
     FleetTemplateAddTarget,
     FleetTemplateCreationTarget,
     FleetTemplateRemoveTarget,
-    build_reinforcement_stage_record,
+    build_selected_fleet_reinforcement_record,
     build_template_creation_record,
     build_template_edit_record,
     command_identity,
-    parse_reinforcement_stage,
+    parse_selected_fleet_reinforcement,
     parse_template_creation,
     parse_template_edit,
 )
@@ -69,35 +69,26 @@ class FleetReinforcementCommandTests(unittest.TestCase):
         self.assertEqual(add, expected)
         self.assertEqual(command_identity(add), (2, 0, 54))
 
-    def test_parses_and_builds_two_stage_reinforcement(self) -> None:
-        target = FleetReinforcementTarget(context_822c=0, fleet_template_id=0)
-        self.assertEqual(
-            parse_reinforcement_stage(REINFORCE_STAGE_ONE_RECORD),
-            (1, target),
+    def test_parses_and_builds_selected_fleet_reinforcement(self) -> None:
+        target = FleetReinforcementTarget(
+            context_822c=0,
+            fleet_template_id=167772413,
         )
         self.assertEqual(
-            parse_reinforcement_stage(REINFORCE_STAGE_TWO_RECORD),
-            (2, target),
-        )
-        self.assertEqual(
-            build_reinforcement_stage_record(
-                stage=1,
-                command_serial=51,
-                actor=2,
-                origin=0,
-                target=target,
+            parse_selected_fleet_reinforcement(
+                SELECTED_FLEET_REINFORCEMENT_RECORD
             ),
-            REINFORCE_STAGE_ONE_RECORD,
+            target,
         )
-        self.assertEqual(
-            build_reinforcement_stage_record(
-                stage=2,
-                command_serial=52,
-                actor=2,
-                origin=0,
-                target=target,
-            ),
-            REINFORCE_STAGE_TWO_RECORD,
+        built = build_selected_fleet_reinforcement_record(
+            command_serial=57,
+            actor=2,
+            origin=0,
+            target=target,
+        )
+        self.assertEqual(built, SELECTED_FLEET_REINFORCEMENT_RECORD)
+        self.assertIsNone(
+            parse_selected_fleet_reinforcement(EMPIRE_REINFORCE_ALL_RECORD)
         )
 
     def test_builds_each_captured_create_template_serial(self) -> None:

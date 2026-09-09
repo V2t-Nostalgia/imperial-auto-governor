@@ -6,7 +6,11 @@ from __future__ import annotations
 import unittest
 
 from iag.infrastructure.llm.endpoint_probe import EndpointProbeResult
-from iag.infrastructure.llm.model_pool import ModelEndpoint, ModelPool
+from iag.infrastructure.llm.model_pool import (
+    TOOL_CALL_PROTOCOLS,
+    ModelEndpoint,
+    ModelPool,
+)
 from iag.infrastructure.llm.model_pool_runtime import ModelPoolRuntime
 from iag.infrastructure.llm.providers import LLMHTTPError, LLMTimeoutError
 
@@ -45,6 +49,40 @@ class ModelPoolRuntimeTests(unittest.TestCase):
         self.assertEqual(
             [item.endpoint_id for item in self.runtime.candidates()],
             ["cheap", "expensive"],
+        )
+
+    def test_tool_protocol_filter_accepts_openai_and_anthropic(self) -> None:
+        anthropic = ModelEndpoint(
+            endpoint_id="anthropic",
+            model="claude-test",
+            model_transport="anthropic_sdk",
+            provider="anthropic_messages_compatible",
+            base_url="https://api.anthropic.com",
+            supports_reasoning=True,
+            model_context_window_tokens=64_000,
+            auth_mode="bearer",
+            api_key="anthropic-key",
+            api_key_header="x-api-key",
+            api_key_prefix="",
+            messages_path="/v1/messages",
+            max_output_tokens=8_000,
+            priority=10,
+            enabled=True,
+            supports_tools=True,
+        )
+        runtime = ModelPoolRuntime(
+            ModelPool(
+                pool_id="mixed",
+                endpoints=[endpoint("openai", 20), anthropic],
+            )
+        )
+
+        self.assertEqual(
+            [
+                item.endpoint_id
+                for item in runtime.candidates(provider=TOOL_CALL_PROTOCOLS)
+            ],
+            ["anthropic", "openai"],
         )
 
     def test_rate_limit_uses_next_endpoint_and_cools_first(self) -> None:

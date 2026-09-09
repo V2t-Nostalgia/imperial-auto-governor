@@ -58,9 +58,9 @@ PyInstaller 会提示 WinDivert 驱动依赖的 `NDIS.SYS`、`fwpkclnt.sys`、`W
 - 舰队工具回归覆盖总开关、逐舰队默认拒绝、准备/执行双重权限校验、机器事实账本和未验证攻击硬拒绝。
 - Windows 运行配置回归覆盖 v0.5.8 根级扁平模型字段、相对 API Key 文件、请求参数保留、只在显式保存时迁移，以及真实 `ConsoleService` 初始化链路。
 
-真实联机实验已经闭环验证建设命令、区域特化与 `d32c` 舰队移动。`6b33` 攻击已取得
-非房主请求和房主权威回包的零丢包配对，其构造器和精确回包匹配已经接入会话代理；
-确定性敌对目标映射尚未进入舰队 Application，因此 v0.5.9 仍只提供攻击授权预检。
+该早期 Draft 当时已经闭环验证建设命令、区域特化与 `d32c` 舰队移动。`6b33` 攻击已
+取得非房主请求和房主权威回包的零丢包配对，但在这次早期验收时，确定性敌对目标映射
+尚未进入舰队 Application，因此当时只提供攻击授权预检。后续集成结果见下方验收记录。
 
 ## v0.5.9 协议执行器验收（2026-09-06）
 
@@ -70,19 +70,31 @@ PyInstaller 会提示 WinDivert 驱动依赖的 `NDIS.SYS`、`fwpkclnt.sys`、`W
 - `node --check apps/control_center/web/app_v2.js`：通过。
 - Windows/Linux 示例运行配置 JSON 解析：2/2 通过。
 - 源码模式 Windows Agent `--health-check`：退出码 0。
-- 会话代理目录中的 24 个动作均使用脱敏 fixture 完成结构化构包、应用层分帧、命令族和记录长度校验。
+- 会话代理目录中的 25 个动作均使用脱敏 fixture 完成结构化构包、应用层分帧、命令族和记录长度校验。
 - CLI 离线协议兼容性验收状态：`passed`；安全模板中的真实副作用动作保持关闭，未启动 WinDivert 或连接游戏。
 - 新增精确样本回归覆盖建筑升级/替换、舰队攻击、舰船自动化、工程船建造恒星基地、两类殖民、恒星基地升级/模块/建筑，以及超过 255 字节的应用记录前缀。
 
 各公开附件的二进制健康检查、隐私扫描、解压复验和包内 SHA-256 结果由 `scripts/release/build_release.py` 在源码提交后执行，并写入各包的 `RELEASE_MANIFEST.json`；本文件不提前宣称尚未构建的附件已经通过。
 
-## OpenAI SDK 传输适配（2026-08-09）
+## v0.5.9 舰队与扩张 Application 集成验收（2026-09-08）
+
+- 仓库递归测试入口发现 35 个模块、191 项测试：全部通过。
+- 舰队 Application 定向回归 19/19、Stellaris 状态解析回归 14/14、控制台执行模式回归 37/37：全部通过。
+- `python -m compileall -q src apps scripts`：通过。
+- Ruff `E9,F` 运行错误级检查：通过；新增模块的导入顺序与 Python 3.11 类型导入检查通过。
+- `node --check apps/control_center/web/app.js` 与 `app_v2.js`：通过。
+- 新增显式 schema 回归，确保攻击、民用船自动化、工程船建站、殖民、恒星基地操作及其统一执行工具确实暴露给舰队与扩张 Agent，而不只是存在于底层构包器。
+- 新增舰队耐久聚合回归，覆盖不同船体/装甲/护盾比例、零值省略、平均数、中位数和 Agent 视图不展开 `ship_ids`。
+- 工具准备阶段与执行阶段均从最新存档重建候选，并重新检查全局开关、逐舰队权限和高影响替换权限；只有会话代理返回 `confirmed` 才写入机器事实。
+- 使用本机 Stellaris 4.4.6 原版规则和两份既有测试存档完成只读冒烟检查：物种宜居度、殖民船设计、船坞来源及恒星基地候选均可解析；本次验收没有连接游戏或发送实时命令。
+
+本节仍不声明发布附件已经重新构建。最终压缩包与清单应在所有收尾功能合并后统一生成并复验。
+
+## OpenAI 与 Anthropic SDK 传输适配（2026-09-08）
 
 - 使用 Python 3.11.9 新建仓库内隔离环境，并以 editable 模式从 `pyproject.toml` 完整安装依赖。
-- 在 OpenAI Python SDK 2.53.0 上执行 LLM 传输契约测试：8/8 通过。
-- 无网络 Mock 已覆盖 Chat Completions、Responses、DeepSeek `reasoning_content`、工具调用、`extra_body`、同步兼容桥和显式 raw HTTP 路径。
-- Python 3.11 全量编译通过；当前可发现的 `iag.*` / `apps.*` 模块 55/55 导入通过。
-- JSON、TOML、PowerShell AST 与 `app_v2.js` 语法检查通过。
-- 使用干净 Python 3.11 环境重新构建 Windows Agent；打包目录中的 `IAGWindowsAgent.exe --health-check` 退出码为 0。
-- PyInstaller 只报告 OpenAI SDK 可选能力（Realtime WebSocket、Trio、Pandas、Bedrock 等）的缺失依赖；当前 Chat Completions / Responses 非流式链路不使用这些可选模块，且没有缺失 `iag.*` 模块。
+- 在 OpenAI Python SDK 2.53.0 与 Anthropic Python SDK 1.4.0 上执行 LLM 传输契约测试：34/34 通过。
+- 无网络 Mock 已覆盖 Chat Completions、Responses、Anthropic Messages content blocks/`tool_use`/流式正文、DeepSeek `reasoning_content`、`extra_body`、同步兼容桥和显式 raw HTTP 路径。
+- 全仓库 13 个测试目录共 202 项测试通过；Python 3.11 `compileall`、Ruff `E9/F`、`app_v2.js` 语法与 `git diff --check` 通过。
+- 本轮没有重新构建 Windows Agent 或 Release 附件；添加 Anthropic SDK 后的冻结包健康检查留到最终发布构建。
 - 验证没有调用真实模型服务、没有读取真实 API Key，也没有产生计费请求。

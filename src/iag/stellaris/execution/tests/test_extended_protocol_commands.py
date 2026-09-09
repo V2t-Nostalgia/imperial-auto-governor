@@ -18,15 +18,21 @@ from iag.stellaris.execution.packet.expansion_commands import (
     build_starbase_upgrade_record,
 )
 from iag.stellaris.execution.packet.fleet_operation_commands import (
+    AUTOMATION_ASTRAL_RIFTS,
     AUTOMATION_COMPLETE_SPECIAL_PROJECTS,
     AUTOMATION_MINING_STATIONS,
     AUTOMATION_OBSERVATION_POSTS,
     AUTOMATION_RESEARCH_STATIONS,
+    AUTOMATION_SEND_GRAVITY_SNARES,
     ConstructionShipStarbaseTarget,
     FleetAttackTarget,
+    FleetRepairTarget,
+    FleetUpgradeTarget,
     ShipAutomationTarget,
     build_construction_ship_starbase_record,
     build_fleet_attack_record,
+    build_fleet_repair_record,
+    build_fleet_upgrade_record,
     build_ship_automation_record,
 )
 from iag.stellaris.execution.packet.iag_stream_command_injector import (
@@ -57,6 +63,42 @@ ATTACK_RECORD = bytes.fromhex(
     "c70001000c00ff7f0000cc0001000e0000130401000e0000db000100"
     "1400800000000400410001000300502c0100140003000000d62e0100"
     "14007b0100004c0101000e000104000400"
+)
+FLEET_REPAIR_RECORD = bytes.fromhex(
+    "8c00040000008f3201000300f30101000300400201000c0002000000"
+    "c70001000c00ff7f0000cc0001000e0000130401000e0000db000100"
+    "14001900000004004100010003009032010003002030010003009232"
+    "01000e0000163b01000e0000b03801000e0001624501001400ffffff"
+    "ff04000400822c0100140000000000502c01001400550f000f04000400"
+)
+FLEET_UPGRADE_RECORD = bytes.fromhex(
+    "7500040000008f2f01000300f30101000300400201000c0002000000"
+    "c70001000c00ff7f0000cc0001000e0000130401000e0000db000100"
+    "14001a0000000400410001000300822c0100140000000000502c0100"
+    "1400550f000fc33d01001400cf230000634001000e0000de3501000e"
+    "000004000400"
+)
+ASTRAL_AUTOMATION_RECORD = bytes.fromhex(
+    "e700040000008f3201000300f30101000300400201000c0002000000"
+    "c70001000c00ff7f0000cc0001000e0000130401000e0000db000100"
+    "1400190000000400410001000300903201000300f74501000300b038"
+    "01000e0001624501001400ffffffff1e3f010003000f001700415554"
+    "4f4d4154494f4e5f41535452414c5f52494654530400414601000e00"
+    "00473001000e0000483001000e0000493001000e00004a3001000e00"
+    "014b3001000e00008d4301000e00003d4601000e00003e4601000e00"
+    "003f4601000e000004000400822c0100140000000000502c01001400"
+    "0100000004000400"
+)
+GRAVITY_AUTOMATION_RECORD = bytes.fromhex(
+    "ee00040000008f3201000300f30101000300400201000c0002000000"
+    "c70001000c00ff7f0000cc0001000e0000130401000e0000db000100"
+    "14001d0000000400410001000300903201000300f74501000300b038"
+    "01000e0001624501001400ffffffff1e3f010003000f001e00415554"
+    "4f4d4154494f4e5f53454e445f475241564954595f534e4152455304"
+    "00414601000e0000473001000e0000483001000e0000493001000e00"
+    "004a3001000e00004b3001000e00008d4301000e00013d4601000e00"
+    "003e4601000e00003f4601000e000004000400822c01001400000000"
+    "00502c010014000100000004000400"
 )
 BUILDING_UPGRADE_RECORD = bytes.fromhex(
     "a20004000000b43d01000300f30101000300400201000c0002000000"
@@ -184,6 +226,28 @@ class ExtendedProtocolCommandTests(unittest.TestCase):
             ATTACK_RECORD,
         )
 
+    def test_fleet_maintenance_matches_live_pairs(self) -> None:
+        repair = FleetRepairTarget(0, 251662165)
+        self.assertEqual(
+            build_fleet_repair_record(
+                command_serial=25,
+                actor=2,
+                origin=0,
+                target=repair,
+            ),
+            FLEET_REPAIR_RECORD,
+        )
+        upgrade = FleetUpgradeTarget(0, 251662165, 9167)
+        self.assertEqual(
+            build_fleet_upgrade_record(
+                command_serial=26,
+                actor=2,
+                origin=0,
+                target=upgrade,
+            ),
+            FLEET_UPGRADE_RECORD,
+        )
+
     def test_construction_ship_starbase_matches_live_pair(self) -> None:
         target = ConstructionShipStarbaseTarget(2, 188)
         self.assertEqual(
@@ -210,6 +274,32 @@ class ExtendedProtocolCommandTests(unittest.TestCase):
         self.assertEqual(record, CONSTRUCTION_AUTOMATION_RECORD)
         self.assertEqual(application_prefix_for_record(record), bytes.fromhex("000001"))
 
+    def test_late_game_science_automation_options_match_live_pairs(self) -> None:
+        astral = ShipAutomationTarget(0, 1, (AUTOMATION_ASTRAL_RIFTS,))
+        self.assertEqual(
+            build_ship_automation_record(
+                command_serial=25,
+                actor=2,
+                origin=0,
+                target=astral,
+            ),
+            ASTRAL_AUTOMATION_RECORD,
+        )
+        gravity = ShipAutomationTarget(
+            0,
+            1,
+            (AUTOMATION_SEND_GRAVITY_SNARES,),
+        )
+        self.assertEqual(
+            build_ship_automation_record(
+                command_serial=29,
+                actor=2,
+                origin=0,
+                target=gravity,
+            ),
+            GRAVITY_AUTOMATION_RECORD,
+        )
+
     def test_both_colonization_paths_match_live_pairs(self) -> None:
         ordered = OrderColonyShipTarget(
             context_822c=0,
@@ -219,7 +309,7 @@ class ExtendedProtocolCommandTests(unittest.TestCase):
             upgrade_id=0xFFFFFFFF,
             growth_stage=0,
             target_planet_id=276,
-            source_planet_id=3,
+            source_shipyard_build_queue_id=3,
             system_name_key="NAME_Alpha_Centauri",
         )
         self.assertEqual(
@@ -328,6 +418,8 @@ class ExtendedProtocolCommandTests(unittest.TestCase):
                 ),
             ),
             ("attack_fleet", FleetAttackTarget(3, 379)),
+            ("repair_fleet", FleetRepairTarget(0, 251662165)),
+            ("upgrade_fleet", FleetUpgradeTarget(0, 251662165, 9167)),
             ("build_starbase", ConstructionShipStarbaseTarget(2, 188)),
             (
                 "order_colony_ship_and_colonize",
@@ -437,7 +529,7 @@ class ExtendedProtocolCommandTests(unittest.TestCase):
                 "upgrade_id": 0xFFFFFFFF,
                 "growth_stage": 0,
                 "target_planet_id": 276,
-                "source_planet_id": 3,
+                "source_shipyard_build_queue_id": 3,
                 "system_name_key": "NAME_Alpha_Centauri",
             },
         )

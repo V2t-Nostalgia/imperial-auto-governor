@@ -106,6 +106,39 @@ class EndpointProbeTests(unittest.TestCase):
         result = probe_endpoint(endpoint(models_path=None))
         self.assertEqual(result.status, "probe_unsupported")
 
+    def test_anthropic_probe_uses_native_authentication_headers(self) -> None:
+        observed: dict[str, Any] = {}
+
+        def opener(request: Any, *, timeout: int) -> FakeResponse:
+            observed["url"] = request.full_url
+            observed["api_key"] = request.headers.get("X-api-key")
+            observed["version"] = request.headers.get("Anthropic-version")
+            observed["timeout"] = timeout
+            return FakeResponse(
+                {"data": [{"id": "claude-sonnet-4-6", "type": "model"}]}
+            )
+
+        result = probe_endpoint(
+            endpoint(
+                model="claude-sonnet-4-6",
+                model_transport="anthropic_sdk",
+                provider="anthropic_messages_compatible",
+                base_url="https://api.anthropic.com",
+                api_key_header="x-api-key",
+                api_key_prefix="",
+                extra_headers={"anthropic-version": "2023-06-01"},
+                messages_path="/v1/messages",
+                models_path="/v1/models",
+            ),
+            opener=opener,
+        )
+
+        self.assertEqual(result.status, "available")
+        self.assertEqual(observed["url"], "https://api.anthropic.com/v1/models")
+        self.assertEqual(observed["api_key"], "test-key")
+        self.assertEqual(observed["version"], "2023-06-01")
+        self.assertEqual(observed["timeout"], 10)
+
 
 if __name__ == "__main__":
     unittest.main()

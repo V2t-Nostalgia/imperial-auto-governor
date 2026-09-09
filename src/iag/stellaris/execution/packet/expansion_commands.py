@@ -40,7 +40,7 @@ DESIGN_ID_TAG = bytes.fromhex("652c01001400")
 UPGRADE_ID_TAG = bytes.fromhex("143501001400")
 GROWTH_STAGE_TAG = bytes.fromhex("c84401000c00")
 COLONY_TARGET_PLANET_TAG = bytes.fromhex("962d01001400")
-COLONY_SOURCE_PLANET_TAG = bytes.fromhex("c33d01001400")
+COLONY_SOURCE_SHIPYARD_QUEUE_TAG = bytes.fromhex("c33d01001400")
 COLONY_UNKNOWN_D83D_TAG = bytes.fromhex("d83d01001400")
 SOURCE_FLEET_TAG = bytes.fromhex("502c01001400")
 EXISTING_COLONY_TARGET_TAG = bytes.fromhex("132a01001400")
@@ -74,7 +74,7 @@ class OrderColonyShipTarget:
     upgrade_id: int
     growth_stage: int
     target_planet_id: int
-    source_planet_id: int
+    source_shipyard_build_queue_id: int
     system_name_key: str
 
 
@@ -248,9 +248,9 @@ def build_order_colony_ship_record(
                 "target_planet_id",
             ),
             _u32(
-                COLONY_SOURCE_PLANET_TAG,
-                target.source_planet_id,
-                "source_planet_id",
+                COLONY_SOURCE_SHIPYARD_QUEUE_TAG,
+                target.source_shipyard_build_queue_id,
+                "source_shipyard_build_queue_id",
             ),
             _u32(COLONY_UNKNOWN_D83D_TAG, 0xFFFFFFFF, "unknown_d83d"),
             _default_colony_name(target.system_name_key),
@@ -285,8 +285,10 @@ def parse_order_colony_ship_record(record: bytes) -> OrderColonyShipTarget | Non
             target_planet_id=_tagged_u32(
                 record, COLONY_TARGET_PLANET_TAG, "target_planet_id"
             ),
-            source_planet_id=_tagged_u32(
-                record, COLONY_SOURCE_PLANET_TAG, "source_planet_id"
+            source_shipyard_build_queue_id=_tagged_u32(
+                record,
+                COLONY_SOURCE_SHIPYARD_QUEUE_TAG,
+                "source_shipyard_build_queue_id",
             ),
             system_name_key=_parse_default_colony_name(record),
         )

@@ -8,10 +8,10 @@ import json
 import math
 import os
 import re
+from collections.abc import Iterable
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Iterable
-
+from typing import Any
 
 NUMERIC_RE = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$")
 SCRIPTED_VARIABLE_RE = re.compile(
@@ -29,6 +29,11 @@ DEFINITION_DIRS = {
     "deposit": "common/deposits",
     "static_modifier": "common/static_modifiers",
     "technology": "common/technology",
+    "trait": "common/traits",
+    "planet_class": "common/planet_classes",
+    "starbase_level": "common/starbase_levels",
+    "starbase_module": "common/starbase_modules",
+    "starbase_building": "common/starbase_buildings",
 }
 
 DISTRICT_CAPACITY_FIELDS = {
@@ -413,6 +418,161 @@ def _child_blocks(
         for entry_key, value in entries
         if entry_key == key and isinstance(value, list)
     ]
+
+
+@lru_cache(maxsize=256)
+def planet_class_rule(game_root: Path, planet_class: str) -> dict[str, Any]:
+    """Return the installed rule evidence needed for colonization filtering."""
+    source = find_definition_source(game_root, "planet_class", planet_class)
+    if source is None:
+        return {"status": "missing", "planet_class": planet_class}
+    path, block, line = source
+    entries = _object_entries(block, planet_class)
+    return {
+        "status": "available",
+        "planet_class": planet_class,
+        "colonizable": _scalar_value(entries, "colonizable") == "yes",
+        "climate": _scalar_value(entries, "climate"),
+        "source_path": str(path),
+        "source_line": line,
+    }
+
+
+def species_habitability_rule(
+    game_root: Path,
+    trait_ids: tuple[str, ...],
+    planet_class: str,
+) -> dict[str, Any]:
+    """Estimate habitability from the species' installed trait definitions.
+
+    This reproduces the base preference plus unconditional species tolerance
+    used by ordinary organic species.  Country, planet and event modifiers are
+    intentionally not guessed, so callers must label the result as an estimate.
+    """
+    target_field = f"{planet_class}_habitability"
+    base = 0.0
+    tolerance = 0.0
+    floor = 0.0
+    found_base = False
+    evidence: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for trait_id in trait_ids:
+        source = find_definition_source(game_root, "trait", trait_id)
+        if source is None:
+            missing.append(trait_id)
+            continue
+        path, block, line = source
+        variables = variables_for_source(game_root, path)
+        entries = _object_entries(block, trait_id)
+        values: list[dict[str, Any]] = []
+        for modifier in _child_blocks(entries, "modifier"):
+            values.extend(numeric_assignments(modifier, variables))
+        contributions: dict[str, float] = {}
+        for assignment in values:
+            field = str(assignment["path"]).split(".")[-1]
+            raw = assignment["resolved"]
+            if not isinstance(raw, (int, float)):
+                continue
+            value = float(raw)
+            if field == target_field:
+                base += value
+                found_base = True
+                contributions[target_field] = (
+                    contributions.get(target_field, 0.0) + value
+                )
+            elif field == "pop_environment_tolerance":
+                tolerance += value
+                contributions[field] = contributions.get(field, 0.0) + value
+            elif field == "habitability_floor_add":
+                floor += value
+                contributions[field] = contributions.get(field, 0.0) + value
+        if contributions:
+            evidence.append(
+                {
+                    "trait_id": trait_id,
+                    "contributions": contributions,
+                    "source_path": str(path),
+                    "source_line": line,
+                }
+            )
+    if not found_base:
+        return {
+            "status": "unresolved",
+            "planet_class": planet_class,
+            "trait_ids": list(trait_ids),
+            "missing_trait_definitions": missing,
+            "evidence": evidence,
+        }
+    value = max(floor, min(1.0, base + tolerance))
+    return {
+        "status": "estimated",
+        "planet_class": planet_class,
+        "habitability": value,
+        "base": base,
+        "species_tolerance": tolerance,
+        "habitability_floor": floor,
+        "trait_ids": list(trait_ids),
+        "missing_trait_definitions": missing,
+        "authority": "installed_species_traits_without_dynamic_modifiers",
+        "evidence": evidence,
+    }
+
+
+@lru_cache(maxsize=64)
+def starbase_level_rule(game_root: Path, level_id: str) -> dict[str, Any]:
+    """Return the installed normal starbase level and its slot declarations."""
+    source = find_definition_source(game_root, "starbase_level", level_id)
+    if source is None:
+        return {"status": "missing", "level_id": level_id}
+    path, block, line = source
+    entries = _object_entries(block, level_id)
+    module_slots = _list_values(entries, "module_slots")
+    building_slots = _list_values(entries, "building_slots")
+    return {
+        "status": "available",
+        "level_id": level_id,
+        "next_level": _scalar_value(entries, "next_level"),
+        "module_slot_count": len(module_slots),
+        "building_slot_count": len(building_slots),
+        "source_path": str(path),
+        "source_line": line,
+    }
+
+
+@lru_cache(maxsize=128)
+def starbase_component_rule(
+    game_root: Path,
+    kind: str,
+    component_id: str,
+) -> dict[str, Any]:
+    """Return source and simple technology gates for one starbase component."""
+    if kind not in {"module", "building"}:
+        raise ValueError("Starbase component kind must be module or building.")
+    definition_kind = f"starbase_{kind}"
+    source = find_definition_source(game_root, definition_kind, component_id)
+    if source is None:
+        return {
+            "status": "missing",
+            "kind": kind,
+            "component_id": component_id,
+        }
+    path, block, line = source
+    entries = _object_entries(block, component_id)
+    required_technologies = sorted(
+        set(re.findall(r"\bhas_technology\s*=\s*\"?([A-Za-z0-9_.-]+)", block))
+    )
+    shown_technology = _scalar_value(entries, "show_in_tech")
+    if shown_technology:
+        required_technologies.append(shown_technology)
+    return {
+        "status": "available",
+        "kind": kind,
+        "component_id": component_id,
+        "initial": _scalar_value(entries, "initial") == "yes",
+        "required_technologies": sorted(set(required_technologies)),
+        "source_path": str(path),
+        "source_line": line,
+    }
 
 
 def _wrapped_definitions(

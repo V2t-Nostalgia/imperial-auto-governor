@@ -71,7 +71,11 @@ from iag.infrastructure.llm.application_model_profile import (
     ApplicationModelProfile,
 )
 from iag.infrastructure.llm.model_client import request_body_overrides
-from iag.infrastructure.llm.model_pool import ModelEndpoint, ModelPool
+from iag.infrastructure.llm.model_pool import (
+    TOOL_CALL_PROTOCOLS,
+    ModelEndpoint,
+    ModelPool,
+)
 from iag.infrastructure.llm.model_pool_runtime import ModelPoolRuntime
 from iag.infrastructure.llm.model_templates import (
     apply_model_template,
@@ -1238,6 +1242,10 @@ class ConsoleService:
                 bool(config.get(key, False))
                 for key in (
                     "experimental_fleet_tools_enabled",
+                    "experimental_fleet_maintenance_tools_enabled",
+                    "experimental_civilian_ship_tools_enabled",
+                    "experimental_colonization_tools_enabled",
+                    "experimental_starbase_tools_enabled",
                     "experimental_ship_design_tools_enabled",
                     "experimental_fleet_reinforcement_tools_enabled",
                     "experimental_new_fleet_tools_enabled",
@@ -1262,7 +1270,7 @@ class ConsoleService:
             conversation_supported = (
                 any(
                     endpoint.enabled
-                    and endpoint.provider == "chat_completions_compatible"
+                    and endpoint.provider in TOOL_CALL_PROTOCOLS
                     and endpoint.supports_tools
                     for endpoint in pool.endpoints
                 )
@@ -1456,7 +1464,7 @@ class ConsoleService:
             "conversation_supported": (
                 any(
                     item.enabled
-                    and item.provider == "chat_completions_compatible"
+                    and item.provider in TOOL_CALL_PROTOCOLS
                     and item.supports_tools
                     for item in active_pool.endpoints
                 )
@@ -1698,12 +1706,17 @@ class ConsoleService:
             model_transport = str(
                 updated.get("model_transport", "openai_sdk")
             ).strip()
-            if model_transport not in {"openai_sdk", "raw_http"}:
+            if model_transport not in {
+                "openai_sdk",
+                "anthropic_sdk",
+                "raw_http",
+            }:
                 raise ConsoleError("不支持的模型传输实现。")
             provider = str(updated.get("provider", "")).strip()
             if provider not in {
                 "responses_compatible",
                 "chat_completions_compatible",
+                "anthropic_messages_compatible",
             }:
                 raise ConsoleError("不支持的 API 协议类型。")
             base_url = str(updated.get("base_url", "")).strip()
@@ -1734,6 +1747,12 @@ class ConsoleService:
                         updated.get(
                             "responses_path",
                             runtime.endpoint.responses_path,
+                        )
+                    ),
+                    "messages_path": str(
+                        updated.get(
+                            "messages_path",
+                            runtime.endpoint.messages_path,
                         )
                     ),
                     "supports_reasoning": bool(
@@ -2278,6 +2297,12 @@ class ConsoleService:
             "experimental_fleet_attack_enabled": bool(
                 self.config.get("experimental_fleet_attack_enabled", False)
             ),
+            "experimental_fleet_maintenance_tools_enabled": bool(
+                self.config.get(
+                    "experimental_fleet_maintenance_tools_enabled",
+                    False,
+                )
+            ),
             "experimental_fleet_coordinate_tools_enabled": bool(
                 self.config.get(
                     "experimental_fleet_coordinate_tools_enabled",
@@ -2308,6 +2333,30 @@ class ConsoleService:
             "maximum_new_fleet_initial_ships": int(
                 self.config.get("maximum_new_fleet_initial_ships", 5)
             ),
+            "experimental_civilian_ship_tools_enabled": bool(
+                self.config.get(
+                    "experimental_civilian_ship_tools_enabled",
+                    False,
+                )
+            ),
+            "experimental_colonization_tools_enabled": bool(
+                self.config.get(
+                    "experimental_colonization_tools_enabled",
+                    False,
+                )
+            ),
+            "minimum_colonization_habitability": float(
+                self.config.get("minimum_colonization_habitability", 0.30)
+            ),
+            "experimental_starbase_tools_enabled": bool(
+                self.config.get("experimental_starbase_tools_enabled", False)
+            ),
+            "experimental_starbase_replacement_enabled": bool(
+                self.config.get(
+                    "experimental_starbase_replacement_enabled",
+                    False,
+                )
+            ),
             "experimental_research_tools_enabled": bool(
                 self.config.get("experimental_research_tools_enabled", False)
             ),
@@ -2337,8 +2386,11 @@ class ConsoleService:
             new_fleet_limit = int(
                 value.get("maximum_new_fleet_initial_ships", 5)
             )
+            minimum_habitability = float(
+                value.get("minimum_colonization_habitability", 0.30)
+            )
         except (TypeError, ValueError) as error:
-            raise ConsoleError("执行门限必须是有效整数。") from error
+            raise ConsoleError("执行门限必须是有效数值。") from error
         if not 0 <= manual_age <= 86_400:
             raise ConsoleError("执行存档时效必须在 0 到 86400 秒之间。")
         if not 0 <= autonomy_age <= 86_400:
@@ -2366,6 +2418,12 @@ class ConsoleService:
         fleet_attack_enabled = bool(
             value.get("experimental_fleet_attack_enabled", False)
         )
+        fleet_maintenance_enabled = bool(
+            value.get(
+                "experimental_fleet_maintenance_tools_enabled",
+                False,
+            )
+        )
         fleet_coordinate_enabled = bool(
             value.get("experimental_fleet_coordinate_tools_enabled", False)
         )
@@ -2381,6 +2439,18 @@ class ConsoleService:
         new_fleet_enabled = bool(
             value.get("experimental_new_fleet_tools_enabled", False)
         )
+        civilian_ship_enabled = bool(
+            value.get("experimental_civilian_ship_tools_enabled", False)
+        )
+        colonization_enabled = bool(
+            value.get("experimental_colonization_tools_enabled", False)
+        )
+        starbase_enabled = bool(
+            value.get("experimental_starbase_tools_enabled", False)
+        )
+        starbase_replacement_enabled = bool(
+            value.get("experimental_starbase_replacement_enabled", False)
+        )
         research_tools_enabled = bool(
             value.get("experimental_research_tools_enabled", False)
         )
@@ -2391,6 +2461,8 @@ class ConsoleService:
             raise ConsoleError("实验性舰队工具只能在会话代理模式下启用。")
         if fleet_attack_enabled and not fleet_tools_enabled:
             raise ConsoleError("启用攻击预检查前必须先启用实验性舰队工具。")
+        if fleet_maintenance_enabled and execution_mode != "session_proxy":
+            raise ConsoleError("实验性舰队维修与升级工具只能在会话代理模式下启用。")
         if fleet_coordinate_enabled and not fleet_tools_enabled:
             raise ConsoleError("启用星系内坐标移动前必须先启用舰队工具。")
         if ship_design_enabled and execution_mode != "session_proxy":
@@ -2399,6 +2471,16 @@ class ConsoleService:
             raise ConsoleError("实验性舰队增援工具只能在会话代理模式下启用。")
         if new_fleet_enabled and execution_mode != "session_proxy":
             raise ConsoleError("实验性新建舰队工具只能在会话代理模式下启用。")
+        if civilian_ship_enabled and execution_mode != "session_proxy":
+            raise ConsoleError("实验性民用船工具只能在会话代理模式下启用。")
+        if colonization_enabled and execution_mode != "session_proxy":
+            raise ConsoleError("实验性自动殖民工具只能在会话代理模式下启用。")
+        if starbase_enabled and execution_mode != "session_proxy":
+            raise ConsoleError("实验性恒星基地工具只能在会话代理模式下启用。")
+        if starbase_replacement_enabled and not starbase_enabled:
+            raise ConsoleError("允许恒星基地替换前必须先启用恒星基地工具。")
+        if not 0 <= minimum_habitability <= 1:
+            raise ConsoleError("最低殖民宜居度必须在 0 到 1 之间。")
         if not 1 <= reinforcement_limit <= 20:
             raise ConsoleError("单次舰队目标编制增量上限必须在 1 到 20 之间。")
         if not 1 <= new_fleet_limit <= 20:
@@ -2444,6 +2526,9 @@ class ConsoleService:
             ),
             "experimental_fleet_tools_enabled": fleet_tools_enabled,
             "experimental_fleet_attack_enabled": fleet_attack_enabled,
+            "experimental_fleet_maintenance_tools_enabled": (
+                fleet_maintenance_enabled
+            ),
             "experimental_fleet_coordinate_tools_enabled": (
                 fleet_coordinate_enabled
             ),
@@ -2455,6 +2540,15 @@ class ConsoleService:
             "maximum_fleet_reinforcement_increase": reinforcement_limit,
             "experimental_new_fleet_tools_enabled": new_fleet_enabled,
             "maximum_new_fleet_initial_ships": new_fleet_limit,
+            "experimental_civilian_ship_tools_enabled": (
+                civilian_ship_enabled
+            ),
+            "experimental_colonization_tools_enabled": colonization_enabled,
+            "minimum_colonization_habitability": minimum_habitability,
+            "experimental_starbase_tools_enabled": starbase_enabled,
+            "experimental_starbase_replacement_enabled": (
+                starbase_replacement_enabled
+            ),
             "experimental_research_tools_enabled": research_tools_enabled,
             "experimental_research_reselection_enabled": (
                 research_reselection_enabled
@@ -2655,6 +2749,18 @@ class ConsoleService:
                         "allow_reinforce": bool(
                             permission.get("allow_reinforce", False)
                         ),
+                        "allow_repair": bool(
+                            permission.get("allow_repair", False)
+                        ),
+                        "allow_upgrade": bool(
+                            permission.get("allow_upgrade", False)
+                        ),
+                        "allow_automation": bool(
+                            permission.get("allow_automation", False)
+                        ),
+                        "allow_build_starbase": bool(
+                            permission.get("allow_build_starbase", False)
+                        ),
                     },
                 }
             )
@@ -2671,7 +2777,9 @@ class ConsoleService:
             ),
             "fleets": fleets,
             "move_protocol_state": "live_verified_experimental",
-            "attack_protocol_state": "paired_non_host_sample_required",
+            "attack_protocol_state": (
+                "save_backed_hostile_mapping_and_paired_6b33_verified"
+            ),
         }
 
     def save_fleet_permission(self, value: dict[str, Any]) -> dict[str, Any]:
@@ -2694,6 +2802,12 @@ class ConsoleService:
             "allow_move": bool(value.get("allow_move", False)),
             "allow_attack": bool(value.get("allow_attack", False)),
             "allow_reinforce": bool(value.get("allow_reinforce", False)),
+            "allow_repair": bool(value.get("allow_repair", False)),
+            "allow_upgrade": bool(value.get("allow_upgrade", False)),
+            "allow_automation": bool(value.get("allow_automation", False)),
+            "allow_build_starbase": bool(
+                value.get("allow_build_starbase", False)
+            ),
         }
         self.conversation_store.set_state(FLEET_PERMISSIONS_KEY, permissions)
         return {"saved": True, "fleet_state": self.fleet_payload()}

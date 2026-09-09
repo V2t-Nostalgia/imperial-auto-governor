@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Contract tests for the OpenAI SDK and raw HTTP LLM transports."""
+"""Contract tests for OpenAI, Anthropic, and raw HTTP LLM transports."""
 
 from __future__ import annotations
 
@@ -9,8 +9,11 @@ import unittest
 from typing import Any
 
 import httpx
+import httpx2
+from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 
+from iag.infrastructure.llm.anthropic_adapter import anthropic_message_body
 from iag.infrastructure.llm.model_client import (
     LLMPartialResponseError,
     _run_async_from_sync,
@@ -20,6 +23,7 @@ from iag.infrastructure.llm.model_client import (
 )
 from iag.infrastructure.llm.model_pool import ModelEndpoint
 from iag.infrastructure.llm.providers import (
+    AnthropicSDKTransport,
     OpenAISDKTransport,
     RawHTTPTransport,
     resolve_api_key,
@@ -57,6 +61,25 @@ def base_options(**overrides: Any) -> dict[str, Any]:
     return value
 
 
+def anthropic_endpoint(**overrides: Any) -> ModelEndpoint:
+    value = base_endpoint().model_dump(mode="python")
+    value.update(
+        {
+            "model_transport": "anthropic_sdk",
+            "provider": "anthropic_messages_compatible",
+            "base_url": "https://api.anthropic.com",
+            "model": "claude-test",
+            "messages_path": "/v1/messages",
+            "models_path": "/v1/models",
+            "api_key_header": "x-api-key",
+            "api_key_prefix": "",
+            "extra_headers": {"anthropic-version": "2023-06-01"},
+        }
+    )
+    value.update(overrides)
+    return ModelEndpoint.model_validate(value)
+
+
 class ApiKeyResolutionTests(unittest.TestCase):
     def test_endpoint_key_is_unwrapped(self) -> None:
         endpoint = ModelEndpoint(
@@ -76,6 +99,10 @@ class ApiKeyResolutionTests(unittest.TestCase):
         )
 
         self.assertEqual(resolve_api_key(endpoint), "endpoint-secret")
+
+    def test_anthropic_sdk_rejects_non_native_messages_path(self) -> None:
+        with self.assertRaisesRegex(ValueError, "/v1/messages"):
+            anthropic_endpoint(messages_path="/messages")
 
 
 class StubTransport:
@@ -102,6 +129,295 @@ class StubTransport:
 
 
 class ModelClientTests(unittest.IsolatedAsyncioTestCase):
+    async def test_anthropic_tool_history_and_schema_are_native(self) -> None:
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "inspect_empire_state",
+                    "description": "Read state.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"fresh": {"type": "boolean"}},
+                    },
+                },
+            }
+        ]
+        body = anthropic_message_body(
+            anthropic_endpoint(),
+            [
+                {"role": "system", "content": "govern safely"},
+                {"role": "user", "content": "inspect"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "toolu_1",
+                            "type": "function",
+                            "function": {
+                                "name": "inspect_empire_state",
+                                "arguments": '{"fresh":true}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "toolu_1",
+                    "content": '{"date":"2200.01.01"}',
+                },
+            ],
+            request_options=base_options(),
+            tools=tools,
+        )
+
+        self.assertEqual(body["system"], "govern safely")
+        self.assertEqual(
+            [item["role"] for item in body["messages"]],
+            ["user", "assistant", "user"],
+        )
+        self.assertEqual(
+            body["messages"][1]["content"][0],
+            {
+                "type": "tool_use",
+                "id": "toolu_1",
+                "name": "inspect_empire_state",
+                "input": {"fresh": True},
+            },
+        )
+        self.assertEqual(
+            body["messages"][2]["content"][0]["tool_use_id"],
+            "toolu_1",
+        )
+        self.assertEqual(
+            body["tools"][0]["input_schema"],
+            tools[0]["function"]["parameters"],
+        )
+        self.assertEqual(body["tool_choice"], {"type": "auto"})
+
+    async def test_anthropic_sdk_normalizes_text_and_tool_use(self) -> None:
+        observed: dict[str, Any] = {}
+
+        class FakeMessages:
+            async def create(self, **kwargs: Any) -> dict[str, Any]:
+                observed["body"] = kwargs
+                return {
+                    "id": "msg_1",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "checking"},
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "inspect_empire_state",
+                            "input": {"fresh": True},
+                        },
+                    ],
+                }
+
+        class FakeClient:
+            def __init__(self) -> None:
+                self.messages = FakeMessages()
+
+            async def close(self) -> None:
+                observed["closed"] = True
+
+        def client_factory(**kwargs: Any) -> FakeClient:
+            observed["client"] = kwargs
+            return FakeClient()
+
+        message = await async_chat_completion_message(
+            anthropic_endpoint(),
+            [{"role": "user", "content": "inspect"}],
+            request_options=base_options(),
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "inspect_empire_state",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+            transport=AnthropicSDKTransport(client_factory),
+        )
+
+        self.assertEqual(observed["client"]["api_key"], "test-secret")
+        self.assertEqual(observed["client"]["base_url"], "https://api.anthropic.com")
+        self.assertEqual(observed["body"]["model"], "claude-test")
+        self.assertEqual(message["content"], "checking")
+        self.assertEqual(
+            message["tool_calls"][0]["function"],
+            {
+                "name": "inspect_empire_state",
+                "arguments": '{"fresh":true}',
+            },
+        )
+        self.assertTrue(observed["closed"])
+
+    async def test_anthropic_thinking_signature_is_replayed_but_not_sent_to_openai(
+        self,
+    ) -> None:
+        class ThinkingTransport(StubTransport):
+            async def create_anthropic_message(
+                self,
+                endpoint: ModelEndpoint,
+                body: dict[str, Any],
+            ) -> dict[str, Any]:
+                return {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "thinking",
+                            "thinking": "private",
+                            "signature": "signed-thinking",
+                        },
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "inspect_empire_state",
+                            "input": {},
+                        },
+                    ],
+                }
+
+        assistant = await async_chat_completion_message(
+            anthropic_endpoint(),
+            [{"role": "user", "content": "inspect"}],
+            transport=ThinkingTransport({}),
+        )
+        replay = anthropic_message_body(
+            anthropic_endpoint(),
+            [
+                {"role": "user", "content": "inspect"},
+                assistant,
+                {
+                    "role": "tool",
+                    "tool_call_id": "toolu_1",
+                    "content": "{}",
+                },
+            ],
+        )
+        openai = chat_completion_body(
+            base_endpoint(),
+            [
+                {"role": "user", "content": "inspect"},
+                assistant,
+            ],
+        )
+
+        self.assertEqual(
+            replay["messages"][1]["content"][0]["signature"],
+            "signed-thinking",
+        )
+        self.assertNotIn("anthropic_content", openai["messages"][1])
+
+    async def test_real_anthropic_sdk_uses_single_v1_path(self) -> None:
+        observed: dict[str, Any] = {}
+
+        def handler(request: Any) -> Any:
+            observed["url"] = str(request.url)
+            observed["api_key"] = request.headers.get("x-api-key")
+            observed["body"] = json.loads(request.content)
+            return httpx2.Response(
+                200,
+                json={
+                    "id": "msg_test",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-test",
+                    "content": [
+                        {"type": "text", "text": "checking"},
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_2",
+                            "name": "inspect",
+                            "input": {},
+                        },
+                    ],
+                    "stop_reason": "tool_use",
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                },
+            )
+
+        def client_factory(**kwargs: Any) -> AsyncAnthropic:
+            return AsyncAnthropic(
+                **kwargs,
+                http_client=httpx2.AsyncClient(
+                    transport=httpx2.MockTransport(handler)
+                ),
+            )
+
+        message = await async_chat_completion_message(
+            anthropic_endpoint(),
+            [{"role": "user", "content": "hello"}],
+            request_options=base_options(),
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "inspect",
+                        "description": "Inspect state.",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+            transport=AnthropicSDKTransport(client_factory),
+        )
+
+        self.assertEqual(observed["url"], "https://api.anthropic.com/v1/messages")
+        self.assertEqual(observed["api_key"], "test-secret")
+        self.assertEqual(observed["body"]["temperature"], 0.2)
+        self.assertEqual(observed["body"]["tools"][0]["name"], "inspect")
+        self.assertEqual(message["content"], "checking")
+        self.assertEqual(message["tool_calls"][0]["function"]["name"], "inspect")
+
+    async def test_anthropic_sdk_streams_only_visible_text(self) -> None:
+        class FakeStream:
+            @property
+            def text_stream(self) -> Any:
+                async def chunks() -> Any:
+                    yield "first "
+                    yield "second"
+
+                return chunks()
+
+            async def get_final_message(self) -> dict[str, Any]:
+                return {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "first second"}],
+                }
+
+        class FakeManager:
+            async def __aenter__(self) -> FakeStream:
+                return FakeStream()
+
+            async def __aexit__(self, *_args: object) -> None:
+                return None
+
+        class FakeMessages:
+            def stream(self, **_kwargs: Any) -> FakeManager:
+                return FakeManager()
+
+        class FakeClient:
+            messages = FakeMessages()
+
+            async def close(self) -> None:
+                return None
+
+        visible: list[str] = []
+        message = await async_chat_completion_message(
+            anthropic_endpoint(),
+            [{"role": "user", "content": "hello"}],
+            transport=AnthropicSDKTransport(lambda **_kwargs: FakeClient()),
+            visible_delta_callback=visible.append,
+        )
+
+        self.assertEqual(visible, ["first ", "second"])
+        self.assertEqual(message["content"], "first second")
+
     async def test_stream_callback_receives_visible_content_only(self) -> None:
         class StreamingTransport(StubTransport):
             async def create_chat_completion_stream(
@@ -361,6 +677,10 @@ class ModelClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(
             transport_from_endpoint(base_endpoint()),
             OpenAISDKTransport,
+        )
+        self.assertIsInstance(
+            transport_from_endpoint(anthropic_endpoint()),
+            AnthropicSDKTransport,
         )
         self.assertIsInstance(
             transport_from_endpoint(

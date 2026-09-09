@@ -1,1 +1,1 @@
-"""兼容 Responses 与 Chat Completions 的模型客户端和玩家模型模板。"""
+"""兼容 OpenAI 与 Anthropic 协议的模型客户端和玩家模板。"""

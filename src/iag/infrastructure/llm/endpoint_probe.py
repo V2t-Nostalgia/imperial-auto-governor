@@ -1,4 +1,4 @@
-"""Read-only reachability checks for OpenAI-compatible model endpoints."""
+"""Read-only reachability checks for configured model endpoints."""
 
 from __future__ import annotations
 

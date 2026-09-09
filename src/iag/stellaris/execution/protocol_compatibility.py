@@ -215,6 +215,40 @@ COMMAND_SPECS = (
         },
     ),
     ProtocolCommandSpec(
+        action="repair_fleet",
+        group="fleet_maintenance",
+        title="舰队返港维修",
+        wire_family_hex="8f3201000300",
+        verification_state="paired_capture",
+        risk="state_change",
+        required_target_fields=("source_fleet_object",),
+        setup="选择一支最新存档确认受损、空闲、未失踪且未交战的军用舰队。",
+        operator_check="确认舰队自动获得返港维修命令，且房间保持同步。",
+        example_target={
+            "context_822c": 0,
+            "source_fleet_object": "<FLEET_OBJECT_ID>",
+        },
+    ),
+    ProtocolCommandSpec(
+        action="upgrade_fleet",
+        group="fleet_maintenance",
+        title="舰队升级",
+        wire_family_hex="8f2f01000300",
+        verification_state="paired_capture",
+        risk="state_change",
+        required_target_fields=(
+            "source_fleet_object",
+            "shipyard_build_queue_id",
+        ),
+        setup="选择有可升级舰船的空闲军用舰队，以及最新存档中的己方船坞队列。",
+        operator_check="确认舰队前往该船坞升级，且后续存档出现正确升级订单。",
+        example_target={
+            "context_822c": 0,
+            "source_fleet_object": "<FLEET_OBJECT_ID>",
+            "shipyard_build_queue_id": "<SHIPYARD_BUILD_QUEUE_ID>",
+        },
+    ),
+    ProtocolCommandSpec(
         action="configure_ship_automation",
         group="civilian_ship_automation",
         title="科研船／工程船自动化",
@@ -257,10 +291,10 @@ COMMAND_SPECS = (
             "colony_designation",
             "design_id",
             "target_planet_id",
-            "source_planet_id",
+            "source_shipyard_build_queue_id",
             "system_name_key",
         ),
-        setup="从最新存档核对目标、物种、殖民船设计、来源行星、宜居性和规划键。",
+        setup="从最新存档核对目标、物种、殖民船设计、己方船坞队列、宜居性和规划键。",
         operator_check="确认殖民船订单与目标殖民任务成立，并用后续存档复核。",
         example_target={
             "context_822c": 0,
@@ -270,7 +304,7 @@ COMMAND_SPECS = (
             "upgrade_id": 4294967295,
             "growth_stage": 0,
             "target_planet_id": "<TARGET_PLANET_ID>",
-            "source_planet_id": "<SOURCE_PLANET_ID>",
+            "source_shipyard_build_queue_id": "<SHIPYARD_BUILD_QUEUE_ID>",
             "system_name_key": "<SYSTEM_NAME_KEY>",
         },
     ),
@@ -479,30 +513,15 @@ COMMAND_SPECS = (
         },
     ),
     ProtocolCommandSpec(
-        action="reinforce_fleet_stage_1",
+        action="reinforce_selected_fleet",
         group="fleet_manager",
-        title="舰队增援第一阶段",
+        title="增援选中舰队",
         wire_family_hex="123b01000300",
         verification_state="paired_capture",
         risk="state_change",
         required_target_fields=("fleet_template_id",),
         setup="先把模板目标数量调高，并确保帝国有足够资源与船坞。",
-        operator_check="确认第一阶段获权威回包；它本身不证明舰船已开工。",
-        example_target={
-            "context_822c": 0,
-            "fleet_template_id": "<FLEET_TEMPLATE_ID>",
-        },
-    ),
-    ProtocolCommandSpec(
-        action="reinforce_fleet_stage_2",
-        group="fleet_manager",
-        title="舰队增援第二阶段",
-        wire_family_hex="f23b01000300",
-        verification_state="paired_capture",
-        risk="state_change",
-        required_target_fields=("fleet_template_id",),
-        setup="仅在同一模板的第一阶段刚刚成功后执行。",
-        operator_check="确认增援请求成立，并在随后存档中核对队列。",
+        operator_check="确认选中模板的增援请求成立，并在随后存档中核对队列。",
         example_target={
             "context_822c": 0,
             "fleet_template_id": "<FLEET_TEMPLATE_ID>",
@@ -570,6 +589,15 @@ OFFLINE_FIXTURE_TARGETS: dict[str, dict[str, Any]] = {
         "source_fleet_object": 21,
         "target_fleet_object": 24,
     },
+    "repair_fleet": {
+        "context_822c": 0,
+        "source_fleet_object": 21,
+    },
+    "upgrade_fleet": {
+        "context_822c": 0,
+        "source_fleet_object": 21,
+        "shipyard_build_queue_id": 34,
+    },
     "configure_ship_automation": {
         "context_822c": 0,
         "source_fleet_object": 25,
@@ -587,7 +615,7 @@ OFFLINE_FIXTURE_TARGETS: dict[str, dict[str, Any]] = {
         "upgrade_id": 0xFFFFFFFF,
         "growth_stage": 0,
         "target_planet_id": 29,
-        "source_planet_id": 30,
+        "source_shipyard_build_queue_id": 30,
         "system_name_key": "NAME_Compat_System",
     },
     "colonize_with_existing_ship": {
@@ -673,11 +701,7 @@ OFFLINE_FIXTURE_TARGETS: dict[str, dict[str, Any]] = {
         "upgrade_id": 0xFFFFFFFF,
         "growth_stage": 0,
     },
-    "reinforce_fleet_stage_1": {
-        "context_822c": 0,
-        "fleet_template_id": 41,
-    },
-    "reinforce_fleet_stage_2": {
+    "reinforce_selected_fleet": {
         "context_822c": 0,
         "fleet_template_id": 41,
     },
@@ -767,25 +791,6 @@ def validate_plan_document(
                 f"Scenario {scenario_id} is enabled but its side effects are not "
                 "acknowledged."
             )
-    if require_live_acknowledgements:
-        enabled_by_action = {
-            str(item["action"]): item
-            for item in scenarios
-            if item.get("enabled") is True
-        }
-        second_stage = enabled_by_action.get("reinforce_fleet_stage_2")
-        if second_stage is not None:
-            first_stage = enabled_by_action.get("reinforce_fleet_stage_1")
-            if first_stage is None:
-                raise ValueError(
-                    "reinforce_fleet_stage_2 requires an enabled stage 1 scenario."
-                )
-            if first_stage["target"].get("fleet_template_id") != (
-                second_stage["target"].get("fleet_template_id")
-            ):
-                raise ValueError(
-                    "Reinforcement stages must target the same fleet template."
-                )
     return value
 
 

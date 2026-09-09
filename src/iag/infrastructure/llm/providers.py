@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Network transports for OpenAI-compatible model APIs.
+"""Network transports for supported model APIs.
 
-The application protocol (Responses or Chat Completions) is deliberately
-separate from the network transport.  The official OpenAI SDK is the default;
-the raw HTTP implementation remains available for compatibility diagnostics
-and servers whose routing or authentication is not SDK-compatible.
+Application protocols are deliberately separate from their network
+transports. Official OpenAI and Anthropic SDKs cover their native APIs; raw
+HTTP remains available for compatibility diagnostics and unusual endpoints.
 """
 
 from __future__ import annotations
@@ -15,8 +14,9 @@ import socket
 import urllib.error
 import urllib.request
 from collections.abc import Callable
-from typing import Any, Protocol
+from typing import Any, ClassVar, Protocol
 
+from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 
 from iag.infrastructure.llm.chat_stream import (
@@ -58,8 +58,8 @@ def _numeric_retry_after(headers: Any) -> int | None:
     return max(0, int(text)) if text.isdigit() else None
 
 
-class LLMTransport(Protocol):
-    """Transport contract consumed by the provider-neutral model client."""
+class ChatCompletionTransport(Protocol):
+    """A transport capable of OpenAI-compatible chat completions."""
 
     async def create_chat_completion(
         self,
@@ -74,11 +74,32 @@ class LLMTransport(Protocol):
         visible_delta_callback: VisibleDeltaCallback,
     ) -> dict[str, Any]: ...
 
+
+class ResponsesTransport(Protocol):
+    """A transport capable of OpenAI-compatible Responses calls."""
+
     async def create_response(
         self,
         endpoint: ModelEndpoint,
         body: dict[str, Any],
     ) -> dict[str, Any]: ...
+
+
+class AnthropicMessagesTransport(Protocol):
+    """A transport capable of Anthropic-compatible Messages calls."""
+
+    async def create_anthropic_message(
+        self,
+        endpoint: ModelEndpoint,
+        body: dict[str, Any],
+    ) -> dict[str, Any]: ...
+
+
+LLMTransport = (
+    ChatCompletionTransport
+    | ResponsesTransport
+    | AnthropicMessagesTransport
+)
 
 
 def resolve_api_key(endpoint: ModelEndpoint) -> str | None:
@@ -265,7 +286,7 @@ def _sdk_base_url(
     if not normalized_path.endswith(endpoint_suffix):
         raise ValueError(
             f"Endpoint {endpoint.endpoint_id!r} path must end with "
-            f"{endpoint_suffix!r} when using 'openai_sdk'; "
+            f"{endpoint_suffix!r} when using an SDK transport; "
             "use 'raw_http' for an arbitrary endpoint path."
         )
 
@@ -278,26 +299,30 @@ def _model_dump(value: Any) -> dict[str, Any]:
         return value
     dump = getattr(value, "model_dump", None)
     if not callable(dump):
-        raise RuntimeError("OpenAI SDK returned an unsupported response object.")
+        raise RuntimeError("Model SDK returned an unsupported response object.")
     rendered = dump(mode="json")
     if not isinstance(rendered, dict):
-        raise RuntimeError("OpenAI SDK returned a non-object response.")
+        raise RuntimeError("Model SDK returned a non-object response.")
     return rendered
 
 
 class OpenAISDKTransport:
     """OpenAI-compatible transport backed by the official asynchronous SDK."""
 
-    _CHAT_TYPED_KEYS = {
-        "model",
-        "messages",
-        "tools",
-        "tool_choice",
-        "response_format",
-        "temperature",
-        "reasoning_effort",
-    }
-    _RESPONSES_TYPED_KEYS = {"model", "instructions", "input", "text"}
+    _CHAT_TYPED_KEYS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "model",
+            "messages",
+            "tools",
+            "tool_choice",
+            "response_format",
+            "temperature",
+            "reasoning_effort",
+        }
+    )
+    _RESPONSES_TYPED_KEYS: ClassVar[frozenset[str]] = frozenset(
+        {"model", "instructions", "input", "text"}
+    )
 
     def __init__(
         self,
@@ -383,6 +408,7 @@ class OpenAISDKTransport:
         finally:
             await self._close(client)
 
+
     async def create_chat_completion_stream(
         self,
         endpoint: ModelEndpoint,
@@ -445,6 +471,110 @@ class OpenAISDKTransport:
             return _model_dump(value)
         finally:
             await self._close(client)
+
+
+class AnthropicSDKTransport:
+    """Anthropic Messages transport backed by the official async SDK."""
+
+    _TYPED_KEYS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "cache_control",
+            "container",
+            "inference_geo",
+            "max_tokens",
+            "messages",
+            "metadata",
+            "model",
+            "output_config",
+            "service_tier",
+            "stop_sequences",
+            "system",
+            "thinking",
+            "tool_choice",
+            "tools",
+            "user_profile_id",
+            "workspace_id",
+        }
+    )
+
+    def __init__(
+        self,
+        client_factory: Callable[..., Any] = AsyncAnthropic,
+    ) -> None:
+        self._client_factory = client_factory
+
+    def _new_client(self, endpoint: ModelEndpoint) -> Any:
+        key = resolve_api_key(endpoint)
+        if key is None:
+            raise ValueError(
+                "anthropic_sdk requires an API key; use raw_http for a "
+                "no-auth compatible endpoint"
+            )
+        return self._client_factory(
+            api_key=key,
+            base_url=_sdk_base_url(
+                endpoint,
+                endpoint.messages_path,
+                "/v1/messages",
+            ),
+            timeout=endpoint.timeout_seconds,
+            max_retries=endpoint.sdk_max_retries,
+            default_headers=_extra_headers(endpoint) or None,
+        )
+
+    @staticmethod
+    def _arguments(
+        body: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        typed = {
+            key: value
+            for key, value in body.items()
+            if key in AnthropicSDKTransport._TYPED_KEYS
+        }
+        extra = {
+            key: value
+            for key, value in body.items()
+            if key not in AnthropicSDKTransport._TYPED_KEYS
+        }
+        return typed, extra
+
+    async def create_anthropic_message(
+        self,
+        endpoint: ModelEndpoint,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        client = self._new_client(endpoint)
+        typed, extra = self._arguments(body)
+        try:
+            value = await client.messages.create(
+                **typed,
+                extra_body=extra or None,
+            )
+            return _model_dump(value)
+        finally:
+            await OpenAISDKTransport._close(client)
+
+    async def create_anthropic_message_stream(
+        self,
+        endpoint: ModelEndpoint,
+        body: dict[str, Any],
+        visible_delta_callback: VisibleDeltaCallback,
+    ) -> dict[str, Any]:
+        client = self._new_client(endpoint)
+        typed, extra = self._arguments(body)
+        try:
+            manager = client.messages.stream(
+                **typed,
+                extra_body=extra or None,
+            )
+            async with manager as stream:
+                async for delta in stream.text_stream:
+                    if delta:
+                        visible_delta_callback(str(delta))
+                value = await stream.get_final_message()
+            return _model_dump(value)
+        finally:
+            await OpenAISDKTransport._close(client)
 
 
 class RawHTTPTransport:
@@ -510,11 +640,20 @@ class RawHTTPTransport:
             body,
         )
 
+    async def create_anthropic_message(
+        self,
+        endpoint: ModelEndpoint,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await self._post(endpoint, endpoint.messages_path, body)
+
 
 def transport_from_endpoint(endpoint: ModelEndpoint) -> LLMTransport:
     """Select a transport explicitly; never repeat a failed request implicitly."""
     if endpoint.model_transport == "openai_sdk":
         return OpenAISDKTransport()
+    if endpoint.model_transport == "anthropic_sdk":
+        return AnthropicSDKTransport()
     if endpoint.model_transport == "raw_http":
         return RawHTTPTransport()
     raise ValueError(f"Unsupported model_transport: {endpoint.model_transport}")

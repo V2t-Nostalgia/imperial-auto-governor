@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Verified Stellaris 4.4.6 fleet-template and reinforcement records.
 
-The paired non-host capture shows that the Fleet Manager does not send an
-absolute quantity.  Each plus/minus click is one command, followed by a
-two-record reinforcement transaction for each understrength template.
+The paired non-host captures show that the Fleet Manager does not send an
+absolute quantity. Each plus/minus click is one command, followed by one
+``123b`` request for the selected understrength fleet template. ``f23b`` was
+observed in the separate empire-wide Reinforce All route and is deliberately
+not exposed as part of selected-fleet reinforcement.
 """
 
 from __future__ import annotations
@@ -26,8 +28,8 @@ SERIAL_WIDTH = 4
 COMMAND_TRAILER = bytes.fromhex("04000400")
 ADD_TEMPLATE_SHIP_FAMILY = bytes.fromhex("5f3b01000300")
 REMOVE_TEMPLATE_SHIP_FAMILY = bytes.fromhex("603b01000300")
-REINFORCE_STAGE_ONE_FAMILY = bytes.fromhex("123b01000300")
-REINFORCE_STAGE_TWO_FAMILY = bytes.fromhex("f23b01000300")
+SELECTED_FLEET_REINFORCEMENT_FAMILY = bytes.fromhex("123b01000300")
+EMPIRE_REINFORCE_ALL_FAMILY = bytes.fromhex("f23b01000300")
 CREATE_FLEET_TEMPLATE_FAMILY = bytes.fromhex("7e3b01000300")
 
 FLEET_TEMPLATE_TAG = bytes.fromhex("0e3b01001400")
@@ -55,13 +57,15 @@ REMOVE_TEMPLATE_SHIP_RECORD = bytes.fromhex(
     "000000000400132b01000e00010c000000000001000c000100000004"
     "000400"
 )
-REINFORCE_STAGE_ONE_RECORD = bytes.fromhex(
+SELECTED_FLEET_REINFORCEMENT_RECORD = bytes.fromhex(
     "5d0004000000123b01000300f30101000300400201000c0002000000"
     "c70001000c00ff7f0000cc0001000e0000130401000e0000db000100"
-    "1400330000000400410001000300822c01001400000000000e3b0100"
-    "14000000000004000400"
+    "1400390000000400410001000300822c01001400000000000e3b0100"
+    "1400fd00000a04000400"
 )
-REINFORCE_STAGE_TWO_RECORD = bytes.fromhex(
+# Retained only as protocol evidence. Its exact empire-wide semantics are not
+# sufficiently mapped for autonomous execution.
+EMPIRE_REINFORCE_ALL_RECORD = bytes.fromhex(
     "5d0004000000f23b01000300f30101000300400201000c0002000000"
     "c70001000c00ff7f0000cc0001000e0000130401000e0000db000100"
     "1400340000000400410001000300822c01001400000000000e3b0100"
@@ -202,18 +206,13 @@ def build_template_edit_record(
     return result
 
 
-def parse_reinforcement_stage(
+def parse_selected_fleet_reinforcement(
     record: bytes,
-) -> tuple[int, FleetReinforcementTarget] | None:
-    family = _family(record)
-    if family == REINFORCE_STAGE_ONE_FAMILY:
-        stage = 1
-    elif family == REINFORCE_STAGE_TWO_FAMILY:
-        stage = 2
-    else:
+) -> FleetReinforcementTarget | None:
+    if _family(record) != SELECTED_FLEET_REINFORCEMENT_FAMILY:
         return None
     _validate_record(record)
-    return stage, FleetReinforcementTarget(
+    return FleetReinforcementTarget(
         context_822c=_u32(record, CONTEXT_TAG, "context_822c"),
         fleet_template_id=_u32(
             record, FLEET_TEMPLATE_TAG, "fleet_template_id"
@@ -221,20 +220,14 @@ def parse_reinforcement_stage(
     )
 
 
-def build_reinforcement_stage_record(
+def build_selected_fleet_reinforcement_record(
     *,
-    stage: int,
     command_serial: int,
     actor: int,
     origin: int,
     target: FleetReinforcementTarget,
 ) -> bytes:
-    if stage == 1:
-        record = bytearray(REINFORCE_STAGE_ONE_RECORD)
-    elif stage == 2:
-        record = bytearray(REINFORCE_STAGE_TWO_RECORD)
-    else:
-        raise ValueError("Reinforcement stage must be 1 or 2.")
+    record = bytearray(SELECTED_FLEET_REINFORCEMENT_RECORD)
     _set_identity(
         record,
         command_serial=command_serial,
@@ -244,7 +237,7 @@ def build_reinforcement_stage_record(
     _set_u32(record, CONTEXT_TAG, target.context_822c, "context_822c")
     _set_u32(record, FLEET_TEMPLATE_TAG, target.fleet_template_id, "fleet_template_id")
     result = bytes(record)
-    if parse_reinforcement_stage(result) != (stage, target):
+    if parse_selected_fleet_reinforcement(result) != target:
         raise RuntimeError("The reinforcement target changed during construction.")
     return result
 

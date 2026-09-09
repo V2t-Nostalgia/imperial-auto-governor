@@ -16,6 +16,7 @@ from iag.core.campaign_strategy import (
 from iag.core.context_window import build_context_messages
 from iag.core.conversation_store import ConversationStore, now_iso
 from iag.infrastructure.llm.model_client import chat_completion_message
+from iag.infrastructure.llm.model_pool import TOOL_CALL_PROTOCOLS
 from iag.infrastructure.llm.model_pool_runtime import (
     ModelPoolExhaustedError,
     ModelPoolRuntime,
@@ -128,6 +129,8 @@ def _assistant_protocol_message(message: dict[str, Any]) -> dict[str, Any]:
         result["tool_calls"] = tool_calls
         if message.get("reasoning_content") is not None:
             result["reasoning_content"] = message.get("reasoning_content")
+    if isinstance(message.get("anthropic_content"), list):
+        result["anthropic_content"] = message["anthropic_content"]
     return result
 
 
@@ -284,12 +287,12 @@ class ConversationAgent:
         request_options = runtime.request_options
         try:
             endpoint = self.model_pool_runtime.context_endpoint(
-                provider="chat_completions_compatible",
+                provider=TOOL_CALL_PROTOCOLS,
                 require_tools=True,
             )
         except ModelPoolExhaustedError as error:
             raise ConversationAgentError(
-                "模型池中没有当前可用且支持工具的 Chat Completions 端点。"
+                "模型池中没有当前可用且支持工具调用的模型端点。"
             ) from error
         if not bool(config.get("tool_calling_enabled", True)):
             raise ConversationAgentError("当前模型配置已关闭工具调用。")
@@ -358,7 +361,7 @@ class ConversationAgent:
                     request_options=request_options,
                     tools=tools,
                 ),
-                provider="chat_completions_compatible",
+                provider=TOOL_CALL_PROTOCOLS,
                 require_tools=True,
             )
 
@@ -406,7 +409,7 @@ class ConversationAgent:
 
             return self.model_pool_runtime.execute(
                 operation,
-                provider="chat_completions_compatible",
+                provider=TOOL_CALL_PROTOCOLS,
                 require_tools=True,
             )
 
@@ -437,6 +440,11 @@ class ConversationAgent:
                 assistant["tool_calls"] = valid_calls
             content = str(assistant.get("content") or "")
             reasoning_content = assistant.get("reasoning_content")
+            assistant_metadata: dict[str, Any] = {"origin": "model"}
+            if isinstance(assistant.get("anthropic_content"), list):
+                assistant_metadata["anthropic_content"] = assistant[
+                    "anthropic_content"
+                ]
             assistant_message_id = self.store.append(
                 "assistant",
                 content,
@@ -448,7 +456,7 @@ class ConversationAgent:
                 tool_calls=valid_calls or None,
                 kind="tool_call" if valid_calls else "assistant_message",
                 visible=bool(content),
-                metadata={"origin": "model"},
+                metadata=assistant_metadata,
             )
             if content and visible_event_callback is not None:
                 visible_event_callback(

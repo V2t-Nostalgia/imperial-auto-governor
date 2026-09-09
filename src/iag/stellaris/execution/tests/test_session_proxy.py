@@ -13,7 +13,7 @@ from iag.stellaris.execution.packet.fleet_reinforcement_commands import (
     FleetReinforcementTarget,
     FleetTemplateAddTarget,
     FleetTemplateCreationTarget,
-    build_reinforcement_stage_record,
+    build_selected_fleet_reinforcement_record,
     build_template_creation_record,
     build_template_edit_record,
 )
@@ -185,15 +185,15 @@ class SessionProxyTests(unittest.TestCase):
         self.assertEqual(metadata["fleet_template_id"], 175)
         self.assertEqual(metadata["design_id"], 3188)
 
-    def test_reinforcement_stage_arm_uses_exact_target(self) -> None:
+    def test_selected_fleet_reinforcement_arm_uses_exact_target(self) -> None:
         target = FleetReinforcementTarget(
             context_822c=0,
             fleet_template_id=175,
         )
         request = ArmRequest(
-            request_id="reinforcement-stage-2",
+            request_id="selected-reinforcement",
             session_id="test",
-            action="reinforce_fleet_stage_2",
+            action="reinforce_selected_fleet",
             source_actor=2,
             host_actor=1,
             request_origin=0,
@@ -209,8 +209,7 @@ class SessionProxyTests(unittest.TestCase):
         assert injection is not None
         self.assertEqual(
             injection.payload[RELIABLE_HEADER_LENGTH + 3 :],
-            build_reinforcement_stage_record(
-                stage=2,
+            build_selected_fleet_reinforcement_record(
                 command_serial=60,
                 actor=2,
                 origin=0,

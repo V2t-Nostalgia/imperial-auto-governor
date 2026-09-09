@@ -3,32 +3,52 @@
   "templates": [
     {
       "id": "custom",
-      "label": "自定义 OpenAI 兼容接口",
-      "description": "保留当前 Base URL、模型和协议设置。工具会话目前使用 Chat Completions 兼容协议。",
-      "config": {}
-    },
-    {
-      "id": "deepseek_thinking_tools",
-      "label": "DeepSeek 思考模式 + 建设工具",
-      "description": "使用 DeepSeek 官方 Chat Completions 思考模式；模型只选择工具，本地程序负责校验和执行。",
+      "label": "OpenAI Compatible",
+      "description": "预填 OpenAI 兼容的 Chat Completions 端点；Base URL、模型名和所有运行参数均可编辑。",
       "config": {
         "model_transport": "openai_sdk",
         "provider": "chat_completions_compatible",
-        "base_url": "https://api.deepseek.com",
+        "base_url": "https://api.example.com/v1",
+        "model": "",
         "chat_completions_path": "/chat/completions",
-        "model": "deepseek-v4-pro",
-        "supports_reasoning": true,
-        "thinking": {
-          "type": "enabled"
+        "responses_path": "/responses",
+        "messages_path": "/messages",
+        "models_path": "/models",
+        "auth_mode": "bearer",
+        "api_key_header": "Authorization",
+        "api_key_prefix": "Bearer ",
+        "extra_headers": {},
+        "supports_reasoning": false,
+        "supports_tools": true,
+        "model_context_window_tokens": 128000,
+        "max_output_tokens": 8192,
+        "sdk_max_retries": 2
+      }
+    },
+    {
+      "id": "anthropic_api",
+      "label": "Anthropic API",
+      "description": "预填 Anthropic Messages API 与官方 SDK 配置，支持 IAG 的持久工具会话。",
+      "config": {
+        "model_transport": "anthropic_sdk",
+        "provider": "anthropic_messages_compatible",
+        "base_url": "https://api.anthropic.com",
+        "model": "claude-sonnet-4-6",
+        "chat_completions_path": "/chat/completions",
+        "responses_path": "/responses",
+        "messages_path": "/v1/messages",
+        "models_path": "/v1/models",
+        "auth_mode": "bearer",
+        "api_key_header": "x-api-key",
+        "api_key_prefix": "",
+        "extra_headers": {
+          "anthropic-version": "2023-06-01"
         },
-        "reasoning_effort": "max",
+        "supports_reasoning": true,
+        "supports_tools": true,
         "sdk_max_retries": 2,
-        "tool_calling_enabled": true,
         "model_context_window_tokens": 1000000,
-        "context_output_reserve_tokens": 65536,
-        "context_compression_enabled": true,
-        "context_compression_trigger_percent": 80,
-        "context_compression_target_percent": 35
+        "max_output_tokens": 65536
       }
     }
   ]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from threading import RLock
@@ -18,6 +18,15 @@ from iag.infrastructure.llm.providers import LLMConnectionError, LLMTimeoutError
 
 
 ResultT = TypeVar("ResultT")
+ProviderFilter = str | Collection[str] | None
+
+
+def _provider_matches(provider: str, expected: ProviderFilter) -> bool:
+    if expected is None:
+        return True
+    if isinstance(expected, str):
+        return provider == expected
+    return provider in expected
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,7 +185,7 @@ class ModelPoolRuntime:
     def candidates(
         self,
         *,
-        provider: str | None = None,
+        provider: ProviderFilter = None,
         require_tools: bool = False,
     ) -> tuple[ModelEndpoint, ...]:
         now = self._clock()
@@ -188,7 +197,7 @@ class ModelPoolRuntime:
                     key=lambda item: (item[1].priority, item[0]),
                 )
                 if endpoint.enabled
-                and (provider is None or endpoint.provider == provider)
+                and _provider_matches(endpoint.provider, provider)
                 and (not require_tools or endpoint.supports_tools)
                 and not (
                     self._health[endpoint.endpoint_id].cooldown_until_epoch
@@ -199,7 +208,7 @@ class ModelPoolRuntime:
     def preferred_endpoint(
         self,
         *,
-        provider: str | None = None,
+        provider: ProviderFilter = None,
         require_tools: bool = False,
     ) -> ModelEndpoint:
         candidates = self.candidates(
@@ -213,7 +222,7 @@ class ModelPoolRuntime:
     def context_endpoint(
         self,
         *,
-        provider: str | None = None,
+        provider: ProviderFilter = None,
         require_tools: bool = False,
     ) -> ModelEndpoint:
         """Use the smallest eligible context limits so fallback remains valid."""
@@ -274,7 +283,7 @@ class ModelPoolRuntime:
         self,
         operation: Callable[[ModelEndpoint], ResultT],
         *,
-        provider: str | None = None,
+        provider: ProviderFilter = None,
         require_tools: bool = False,
     ) -> ResultT:
         """Try endpoints by priority; replay only explicitly safe failures."""

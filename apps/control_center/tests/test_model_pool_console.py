@@ -236,6 +236,36 @@ class ModelPoolConsoleTests(unittest.TestCase):
             "deepseek-reasoner-provider-name",
         )
 
+    def test_anthropic_endpoint_can_replace_the_active_tool_route(self) -> None:
+        current_pool = self.service.public_model_config()["model_pools"][0]
+        anthropic = endpoint("anthropic-official", 0, "anthropic-secret")
+        anthropic.update(
+            {
+                "display_name": "Anthropic Official",
+                "model": "claude-sonnet-4-6",
+                "model_transport": "anthropic_sdk",
+                "provider": "anthropic_messages_compatible",
+                "base_url": "https://api.anthropic.com",
+                "messages_path": "/v1/messages",
+                "models_path": "/v1/models",
+                "api_key_header": "x-api-key",
+                "api_key_prefix": "",
+                "extra_headers": {"anthropic-version": "2023-06-01"},
+            }
+        )
+        current_pool["endpoints"] = [anthropic]
+
+        public = self.service.save_model_pools(
+            {"model_pools": [current_pool]}
+        )
+
+        saved = public["model_pool"]["endpoints"][0]
+        self.assertEqual(saved["model_transport"], "anthropic_sdk")
+        self.assertEqual(saved["provider"], "anthropic_messages_compatible")
+        self.assertEqual(saved["messages_path"], "/v1/messages")
+        self.assertTrue(public["conversation_supported"])
+        self.assertNotIn("anthropic-secret", json.dumps(public))
+
 
 if __name__ == "__main__":
     unittest.main()

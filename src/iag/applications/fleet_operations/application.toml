@@ -1,8 +1,8 @@
 schema_version = "iag.application_manifest.v1"
 application_id = "fleet_operations"
 version = "0.5.9"
-display_name_zh = "舰队行动"
-description_zh = "读取玩家舰队、设计与目标编制，并在逐舰队授权后下达实验性命令。"
+display_name_zh = "舰队与扩张行动"
+description_zh = "读取舰队、民用船与扩张候选，并在玩家授权后下达实验性命令。"
 
 agent_roles = ["fleet_operator"]
 message_types = ["fleet_assessment", "fleet_order", "escalation"]
@@ -10,11 +10,20 @@ action_types = [
   "move_fleet",
   "move_fleet_to_coordinate",
   "attack_fleet",
+  "repair_fleet",
+  "upgrade_fleet",
+  "configure_ship_automation",
+  "build_starbase",
+  "order_colony_ship_and_colonize",
+  "upgrade_starbase",
+  "set_starbase_module",
+  "set_starbase_building",
   "create_ship_design",
   "create_new_fleet",
   "reinforce_fleet_to_target",
 ]
 required_platform_capabilities = [
   "stellaris_fleet_state_v1",
+  "stellaris_expansion_state_v1",
   "session_proxy_v1",
 ]

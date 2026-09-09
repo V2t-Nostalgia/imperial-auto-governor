@@ -285,7 +285,7 @@
         <div class="application-binding-grid">
           <label>Application<select id="application-select"></select></label>
           <label>已保存配置<select id="application-profile-select"></select></label>
-          <label class="application-profile-name">配置名称<input id="application-profile-name" type="text" maxlength="120" placeholder="例如：经济治理 · DeepSeek 低成本"></label>
+          <label class="application-profile-name">配置名称<input id="application-profile-name" type="text" maxlength="120" placeholder="例如：经济治理 · 低成本"></label>
           <label>使用模型池<select id="application-pool-select"></select></label>
           <label>池内逻辑模型<select id="application-model-select"></select></label>
         </div>
@@ -355,12 +355,18 @@
         <label class="check-line"><input id="experimental-fleet-tools-enabled" type="checkbox">向模型开放实验性舰队移动工具（仅会话代理模式）</label>
         <label class="check-line"><input id="experimental-fleet-coordinate-tools-enabled" type="checkbox">允许 4f2c 星系内坐标移动（实验）</label>
         <label>星系内坐标绝对值上限<input id="fleet-coordinate-max-abs" type="number" min="10" max="100000" step="10"></label>
-        <label class="check-line"><input id="experimental-fleet-attack-enabled" type="checkbox">显示攻击预检（6b33 执行器已验证；敌对目标映射完成前 Agent 不会发包）</label>
+        <label class="check-line"><input id="experimental-fleet-attack-enabled" type="checkbox">允许存档情报唯一确认目标后的舰队攻击（6b33，实验）</label>
+        <label class="check-line"><input id="experimental-fleet-maintenance-tools-enabled" type="checkbox">向模型开放舰队返港维修与船坞升级工具（实验）</label>
         <label class="check-line"><input id="experimental-ship-design-tools-enabled" type="checkbox">向模型开放实验性舰船设计工具（克隆现有设计后修改）</label>
         <label class="check-line"><input id="experimental-fleet-reinforcement-tools-enabled" type="checkbox">向模型开放实验性舰队编制与增援工具</label>
         <label>单次目标编制增量上限<input id="maximum-fleet-reinforcement-increase" type="number" min="1" max="20" step="1"></label>
         <label class="check-line"><input id="experimental-new-fleet-tools-enabled" type="checkbox">允许模型从零创建新舰队（分两次存档确认）</label>
         <label>新舰队初始舰数上限<input id="maximum-new-fleet-initial-ships" type="number" min="1" max="20" step="1"></label>
+        <label class="check-line"><input id="experimental-civilian-ship-tools-enabled" type="checkbox">向模型开放科研船/工程船自动化与工程船建站（实验）</label>
+        <label class="check-line"><input id="experimental-colonization-tools-enabled" type="checkbox">允许模型订购殖民船并殖民合法候选（3d37，实验）</label>
+        <label>最低殖民宜居度（%）<input id="minimum-colonization-habitability" type="number" min="0" max="100" step="1"></label>
+        <label class="check-line"><input id="experimental-starbase-tools-enabled" type="checkbox">向模型开放恒星基地升级、模块与建筑工具（实验）</label>
+        <label class="check-line"><input id="experimental-starbase-replacement-enabled" type="checkbox">允许替换已有恒星基地模块或建筑（高影响）</label>
         <label class="check-line"><input id="experimental-research-tools-enabled" type="checkbox">向模型开放 062d 科技选择工具（实验）</label>
         <label class="check-line"><input id="experimental-research-reselection-enabled" type="checkbox">允许停止当前科技并中途换题（高影响）</label>
         <p class="hint">存档版本容差填 0 表示只接受最新上传版本；默认 2 表示一轮分析期间即使又上传两份新档，原批次仍可继续。<span id="fixed-click-guard-hint">关闭界面校验会保留截图和匹配分数，但不再因分数不足阻止点击，需自行承担误点风险。</span>时效填 0 只关闭墙钟年龄限制；存档哈希和战役绑定仍然有效。</p>
@@ -372,7 +378,7 @@
           <div><span class="kicker">FLEET AUTHORIZATION</span><h2>舰队调用权限</h2></div>
           <span id="fleet-summary-state" class="status-tag">等待存档</span>
         </div>
-        <p class="hint">舰队由最新同步存档识别。每支新舰队默认禁止调用；移动、攻击与编制增援权限互相独立。增援工具调整的是舰队目标总数，不是立即生成舰船。</p>
+        <p class="hint">舰队和民用船由最新同步存档识别。每支新船队默认禁止调用；移动、攻击、编制增援、自动化与工程船建站权限互相独立。增援工具调整的是舰队目标总数，不是立即生成舰船。</p>
         <div id="fleet-permission-list" class="fleet-permission-list"></div>
       </article>
     </section>
@@ -400,8 +406,8 @@
               <span id="selected-pool-health" class="status-tag">尚未检测</span>
             </div>
             <div class="pool-identity-grid">
-              <label>玩家可见名称<input id="catalog-pool-name" type="text" maxlength="120" placeholder="例如：DeepSeek 低成本池"></label>
-              <label>技术标识<input id="catalog-pool-id" type="text" maxlength="96" placeholder="deepseek-economy"></label>
+              <label>玩家可见名称<input id="catalog-pool-name" type="text" maxlength="120" placeholder="例如：经济治理主池"></label>
+              <label>技术标识<input id="catalog-pool-id" type="text" maxlength="96" placeholder="economy-primary"></label>
             </div>
             <p class="hint">同一逻辑模型可以配置多个供应端点。端点按数字优先级从小到大尝试，只有可安全换源的错误才会回退。</p>
             <div class="endpoint-list-heading"><span>池内端点</span><button id="create-model-endpoint" type="button">+ 添加端点</button></div>
@@ -422,10 +428,10 @@
               <strong>尚未检测</strong><span>保存后可读取 /models 验证可达性。</span>
             </div>
             <div class="endpoint-editor-grid">
-              <label>端点名称<input id="model-endpoint-display-name" type="text" maxlength="120" placeholder="例如：DeepSeek 官方"></label>
-              <label>端点技术标识（创建后固定）<input id="model-endpoint-id" type="text" maxlength="96" placeholder="deepseek-official"></label>
-              <label>逻辑模型标识<input id="endpoint-logical-model-id" type="text" maxlength="120" placeholder="deepseek-chat"></label>
-              <label>供应商模型名<input id="model" type="text" placeholder="deepseek-chat"></label>
+              <label>端点名称<input id="model-endpoint-display-name" type="text" maxlength="120" placeholder="例如：官方 API"></label>
+              <label>端点技术标识（创建后固定）<input id="model-endpoint-id" type="text" maxlength="96" placeholder="primary-official"></label>
+              <label>逻辑模型标识<input id="endpoint-logical-model-id" type="text" maxlength="120" placeholder="governor-model"></label>
+              <label>供应商模型名<input id="model" type="text" placeholder="供应商实际模型 ID"></label>
               <label>使用顺序（越小越优先）<input id="model-endpoint-priority" type="number" min="0" max="100000" step="1"></label>
               <label>配置模板<select id="model-template"></select></label>
             </div>
@@ -436,10 +442,10 @@
               <label class="check-row"><input id="supports-reasoning" type="checkbox">支持推理</label>
             </div>
             <div class="endpoint-editor-grid">
-              <label>传输实现<select id="model-transport"><option value="openai_sdk">OpenAI SDK（推荐）</option><option value="raw_http">原始 HTTP（兼容/诊断）</option></select></label>
-              <label>协议<select id="provider"><option value="responses_compatible">Responses Compatible</option><option value="chat_completions_compatible">Chat Completions Compatible</option></select></label>
+              <label>传输实现<select id="model-transport"><option value="openai_sdk">OpenAI SDK</option><option value="anthropic_sdk">Anthropic SDK</option><option value="raw_http">原始 HTTP（兼容/诊断）</option></select></label>
+              <label>协议<select id="provider"><option value="responses_compatible">Responses Compatible</option><option value="chat_completions_compatible">Chat Completions Compatible</option><option value="anthropic_messages_compatible">Anthropic Messages</option></select></label>
               <label class="wide-field">Base URL<input id="base-url" type="url" placeholder="https://api.example.com/v1"></label>
-              <label>鉴权<select id="auth-mode"><option value="bearer">Bearer API Key</option><option value="none">无需鉴权</option></select></label>
+              <label>鉴权<select id="auth-mode"><option value="bearer">API Key</option><option value="none">无需鉴权</option></select></label>
               <label>API Key<input id="api-key" type="password" placeholder="留空则保留当前端点密钥" autocomplete="new-password"></label>
               <label>最大上下文（tokens）<input id="context-window-tokens" type="number" min="1024" max="2000000" step="1024"></label>
               <label>最大输出（tokens）<input id="context-output-reserve" type="number" min="1" max="1000000" step="512"></label>
@@ -455,6 +461,7 @@
               <div class="endpoint-editor-grid">
                 <label>Chat Completions 路径<input id="chat-completions-path" type="text" placeholder="/chat/completions"></label>
                 <label>Responses 路径<input id="responses-path" type="text" placeholder="/responses"></label>
+                <label>Anthropic Messages 路径<input id="messages-path" type="text" placeholder="/v1/messages"></label>
                 <label>API Key Header<input id="api-key-header" type="text" placeholder="Authorization"></label>
                 <label>API Key Prefix<input id="api-key-prefix" type="text" placeholder="Bearer "></label>
               </div>
