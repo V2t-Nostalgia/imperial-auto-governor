@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import math
@@ -189,9 +190,7 @@ def strip_clausewitz_comments(text: str) -> str:
 
 
 def extract_named_block(text: str, object_id: str) -> tuple[str, int] | None:
-    pattern = re.compile(
-        rf"(?m)^[ \t]*{re.escape(object_id)}[ \t]*=[ \t]*\{{"
-    )
+    pattern = re.compile(rf"(?m)^[ \t]*{re.escape(object_id)}[ \t]*=[ \t]*\{{")
     match = pattern.search(text)
     if not match:
         return None
@@ -392,9 +391,7 @@ def _list_values(
         if entry_key != key or not isinstance(value, list):
             continue
         return [
-            str(item_value)
-            for item_key, item_value in value
-            if item_key == "__value__"
+            str(item_value) for item_key, item_value in value if item_key == "__value__"
         ]
     return []
 
@@ -579,9 +576,7 @@ def _wrapped_definitions(
     definition_root: Path,
     wrappers: set[str],
 ) -> list[tuple[str, str, list[tuple[str, Any]], Path, int]]:
-    output: list[
-        tuple[str, str, list[tuple[str, Any]], Path, int]
-    ] = []
+    output: list[tuple[str, str, list[tuple[str, Any]], Path, int]] = []
     if not definition_root.is_dir():
         return output
     for path in sorted(definition_root.rglob("*.txt")):
@@ -626,12 +621,61 @@ def _ship_component_potential_policy(
         ("country_uses_bio_ships", "no"),
         ("is_arkship_ship", "yes"),
     }
-    if (
-        ("country_uses_bio_ships", "no") in leaves
-        and leaves.issubset(ordinary_conditions)
+    if ("country_uses_bio_ships", "no") in leaves and leaves.issubset(
+        ordinary_conditions
     ):
         return "regular_ship_or_arkship"
     return "conditional_unresolved"
+
+
+def _technology_prerequisite_options(
+    entries: list[tuple[str, Any]],
+) -> list[list[str]]:
+    """Convert the small technology-only prerequisite grammar to DNF."""
+
+    def entry_options(key: str, value: Any) -> list[set[str]]:
+        if key == "__value__":
+            return [{str(value)}]
+        if not isinstance(value, list):
+            return []
+        if key.upper() == "OR":
+            alternatives: list[set[str]] = []
+            for child_key, child_value in value:
+                alternatives.extend(entry_options(child_key, child_value))
+            return alternatives
+        return block_options(value)
+
+    def block_options(block: list[tuple[str, Any]]) -> list[set[str]]:
+        options: list[set[str]] = [set()]
+        for key, value in block:
+            choices = entry_options(key, value)
+            if not choices:
+                continue
+            combined = [left | right for left in options for right in choices]
+            options = combined[:256]
+        return options
+
+    options = block_options(entries)
+    return [sorted(option) for option in options] or [[]]
+
+
+@lru_cache(maxsize=8)
+def _weapon_power_table(game_root: Path) -> dict[str, float]:
+    """Read 4.4's generated weapon power table with a real CSV parser."""
+    path = game_root / "common/component_templates/weapon_components.csv"
+    if not path.is_file():
+        return {}
+    with path.open(encoding="utf-8-sig", errors="replace", newline="") as handle:
+        rows = (line for line in handle if not line.lstrip().startswith("#"))
+        reader = csv.DictReader(rows, delimiter=";")
+        output: dict[str, float] = {}
+        for row in reader:
+            component_id = str(row.get("key") or "").strip()
+            raw_power = str(row.get("power") or "").strip()
+            if not component_id or not NUMERIC_RE.fullmatch(raw_power):
+                continue
+            output[component_id] = float(raw_power)
+        return output
 
 
 @lru_cache(maxsize=8)
@@ -650,8 +694,11 @@ def ship_section_rules(game_root: Path) -> dict[str, dict[str, Any]]:
             if name and template:
                 explicit_slots[name] = template
 
-        def slot_count(field: str) -> int:
-            raw = _scalar_value(entries, field)
+        def slot_count(
+            field: str,
+            source_entries: list[tuple[str, Any]] = entries,
+        ) -> int:
+            raw = _scalar_value(source_entries, field)
             try:
                 return max(0, int(raw or 0))
             except ValueError:
@@ -667,6 +714,11 @@ def ship_section_rules(game_root: Path) -> dict[str, dict[str, Any]]:
             "medium_utility_slots": slot_count("medium_utility_slots"),
             "large_utility_slots": slot_count("large_utility_slots"),
             "aux_utility_slots": slot_count("aux_utility_slots"),
+            "prerequisite_options": _technology_prerequisite_options(
+                _child_blocks(entries, "prerequisites")[0]
+                if _child_blocks(entries, "prerequisites")
+                else []
+            ),
             "source": {"path": str(path), "line": line},
         }
     return output
@@ -684,29 +736,63 @@ def ship_section_rule(
 
 @lru_cache(maxsize=8)
 def ship_component_catalog(game_root: Path) -> tuple[dict[str, Any], ...]:
-    """Return conservative source-backed weapon and utility component rules."""
+    """Return source-backed component rules used by ship-design validation."""
     wrappers = {
         "weapon_component_template",
         "utility_component_template",
+        "strike_craft_component_template",
     }
     output: list[dict[str, Any]] = []
+    weapon_power = _weapon_power_table(game_root)
     root = game_root / "common/component_templates"
-    for definition_type, component_id, entries, path, line in (
-        _wrapped_definitions(root, wrappers)
+    for definition_type, component_id, entries, path, line in _wrapped_definitions(
+        root, wrappers
     ):
+        variables = variables_for_source(game_root, path)
+        raw_power = _scalar_value(entries, "power")
+        power = _resolved_number(raw_power, variables)
+        if power is None and definition_type == "weapon_component_template":
+            power = weapon_power.get(component_id)
+        prerequisite_blocks = _child_blocks(entries, "prerequisites")
+        prerequisite_options = _technology_prerequisite_options(
+            prerequisite_blocks[0] if prerequisite_blocks else []
+        )
+        potential_blocks = _child_blocks(entries, "potential")
         output.append(
             {
                 "component_id": component_id,
                 "kind": (
                     "weapon"
                     if definition_type == "weapon_component_template"
-                    else "utility"
+                    else (
+                        "strike_craft"
+                        if definition_type == "strike_craft_component_template"
+                        else "utility"
+                    )
                 ),
-                "size": _scalar_value(entries, "size"),
+                "size": str(_scalar_value(entries, "size") or "").lower(),
                 "component_type": _scalar_value(entries, "type"),
                 "tags": _list_values(entries, "tags"),
-                "prerequisites": _list_values(entries, "prerequisites"),
+                "component_set": _scalar_value(entries, "component_set"),
+                "ship_behavior": _scalar_value(entries, "ship_behavior"),
+                "upgrade_path": _scalar_value(entries, "upgrade_path"),
+                "power": power,
+                "initial": _scalar_value(entries, "initial") == "yes",
+                "prerequisites": sorted(
+                    {
+                        technology
+                        for option in prerequisite_options
+                        for technology in option
+                    }
+                ),
+                "prerequisite_options": prerequisite_options,
                 "potential_policy": _ship_component_potential_policy(entries),
+                "potential_blocks": potential_blocks,
+                "potential_leaves": [
+                    {"field": field, "value": value}
+                    for block in potential_blocks
+                    for field, value in _condition_leaves(block)
+                ],
                 "hidden": _scalar_value(entries, "hidden") == "yes",
                 "source_family": (
                     "mutation"
@@ -738,9 +824,7 @@ def _referenced_rule_texts(
             r'(?m)^\s*script\s*=\s*"?([A-Za-z0-9_./-]+)"?\s*$',
             text,
         ):
-            script_path = (
-                game_root / "common/inline_scripts" / f"{script_name}.txt"
-            )
+            script_path = game_root / "common/inline_scripts" / f"{script_name}.txt"
             resolved = script_path.resolve()
             if resolved in seen or not script_path.is_file():
                 continue
@@ -910,11 +994,7 @@ def _ringworld_cost_condition(
 ) -> bool | None:
     """Read the one planet condition that the first-run planner can prove."""
     for trigger in _child_blocks(entries, "trigger"):
-        values = [
-            (key, value)
-            for key, value in trigger
-            if key != "__value__"
-        ]
+        values = [(key, value) for key, value in trigger if key != "__value__"]
         if len(values) != 1:
             continue
         key, raw_value = values[0]
@@ -960,10 +1040,7 @@ def construction_cost_rule(
         for direct_cost in _child_blocks(resources, "cost"):
             cost: dict[str, float | int] = {}
             for resource, raw_value in direct_cost:
-                if (
-                    resource in {"__value__", "trigger"}
-                    or isinstance(raw_value, list)
-                ):
+                if resource in {"__value__", "trigger"} or isinstance(raw_value, list):
                     continue
                 resolved = _resolved_number(raw_value, variables)
                 if resolved is not None:
@@ -990,18 +1067,14 @@ def construction_cost_rule(
                 continue
             if script.endswith("nomadic_cost_switcher"):
                 unconditional[resource] = resolved
-            elif script.endswith(
-                "nomadic_cost_switcher_with_additional_trigger"
-            ):
+            elif script.endswith("nomadic_cost_switcher_with_additional_trigger"):
                 ringworld_value = _inline_ringworld_cost_condition(
                     _scalar_value(inline_script, "TRIGGER")
                 )
                 if ringworld_value is None:
                     unresolved_condition = True
                 else:
-                    conditional.setdefault(ringworld_value, {})[
-                        resource
-                    ] = resolved
+                    conditional.setdefault(ringworld_value, {})[resource] = resolved
 
         if conditional:
             for ringworld_value, branch in conditional.items():
@@ -1018,10 +1091,7 @@ def construction_cost_rule(
         elif unconditional:
             options.append(unconditional)
 
-    unique_options = {
-        tuple(sorted(option.items()))
-        for option in options
-    }
+    unique_options = {tuple(sorted(option.items())) for option in options}
     if unresolved_condition:
         return {
             "status": "ambiguous",
@@ -1087,9 +1157,7 @@ def deposit_capacity_rule(
                     continue
                 current = float(contributions.get(field, 0))
                 updated = current + float(assignment["resolved"])
-                contributions[field] = (
-                    int(updated) if updated.is_integer() else updated
-                )
+                contributions[field] = int(updated) if updated.is_integer() else updated
                 contribution_sources.add(str(referenced_path))
 
     entries = _object_entries(block, deposit_type)
@@ -1169,9 +1237,7 @@ def building_capacity_rule(
                     continue
                 current = float(contributions.get(field, 0))
                 updated = current + float(assignment["resolved"])
-                contributions[field] = (
-                    int(updated) if updated.is_integer() else updated
-                )
+                contributions[field] = int(updated) if updated.is_integer() else updated
                 contribution_sources.add(str(referenced_path))
 
     return {
@@ -1239,18 +1305,14 @@ def district_capacity_profile(
             ):
                 blocked_slots += -numeric_value
                 continue
-            modifier_totals[field] = modifier_totals.get(field, 0.0) + float(
-                value
-            )
+            modifier_totals[field] = modifier_totals.get(field, 0.0) + float(value)
         if contributions:
             modifier_sources.append(
                 {
                     "kind": "deposit",
                     "id": str(deposit_type),
                     "capacity_modifiers": contributions,
-                    "blocks_district_slots": bool(
-                        rule.get("blocks_district_slots")
-                    ),
+                    "blocks_district_slots": bool(rule.get("blocks_district_slots")),
                 }
             )
 
@@ -1262,9 +1324,7 @@ def district_capacity_profile(
             continue
         contributions = rule.get("capacity_modifiers", {})
         for field, value in contributions.items():
-            modifier_totals[field] = modifier_totals.get(field, 0.0) + float(
-                value
-            )
+            modifier_totals[field] = modifier_totals.get(field, 0.0) + float(value)
         if contributions:
             modifier_sources.append(
                 {
@@ -1282,9 +1342,7 @@ def district_capacity_profile(
             continue
         contributions = rule.get("capacity_modifiers", {})
         for field, value in contributions.items():
-            modifier_totals[field] = modifier_totals.get(field, 0.0) + float(
-                value
-            )
+            modifier_totals[field] = modifier_totals.get(field, 0.0) + float(value)
         if contributions:
             modifier_sources.append(
                 {
@@ -1316,9 +1374,7 @@ def district_capacity_profile(
         district_type = str(district.get("type") or "")
         level = district.get("level")
         if district_type and isinstance(level, int) and level >= 0:
-            built_by_type[district_type] = (
-                built_by_type.get(district_type, 0) + level
-            )
+            built_by_type[district_type] = built_by_type.get(district_type, 0) + level
 
     pending_by_type: dict[str, int] = {}
     for item in planet.get("construction", {}).get("pending_items", []):
@@ -1326,13 +1382,9 @@ def district_capacity_profile(
             continue
         district_type = str(item.get("district_type") or "")
         if district_type:
-            pending_by_type[district_type] = (
-                pending_by_type.get(district_type, 0) + 1
-            )
+            pending_by_type[district_type] = pending_by_type.get(district_type, 0) + 1
 
-    total_modifier_add = math.floor(
-        modifier_totals.get("planet_max_districts_add", 0)
-    )
+    total_modifier_add = math.floor(modifier_totals.get("planet_max_districts_add", 0))
     total_maximum = max(planet_size + total_modifier_add, 0)
     blocked_slots_floor = max(math.ceil(blocked_slots), 0)
     usable_capacity = max(total_maximum - blocked_slots_floor, 0)
@@ -1349,9 +1401,7 @@ def district_capacity_profile(
             capacity_basis = "planet_total_capacity"
         else:
             capacity_floor = max(
-                math.floor(
-                    modifier_totals.get(f"{district_type}_max_add", 0)
-                ),
+                math.floor(modifier_totals.get(f"{district_type}_max_add", 0)),
                 0,
             )
             capacity_basis = "save_evidenced_additive_modifiers"
@@ -1375,9 +1425,7 @@ def district_capacity_profile(
             "structures resolved against version-matched installed rules"
         ),
         "missing_deposit_definitions": sorted(set(missing_deposits)),
-        "missing_static_modifier_definitions": sorted(
-            set(missing_static_modifiers)
-        ),
+        "missing_static_modifier_definitions": sorted(set(missing_static_modifiers)),
         "missing_building_definitions": sorted(set(missing_buildings)),
         "ignored_positive_multipliers": ignored_positive_multipliers,
         "modifier_sources": modifier_sources,
@@ -1484,9 +1532,7 @@ def _zone_slot_unlock_status(
 
     block = str(slot_rule.get("definition_block") or "")
     if "d_collapsed_spire" in block:
-        blocked = "d_collapsed_spire" in set(
-            planet.get("deposit_types", [])
-        )
+        blocked = "d_collapsed_spire" in set(planet.get("deposit_types", []))
         return {
             "unlocked": not blocked,
             "reason": (
@@ -1615,8 +1661,7 @@ def enrich_snapshot_layout(
         and value.get("to_building_id")
     ]
     upgrade_target_types = {
-        str(value["to_building_id"])
-        for value in configured_upgrades
+        str(value["to_building_id"]) for value in configured_upgrades
     }
     building_upgrade_rules: dict[str, dict[str, dict[str, Any]]] = {}
     for value in configured_upgrades:
@@ -1747,12 +1792,8 @@ def enrich_snapshot_layout(
                     continue
                 if pending_zone is not None:
                     slot_status["state"] = "pending"
-                    slot_status["pending_item_id"] = pending_zone.get(
-                        "item_id"
-                    )
-                    slot_status["pending_zone_type"] = pending_zone.get(
-                        "zone_type"
-                    )
+                    slot_status["pending_item_id"] = pending_zone.get("item_id")
+                    slot_status["pending_zone_type"] = pending_zone.get("zone_type")
                     zone_slot_statuses.append(slot_status)
                     continue
                 if bool(unlock_status.get("unlocked")):
@@ -1784,32 +1825,22 @@ def enrich_snapshot_layout(
             district["locked_zone_slots"] = locked_zone_slots
             if district_type == "district_city" and slot_ids:
                 specialization_slots = [
-                    item
-                    for item in zone_slot_statuses
-                    if not item["is_start_zone"]
+                    item for item in zone_slot_statuses if not item["is_start_zone"]
                 ]
                 district["zone_slot_count_is_fixed_by_district_type"] = True
-                district["additional_district_levels_unlock_zone_slots"] = (
-                    False
-                )
-                district["specialization_zone_capacity"] = len(
-                    specialization_slots
-                )
+                district["additional_district_levels_unlock_zone_slots"] = False
+                district["specialization_zone_capacity"] = len(specialization_slots)
                 district["specialization_zones_occupied"] = sum(
-                    item["state"] == "occupied"
-                    for item in specialization_slots
+                    item["state"] == "occupied" for item in specialization_slots
                 )
                 district["specialization_zones_pending"] = sum(
-                    item["state"] == "pending"
-                    for item in specialization_slots
+                    item["state"] == "pending" for item in specialization_slots
                 )
                 district["specialization_zone_slots_available"] = sum(
-                    item["state"] == "available"
-                    for item in specialization_slots
+                    item["state"] == "available" for item in specialization_slots
                 )
                 district["specialization_zone_slots_locked"] = sum(
-                    item["state"] == "locked"
-                    for item in specialization_slots
+                    item["state"] == "locked" for item in specialization_slots
                 )
 
             for nested_zone in district.get("zones", []):
@@ -1978,13 +2009,9 @@ def build_local_rules_context(
         if key in seen:
             continue
         seen.add(key)
-        objects.append(
-            definition_evidence(game_root, kind, object_id, variables)
-        )
+        objects.append(definition_evidence(game_root, kind, object_id, variables))
 
-    save_version = normalized_version(
-        snapshot.get("source_save", {}).get("version")
-    )
+    save_version = normalized_version(snapshot.get("source_save", {}).get("version"))
     local_version = identity.get("normalized_version")
     version_matches = (
         save_version == local_version

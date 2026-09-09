@@ -18,7 +18,6 @@ from iag.stellaris.execution.packet.iag_stream_command_injector import (
     COMMAND_SERIAL_OFFSET,
 )
 
-
 END_OBJECT = bytes.fromhex("0400")
 ANONYMOUS_OBJECT = bytes.fromhex("0300")
 COMMAND_ENVELOPE = bytes.fromhex("04000000")
@@ -49,6 +48,10 @@ TEMPLATE_TAG = bytes.fromhex("cd0201000f00")
 SLOT_TAG = bytes.fromhex("632c01000f00")
 COMPONENT_OBJECT = bytes.fromhex("642c01000300")
 REQUIRED_COMPONENT_TAG = bytes.fromhex("3d3201000f00")
+AUTO_UPGRADE_TAGS = (
+    bytes.fromhex("ba3101000e00"),
+    bytes.fromhex("d03601000e00"),
+)
 
 
 # Non-host request captured on 2026-08-24.  It queues one design at one direct
@@ -105,9 +108,9 @@ def build_ship_record(
         4, "little"
     )
     record[origin_offset] = origin
-    record[
-        COMMAND_SERIAL_OFFSET : COMMAND_SERIAL_OFFSET + SERIAL_WIDTH
-    ] = _validate_u32(command_serial, "command_serial").to_bytes(4, "little")
+    record[COMMAND_SERIAL_OFFSET : COMMAND_SERIAL_OFFSET + SERIAL_WIDTH] = (
+        _validate_u32(command_serial, "command_serial").to_bytes(4, "little")
+    )
     _set_tagged_u32(record, CONTEXT_TAG, target.context_822c, "context_822c")
     _set_tagged_u32(record, BUILD_QUEUE_TAG, target.build_queue_id, "build_queue_id")
     _set_tagged_u32(record, DESIGN_ID_TAG, target.design_id, "design_id")
@@ -187,10 +190,13 @@ def _common_command(actor: int, origin: int, command_serial: int) -> bytes:
 
 def _design_body(blueprint: dict[str, Any]) -> bytes:
     name = str(blueprint.get("name") or "")
-    entity = str(blueprint.get("entity") or "screen")
+    entity = str(blueprint.get("entity") or "")
     culture = str(blueprint.get("graphical_culture") or "")
     if not name or not culture:
         raise ValueError("A ship design requires name and graphical_culture.")
+    automatic_upgrade = blueprint.get("upgrade_components_automatically", False)
+    if not isinstance(automatic_upgrade, bool):
+        raise TypeError("upgrade_components_automatically must be a boolean.")
     stages = blueprint.get("growth_stages")
     if not isinstance(stages, list) or len(stages) != 1:
         raise ValueError("The verified fb2d path requires exactly one growth stage.")
@@ -198,36 +204,54 @@ def _design_body(blueprint: dict[str, Any]) -> bytes:
     encoded_stages: list[bytes] = []
     for stage_index, stage in enumerate(stages):
         if not isinstance(stage, dict):
-            raise ValueError("Each growth stage must be an object.")
+            raise TypeError("Each growth stage must be an object.")
         ship_size = str(stage.get("ship_size") or "")
-        if ship_size != "corvette":
-            raise ValueError("The verified fb2d path currently supports corvettes only.")
+        if not ship_size:
+            raise ValueError("Each growth stage requires ship_size.")
         sections = stage.get("sections")
-        if not isinstance(sections, list) or len(sections) != 1:
-            raise ValueError("The verified fb2d path requires one section.")
+        if not isinstance(sections, list) or not sections:
+            raise ValueError("A growth stage requires at least one section.")
         encoded_sections: list[bytes] = []
+        seen_section_slots: set[str] = set()
         for section_index, section in enumerate(sections):
             if not isinstance(section, dict):
-                raise ValueError("Each section must be an object.")
+                raise TypeError("Each section must be an object.")
+            section_template = str(section.get("template") or "")
+            section_slot = str(section.get("slot") or "")
+            if not section_template or not section_slot:
+                raise ValueError("Each section requires template and slot.")
+            if section_slot in seen_section_slots:
+                raise ValueError(f"Duplicate section slot: {section_slot}.")
+            seen_section_slots.add(section_slot)
             components = section.get("components")
             if not isinstance(components, list):
-                raise ValueError("A section requires a component list.")
+                raise TypeError("A section requires a component list.")
             encoded_components: list[bytes] = []
+            seen_component_slots: set[str] = set()
             for component_index, component in enumerate(components):
                 if not isinstance(component, dict):
-                    raise ValueError("Each component must be an object.")
+                    raise TypeError("Each component must be an object.")
+                component_slot = str(component.get("slot") or "")
+                component_id = str(component.get("component_id") or "")
+                if not component_slot or not component_id:
+                    raise ValueError("Each component requires slot and component_id.")
+                if component_slot in seen_component_slots:
+                    raise ValueError(
+                        f"Duplicate component slot in {section_slot}: {component_slot}."
+                    )
+                seen_component_slots.add(component_slot)
                 encoded_components.append(
                     b"".join(
                         (
                             COMPONENT_OBJECT,
                             _string(
                                 SLOT_TAG,
-                                str(component.get("slot") or ""),
+                                component_slot,
                                 f"component[{component_index}].slot",
                             ),
                             _string(
                                 TEMPLATE_TAG,
-                                str(component.get("component_id") or ""),
+                                component_id,
                                 f"component[{component_index}].component_id",
                             ),
                             END_OBJECT,
@@ -240,12 +264,12 @@ def _design_body(blueprint: dict[str, Any]) -> bytes:
                         SECTION_OBJECT,
                         _string(
                             TEMPLATE_TAG,
-                            str(section.get("template") or ""),
+                            section_template,
                             f"section[{section_index}].template",
                         ),
                         _string(
                             SLOT_TAG,
-                            str(section.get("slot") or ""),
+                            section_slot,
                             f"section[{section_index}].slot",
                         ),
                         *encoded_components,
@@ -255,12 +279,19 @@ def _design_body(blueprint: dict[str, Any]) -> bytes:
             )
         required = stage.get("required_components")
         if not isinstance(required, list):
-            raise ValueError("A growth stage requires required_components.")
+            raise TypeError("A growth stage requires required_components.")
+        required_ids = [str(component_id or "") for component_id in required]
+        if any(not component_id for component_id in required_ids):
+            raise ValueError("required_components cannot contain empty identifiers.")
+        if len(required_ids) != len(set(required_ids)):
+            raise ValueError("required_components cannot contain duplicates.")
         encoded_stages.append(
             b"".join(
                 (
                     ANONYMOUS_OBJECT,
-                    _string(SHIP_SIZE_TAG, ship_size, f"stage[{stage_index}].ship_size"),
+                    _string(
+                        SHIP_SIZE_TAG, ship_size, f"stage[{stage_index}].ship_size"
+                    ),
                     _u32(
                         PARENT_TAG,
                         int(stage.get("parent", 0xFFFFFFFF)),
@@ -273,7 +304,7 @@ def _design_body(blueprint: dict[str, Any]) -> bytes:
                             str(component_id),
                             "required_component",
                         )
-                        for component_id in required
+                        for component_id in required_ids
                     ),
                     END_OBJECT,
                 )
@@ -287,7 +318,8 @@ def _design_body(blueprint: dict[str, Any]) -> bytes:
             _string(DESIGN_NAME_TAG, name, "name"),
             _u8(LITERAL_NAME_TAG, 1, "literal_name"),
             END_OBJECT,
-            _string(ENTITY_TAG, entity, "entity"),
+            *(tag + b"\x01" for tag in AUTO_UPGRADE_TAGS if automatic_upgrade),
+            *((_string(ENTITY_TAG, entity, "entity"),) if entity else ()),
             _string(GRAPHICAL_CULTURE_TAG, culture, "graphical_culture"),
             GROWTH_STAGES_OBJECT,
             *encoded_stages,
@@ -304,7 +336,7 @@ def build_ship_design_record(
     origin: int,
     target: ShipDesignTarget,
 ) -> bytes:
-    """Serialize one verified single-section corvette fb2d request."""
+    """Serialize one verified fb2d ship-design request."""
     blueprint = target.blueprint
     context = _validate_u32(int(blueprint.get("context_822c", 0)), "context_822c")
     body = b"".join(
@@ -376,9 +408,9 @@ def ship_design_record_matches(
             target=target,
         )
         normalized = bytearray(record)
-        normalized[
-            COMMAND_SERIAL_OFFSET : COMMAND_SERIAL_OFFSET + SERIAL_WIDTH
-        ] = bytes(SERIAL_WIDTH)
+        normalized[COMMAND_SERIAL_OFFSET : COMMAND_SERIAL_OFFSET + SERIAL_WIDTH] = (
+            bytes(SERIAL_WIDTH)
+        )
         return bytes(normalized) == expected
     except (TypeError, ValueError):
         return False

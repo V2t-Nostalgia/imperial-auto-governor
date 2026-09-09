@@ -10,10 +10,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 PLAN_SCHEMA = "iag.protocol_compatibility_plan.v1"
 CATALOG_SCHEMA = "iag.protocol_command_catalog.v1"
@@ -22,7 +23,7 @@ TARGET_PLACEHOLDER_RE = re.compile(r"^<[A-Z0-9_]+>$")
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    return datetime.now(UTC).astimezone().isoformat(timespec="seconds")
 
 
 @dataclass(frozen=True)
@@ -666,6 +667,7 @@ OFFLINE_FIXTURE_TARGETS: dict[str, dict[str, Any]] = {
             "name": "IAG_COMPAT_TEST",
             "entity": "screen",
             "graphical_culture": "mammalian_01",
+            "upgrade_components_automatically": False,
             "growth_stages": [
                 {
                     "ship_size": "corvette",
@@ -757,7 +759,7 @@ def validate_plan_document(
     seen_actions: set[str] = set()
     for index, scenario in enumerate(scenarios):
         if not isinstance(scenario, dict):
-            raise ValueError(f"Scenario {index} must be an object.")
+            raise TypeError(f"Scenario {index} must be an object.")
         scenario_id = str(scenario.get("id", "")).strip()
         action = str(scenario.get("action", "")).strip()
         if not scenario_id or scenario_id in seen_ids:
@@ -771,10 +773,10 @@ def validate_plan_document(
             raise ValueError(f"Plan contains duplicate action {action!r}.")
         seen_actions.add(action)
         if not isinstance(scenario.get("enabled", False), bool):
-            raise ValueError(f"Scenario {scenario_id} enabled must be boolean.")
+            raise TypeError(f"Scenario {scenario_id} enabled must be boolean.")
         target = scenario.get("target")
         if not isinstance(target, dict):
-            raise ValueError(f"Scenario {scenario_id} target must be an object.")
+            raise TypeError(f"Scenario {scenario_id} target must be an object.")
         if scenario.get("template_record_hex"):
             try:
                 bytes.fromhex(str(scenario["template_record_hex"]))
@@ -964,8 +966,10 @@ def render_report_markdown(report: Mapping[str, Any]) -> str:
         "",
         f"- 运行：`{report.get('run_id', '')}`",
         f"- 平台：`{report.get('platform_version', '')}`",
-        f"- 游戏：`{report.get('game_version', '')}` "
-        f"(`{report.get('game_build', '') or 'build 未填写'}`)",
+        (
+            f"- 游戏：`{report.get('game_version', '')}` "
+            f"(`{report.get('game_build', '') or 'build 未填写'}`)"
+        ),
         f"- 模式：`{report.get('mode', '')}`",
         f"- 状态：`{report.get('status', '')}`",
         "",

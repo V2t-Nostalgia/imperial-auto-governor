@@ -24,8 +24,8 @@ from iag.stellaris.state.fleet_profiles import (
     selected_attack,
     selected_construction_ship_starbase,
     selected_coordinate_move,
-    selected_fleet_repair,
     selected_fleet_reinforcement,
+    selected_fleet_repair,
     selected_fleet_upgrade,
     selected_move,
     selected_new_fleet_reinforcement,
@@ -34,8 +34,9 @@ from iag.stellaris.state.fleet_profiles import (
 from iag.stellaris.state.planet_profiles import load_gamestate
 from iag.stellaris.state.save_ingest import resolve_current_save
 from iag.stellaris.state.ship_profiles import (
-    clone_ship_design,
+    customize_ship_design,
     extract_ship_profiles,
+    ship_design_options,
 )
 
 FLEET_PERMISSIONS_KEY = "fleet_permissions"
@@ -291,13 +292,37 @@ INSPECT_SHIPS_TOOL = {
     },
 }
 
+INSPECT_SHIP_DESIGN_OPTIONS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "inspect_ship_design_options",
+        "description": (
+            "按需读取一份玩家舰船设计可用的区段、必需组件和槽位候选。先不传 "
+            "section_template 查看区段与必需组件；选定区段后再传 section_template，"
+            "只展开该区段的合法组件，避免把整个组件库塞入上下文。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "source_design_id": {"type": "integer"},
+                "section_template": {"type": "string"},
+            },
+            "required": ["source_design_id"],
+            "additionalProperties": False,
+        },
+    },
+}
+
 PREPARE_SHIP_DESIGN_TOOL = {
     "type": "function",
     "function": {
-        "name": "prepare_ship_design_clone",
+        "name": "prepare_ship_design",
         "description": (
-            "从最新存档中的一份合法单区段护卫舰设计克隆新设计。组件候选必须由"
-            "存档观察值，或本机区段规则与玩家已研究科技共同证明合法。"
+            "以最新存档中一份玩家军舰设计为锚点创建新设计，可替换多个区段、"
+            "填充或替换区段组件、替换反应堆/超空间引擎/推进器/传感器/战斗电脑，"
+            "以及舰型具备的舰船光环，并设置自动升级。所有 ID 必须先由 "
+            "inspect_ship_design_options 返回；"
+            "原设计不会被覆盖。"
         ),
         "parameters": {
             "type": "object",
@@ -306,7 +331,7 @@ PREPARE_SHIP_DESIGN_TOOL = {
                 "new_name": {"type": "string", "maxLength": 48},
                 "component_replacements": {
                     "type": "array",
-                    "maxItems": 8,
+                    "maxItems": 32,
                     "items": {
                         "type": "object",
                         "properties": {
@@ -322,12 +347,55 @@ PREPARE_SHIP_DESIGN_TOOL = {
                         "additionalProperties": False,
                     },
                 },
+                "section_replacements": {
+                    "type": "array",
+                    "maxItems": 4,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "section_slot": {"type": "string"},
+                            "section_template": {"type": "string"},
+                            "components": {
+                                "type": "array",
+                                "maxItems": 32,
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "component_slot": {"type": "string"},
+                                        "component_id": {"type": "string"},
+                                    },
+                                    "required": ["component_slot", "component_id"],
+                                    "additionalProperties": False,
+                                },
+                            },
+                        },
+                        "required": [
+                            "section_slot",
+                            "section_template",
+                            "components",
+                        ],
+                        "additionalProperties": False,
+                    },
+                },
+                "required_component_replacements": {
+                    "type": "array",
+                    "maxItems": 8,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "component_set": {"type": "string"},
+                            "component_id": {"type": "string"},
+                        },
+                        "required": ["component_set", "component_id"],
+                        "additionalProperties": False,
+                    },
+                },
+                "upgrade_components_automatically": {"type": "boolean"},
                 "reason": {"type": "string", "maxLength": 300},
             },
             "required": [
                 "source_design_id",
                 "new_name",
-                "component_replacements",
                 "reason",
             ],
             "additionalProperties": False,
@@ -428,51 +496,47 @@ def normalized_permissions(value: Any) -> dict[str, dict[str, bool]]:
         result[str(fleet_id)] = {
             "allow_move": bool(permission.get("allow_move", False)),
             "allow_attack": bool(permission.get("allow_attack", False)),
-            "allow_reinforce": bool(
-                permission.get("allow_reinforce", False)
-            ),
+            "allow_reinforce": bool(permission.get("allow_reinforce", False)),
             "allow_repair": bool(permission.get("allow_repair", False)),
             "allow_upgrade": bool(permission.get("allow_upgrade", False)),
-            "allow_automation": bool(
-                permission.get("allow_automation", False)
-            ),
-            "allow_build_starbase": bool(
-                permission.get("allow_build_starbase", False)
-            ),
+            "allow_automation": bool(permission.get("allow_automation", False)),
+            "allow_build_starbase": bool(permission.get("allow_build_starbase", False)),
         }
     return result
 
 
 def fleet_label(fleet: dict[str, Any]) -> str:
     return str(
-        fleet.get("display_name_hint")
-        or fleet.get("name_key")
-        or fleet.get("fleet_id")
+        fleet.get("display_name_hint") or fleet.get("name_key") or fleet.get("fleet_id")
     )
 
 
 class FleetToolbox:
     """One model-turn view over fleet state and one prepared order."""
 
-    tool_names: ClassVar[frozenset[str]] = frozenset({
-        "inspect_fleet_state",
-        "inspect_expansion_state",
-        "prepare_fleet_move",
-        "prepare_fleet_coordinate_move",
-        "prepare_fleet_attack",
-        "prepare_fleet_repair",
-        "prepare_fleet_upgrade",
-        "prepare_ship_automation",
-        "prepare_construction_ship_starbase",
-        "prepare_colonization",
-        "prepare_starbase_operation",
-        "execute_prepared_fleet_order",
-        "inspect_ship_state",
-        "prepare_ship_design_clone",
-        "prepare_fleet_reinforcement",
-        "prepare_new_fleet",
-        "execute_prepared_ship_action",
-    })
+    tool_names: ClassVar[frozenset[str]] = frozenset(
+        {
+            "inspect_fleet_state",
+            "inspect_expansion_state",
+            "prepare_fleet_move",
+            "prepare_fleet_coordinate_move",
+            "prepare_fleet_attack",
+            "prepare_fleet_repair",
+            "prepare_fleet_upgrade",
+            "prepare_ship_automation",
+            "prepare_construction_ship_starbase",
+            "prepare_colonization",
+            "prepare_starbase_operation",
+            "execute_prepared_fleet_order",
+            "inspect_ship_state",
+            "inspect_ship_design_options",
+            "prepare_ship_design",
+            "prepare_ship_design_clone",
+            "prepare_fleet_reinforcement",
+            "prepare_new_fleet",
+            "execute_prepared_ship_action",
+        }
+    )
 
     def __init__(
         self,
@@ -484,9 +548,7 @@ class FleetToolbox:
         self.config = dict(config)
         self.store = store
         self.allow_execute = allow_execute
-        self.enabled = bool(
-            self.config.get("experimental_fleet_tools_enabled", False)
-        )
+        self.enabled = bool(self.config.get("experimental_fleet_tools_enabled", False))
         self.attack_enabled = bool(
             self.config.get("experimental_fleet_attack_enabled", False)
         )
@@ -597,20 +659,17 @@ class FleetToolbox:
         ):
             value.append(INSPECT_SHIPS_TOOL)
         if self.ship_design_enabled:
-            value.append(PREPARE_SHIP_DESIGN_TOOL)
+            value.extend([INSPECT_SHIP_DESIGN_OPTIONS_TOOL, PREPARE_SHIP_DESIGN_TOOL])
         if self.fleet_reinforcement_enabled:
             if not self.enabled:
                 value.append(INSPECT_FLEETS_TOOL)
             value.append(PREPARE_FLEET_REINFORCEMENT_TOOL)
         if self.new_fleet_enabled:
             value.append(PREPARE_NEW_FLEET_TOOL)
-        if (
-            self.allow_execute
-            and (
-                self.ship_design_enabled
-                or self.fleet_reinforcement_enabled
-                or self.new_fleet_enabled
-            )
+        if self.allow_execute and (
+            self.ship_design_enabled
+            or self.fleet_reinforcement_enabled
+            or self.new_fleet_enabled
         ):
             value.append(EXECUTE_SHIP_TOOL)
         unique: list[dict[str, Any]] = []
@@ -653,10 +712,17 @@ class FleetToolbox:
     def inspect_ships(self) -> dict[str, Any]:
         path, profile = self._ship_profile()
         pending = self._pending_new_fleet_status()
+        public_profile = dict(profile)
+        component_choice_count = len(public_profile.pop("component_choice_index", []))
         return {
-            **profile,
+            **public_profile,
             "source_save": str(path),
             "source_save_sha256": sha256_file(path),
+            "component_choice_count": component_choice_count,
+            "component_choice_hint": (
+                "Use inspect_ship_design_options to expand one source design and "
+                "one optional section at a time."
+            ),
             "maximum_fleet_reinforcement_increase": self.maximum_target_increase,
             "ship_design_enabled": self.ship_design_enabled,
             "fleet_reinforcement_enabled": self.fleet_reinforcement_enabled,
@@ -664,6 +730,28 @@ class FleetToolbox:
             "maximum_new_fleet_initial_ships": self.maximum_new_fleet_ships,
             "pending_new_fleet_creation": pending,
         }
+
+    def inspect_ship_design_options(
+        self,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not self.ship_design_enabled:
+            raise FleetToolError("玩家没有启用实验性舰船设计工具。")
+        _path, profile = self._ship_profile()
+        game_root = detect_game_root(self.config)
+        if game_root is None:
+            raise FleetToolError("未找到 Stellaris 安装目录，无法验证舰船设计规则。")
+        raw_section = arguments.get("section_template")
+        section_template = str(raw_section).strip() if raw_section is not None else None
+        try:
+            return ship_design_options(
+                profile,
+                source_design_id=int(arguments["source_design_id"]),
+                game_root=game_root,
+                section_template=section_template or None,
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise FleetToolError(str(error)) from error
 
     def _pending_new_fleet_status(self) -> dict[str, Any] | None:
         raw = self.store.get_state(PENDING_NEW_FLEET_KEY)
@@ -735,32 +823,46 @@ class FleetToolbox:
         if not self.ship_design_enabled:
             raise FleetToolError("玩家没有启用实验性舰船设计工具。")
         path, profile = self._ship_profile()
-        replacements = arguments.get("component_replacements")
-        if not isinstance(replacements, list):
-            raise FleetToolError("component_replacements 必须是数组。")
+        game_root = detect_game_root(self.config)
+        if game_root is None:
+            raise FleetToolError("未找到 Stellaris 安装目录，无法验证舰船设计规则。")
+
+        def object_array(name: str) -> list[dict[str, Any]]:
+            raw = arguments.get(name, [])
+            if not isinstance(raw, list) or any(
+                not isinstance(item, dict) for item in raw
+            ):
+                raise FleetToolError(f"{name} 必须是对象数组。")
+            return [dict(item) for item in raw]
+
+        component_replacements = object_array("component_replacements")
+        section_replacements = object_array("section_replacements")
+        required_replacements = object_array("required_component_replacements")
+        automatic_upgrade = arguments.get("upgrade_components_automatically")
         try:
-            blueprint = clone_ship_design(
+            blueprint = customize_ship_design(
                 profile,
                 source_design_id=int(arguments["source_design_id"]),
                 new_name=str(arguments["new_name"]).strip(),
-                component_replacements=[
-                    dict(item) for item in replacements if isinstance(item, dict)
-                ],
+                component_replacements=component_replacements,
+                section_replacements=section_replacements,
+                required_component_replacements=required_replacements,
+                upgrade_components_automatically=automatic_upgrade,
+                game_root=game_root,
             )
-        except (TypeError, ValueError) as error:
+        except (KeyError, TypeError, ValueError) as error:
             raise FleetToolError(str(error)) from error
-        if len(blueprint["component_replacements"]) != len(replacements):
-            raise FleetToolError("每一项 component_replacements 都必须是对象。")
-        run_id = "ship_design_" + datetime.now(UTC).strftime(
-            "%Y%m%d_%H%M%S_%f"
-        )
+        run_id = "ship_design_" + datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
         self.prepared = {
             "run_id": run_id,
             "action": "create_ship_design",
             "reason": str(arguments["reason"]).strip(),
             "source_design_id": int(arguments["source_design_id"]),
             "new_name": str(arguments["new_name"]).strip(),
-            "component_replacements_input": [dict(item) for item in replacements],
+            "component_replacements_input": component_replacements,
+            "section_replacements_input": section_replacements,
+            "required_component_replacements_input": required_replacements,
+            "upgrade_components_automatically_input": automatic_upgrade,
             "target": {"blueprint": blueprint},
             "source_save_sha256": sha256_file(path),
             "source_game_date": profile.get("game_date"),
@@ -779,9 +881,7 @@ class FleetToolbox:
         permissions = normalized_permissions(
             self.store.get_state(FLEET_PERMISSIONS_KEY, {})
         )
-        if not permissions.get(str(fleet_id), {}).get(
-            "allow_reinforce", False
-        ):
+        if not permissions.get(str(fleet_id), {}).get("allow_reinforce", False):
             raise FleetToolError(f"玩家没有授权调用舰队 {fleet_id} 进行增援。")
         try:
             selection = selected_fleet_reinforcement(
@@ -793,9 +893,7 @@ class FleetToolbox:
             )
         except (TypeError, ValueError) as error:
             raise FleetToolError(str(error)) from error
-        run_id = "fleet_reinforce_" + datetime.now(UTC).strftime(
-            "%Y%m%d_%H%M%S_%f"
-        )
+        run_id = "fleet_reinforce_" + datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
         self.prepared = {
             "run_id": run_id,
             "action": "reinforce_fleet_to_target",
@@ -823,16 +921,12 @@ class FleetToolbox:
         if design_id not in profile.get("player_ship_design_ids", []):
             raise FleetToolError(f"舰船设计 {design_id} 不属于玩家。")
         if not 1 <= target_count <= self.maximum_new_fleet_ships:
-            raise FleetToolError(
-                "新舰队初始数量超出玩家配置的单次上限。"
-            )
+            raise FleetToolError("新舰队初始数量超出玩家配置的单次上限。")
         baseline_template_ids = sorted(
             int(item["fleet_template_id"])
             for item in profile.get("fleet_templates", [])
         )
-        run_id = "new_fleet_" + datetime.now(UTC).strftime(
-            "%Y%m%d_%H%M%S_%f"
-        )
+        run_id = "new_fleet_" + datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
         self.prepared = {
             "run_id": run_id,
             "action": "create_new_fleet",
@@ -884,9 +978,7 @@ class FleetToolbox:
             )
         except (TypeError, ValueError) as error:
             raise FleetToolError(str(error)) from error
-        run_id = "new_fleet_config_" + datetime.now(UTC).strftime(
-            "%Y%m%d_%H%M%S_%f"
-        )
+        run_id = "new_fleet_config_" + datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
         self.prepared = {
             "run_id": run_id,
             "action": "configure_new_fleet",
@@ -948,8 +1040,7 @@ class FleetToolbox:
         pending = dict(raw) if isinstance(raw, dict) else {}
         if (
             current_hash
-            and pending.get("last_continuation_attempt_save_sha256")
-            == current_hash
+            and pending.get("last_continuation_attempt_save_sha256") == current_hash
         ):
             return {
                 "schema": "iag.save_continuation.new_fleet.v1",
@@ -962,18 +1053,14 @@ class FleetToolbox:
         pending.update(
             {
                 "last_continuation_attempt_save_sha256": current_hash,
-                "last_continuation_attempt_game_date": status.get(
-                    "current_game_date"
-                ),
+                "last_continuation_attempt_game_date": status.get("current_game_date"),
                 "last_continuation_attempted_at": now_iso(),
             }
         )
         self.store.set_state(PENDING_NEW_FLEET_KEY, pending)
 
         if status.get("resolution_error"):
-            pending["last_continuation_error"] = str(
-                status["resolution_error"]
-            )
+            pending["last_continuation_error"] = str(status["resolution_error"])
             pending["last_continuation_state"] = "needs_review"
             self.store.set_state(PENDING_NEW_FLEET_KEY, pending)
             return {
@@ -987,9 +1074,7 @@ class FleetToolbox:
 
         try:
             prepared = self.prepare_new_fleet_configuration()
-            execution = self.execute_ship_action(
-                {"run_id": prepared["run_id"]}
-            )
+            execution = self.execute_ship_action({"run_id": prepared["run_id"]})
         except FleetToolError as error:
             latest = self.store.get_state(PENDING_NEW_FLEET_KEY, {})
             failed = dict(latest) if isinstance(latest, dict) else pending
@@ -1013,18 +1098,14 @@ class FleetToolbox:
         confirmed_steps = int(execution.get("confirmed_protocol_steps", 0))
         return {
             "schema": "iag.save_continuation.new_fleet.v1",
-            "state": (
-                "executed" if execution.get("success") else "partially_executed"
-            ),
+            "state": ("executed" if execution.get("success") else "partially_executed"),
             "mutated_game": confirmed_steps > 0,
             "phase": "awaiting_fleet_save",
             "game_date": status.get("current_game_date"),
             "fleet_template_id": execution.get("fleet_template_id"),
             "fleet_id": execution.get("fleet_id"),
             "confirmed_protocol_steps": confirmed_steps,
-            "requested_protocol_steps": execution.get(
-                "requested_protocol_steps"
-            ),
+            "requested_protocol_steps": execution.get("requested_protocol_steps"),
             "execution": execution,
         }
 
@@ -1045,13 +1126,28 @@ class FleetToolbox:
             profile_path, profile = self._ship_profile()
         if action == "create_ship_design":
             try:
-                blueprint = clone_ship_design(
+                game_root = detect_game_root(self.config)
+                if game_root is None:
+                    raise ValueError(
+                        "未找到 Stellaris 安装目录，无法在执行前复验舰船设计。"
+                    )
+                blueprint = customize_ship_design(
                     profile,
                     source_design_id=int(self.prepared["source_design_id"]),
                     new_name=str(self.prepared["new_name"]),
                     component_replacements=list(
                         self.prepared["component_replacements_input"]
                     ),
+                    section_replacements=list(
+                        self.prepared["section_replacements_input"]
+                    ),
+                    required_component_replacements=list(
+                        self.prepared["required_component_replacements_input"]
+                    ),
+                    upgrade_components_automatically=self.prepared.get(
+                        "upgrade_components_automatically_input"
+                    ),
+                    game_root=game_root,
                 )
                 result = SessionProxyController(self.config).arm_and_wait(
                     action=action,
@@ -1081,9 +1177,7 @@ class FleetToolbox:
                 int(item["fleet_template_id"])
                 for item in profile.get("fleet_templates", [])
             )
-            if current_template_ids != list(
-                self.prepared["baseline_template_ids"]
-            ):
+            if current_template_ids != list(self.prepared["baseline_template_ids"]):
                 raise FleetToolError(
                     "准备后舰队模板集合已经变化；请重新规划，避免归属错误。"
                 )
@@ -1134,9 +1228,7 @@ class FleetToolbox:
             is_new_fleet = action == "configure_new_fleet"
             if is_new_fleet:
                 if not self.new_fleet_enabled:
-                    raise FleetToolError(
-                        "玩家在执行前关闭了实验性新建舰队工具。"
-                    )
+                    raise FleetToolError("玩家在执行前关闭了实验性新建舰队工具。")
                 template_id = int(self.prepared["fleet_template_id"])
                 try:
                     resolve_created_fleet_template(
@@ -1161,12 +1253,8 @@ class FleetToolbox:
                 permissions = normalized_permissions(
                     self.store.get_state(FLEET_PERMISSIONS_KEY, {})
                 )
-                if not permissions.get(str(fleet_id), {}).get(
-                    "allow_reinforce", False
-                ):
-                    raise FleetToolError(
-                        "玩家在执行前撤销了该舰队的增援权限。"
-                    )
+                if not permissions.get(str(fleet_id), {}).get("allow_reinforce", False):
+                    raise FleetToolError("玩家在执行前撤销了该舰队的增援权限。")
                 try:
                     refreshed = selected_fleet_reinforcement(
                         profile,
@@ -1210,9 +1298,7 @@ class FleetToolbox:
                 for index, result in enumerate(confirmations)
                 if result.get("outcome") == "confirmed"
             ]
-            confirmed_increase = confirmed_actions.count(
-                "add_fleet_template_ship"
-            )
+            confirmed_increase = confirmed_actions.count("add_fleet_template_ship")
             reinforcement_required = "reinforce_selected_fleet" in sequence
             reinforcement_confirmed = (
                 reinforcement_required
@@ -1251,9 +1337,7 @@ class FleetToolbox:
                             if execution["success"]
                             else "configuration_partial"
                         ),
-                        "resolved_template_id": int(
-                            refreshed["fleet_template_id"]
-                        ),
+                        "resolved_template_id": int(refreshed["fleet_template_id"]),
                         "last_action_save_sha256": sha256_file(profile_path),
                         "last_action_game_date": profile.get("game_date"),
                         "confirmed_target_increase": confirmed_increase,
@@ -1283,27 +1367,19 @@ class FleetToolbox:
                 continue
             permission = permissions.get(str(fleet["fleet_id"]), {})
             fleet_view = {
-                key: value
-                for key, value in fleet.items()
-                if key != "ship_ids"
+                key: value for key, value in fleet.items() if key != "ship_ids"
             }
             fleets.append(
                 {
                     **fleet_view,
                     "permission": {
                         "allow_move": bool(permission.get("allow_move", False)),
-                        "allow_attack": bool(
-                            permission.get("allow_attack", False)
-                        ),
+                        "allow_attack": bool(permission.get("allow_attack", False)),
                         "allow_reinforce": bool(
                             permission.get("allow_reinforce", False)
                         ),
-                        "allow_repair": bool(
-                            permission.get("allow_repair", False)
-                        ),
-                        "allow_upgrade": bool(
-                            permission.get("allow_upgrade", False)
-                        ),
+                        "allow_repair": bool(permission.get("allow_repair", False)),
+                        "allow_upgrade": bool(permission.get("allow_upgrade", False)),
                         "allow_automation": bool(
                             permission.get("allow_automation", False)
                         ),
@@ -1321,9 +1397,7 @@ class FleetToolbox:
             "attack_protocol_state": (
                 "save_backed_hostile_mapping_and_paired_6b33_verified"
             ),
-            "civilian_automation_protocol_state": (
-                "paired_8f32_verified_options_only"
-            ),
+            "civilian_automation_protocol_state": ("paired_8f32_verified_options_only"),
             "construction_starbase_protocol_state": (
                 "paired_e02c_adjacent_surveyed_targets_only"
             ),
@@ -1348,9 +1422,7 @@ class FleetToolbox:
             "source_save_sha256": sha256_file(path),
             "colonization_enabled": self.colonization_enabled,
             "starbase_operations_enabled": self.starbase_enabled,
-            "starbase_replacement_enabled": (
-                self.starbase_replacement_enabled
-            ),
+            "starbase_replacement_enabled": (self.starbase_replacement_enabled),
             "minimum_colonization_habitability": (
                 self.minimum_colonization_habitability
             ),
@@ -1436,9 +1508,7 @@ class FleetToolbox:
             order = selected_attack(profile, fleet_id, target_fleet_id)
         except ValueError as error:
             raise FleetToolError(str(error)) from error
-        run_id = "fleet_attack_" + datetime.now(UTC).strftime(
-            "%Y%m%d_%H%M%S_%f"
-        )
+        run_id = "fleet_attack_" + datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
         self.prepared = {
             "run_id": run_id,
             "action": "attack_fleet",
@@ -1467,9 +1537,7 @@ class FleetToolbox:
             order = selected_fleet_repair(profile, fleet_id)
         except ValueError as error:
             raise FleetToolError(str(error)) from error
-        run_id = "fleet_repair_" + datetime.now(UTC).strftime(
-            "%Y%m%d_%H%M%S_%f"
-        )
+        run_id = "fleet_repair_" + datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
         self.prepared = {
             "run_id": run_id,
             "action": "repair_fleet",
@@ -1499,9 +1567,7 @@ class FleetToolbox:
             order = selected_fleet_upgrade(profile, fleet_id, queue_id)
         except ValueError as error:
             raise FleetToolError(str(error)) from error
-        run_id = "fleet_upgrade_" + datetime.now(UTC).strftime(
-            "%Y%m%d_%H%M%S_%f"
-        )
+        run_id = "fleet_upgrade_" + datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
         self.prepared = {
             "run_id": run_id,
             "action": "upgrade_fleet",
@@ -1527,19 +1593,13 @@ class FleetToolbox:
         permissions = normalized_permissions(
             self.store.get_state(FLEET_PERMISSIONS_KEY, {})
         )
-        if not permissions.get(str(fleet_id), {}).get(
-            "allow_automation", False
-        ):
-            raise FleetToolError(
-                f"玩家没有授权调用民用船 {fleet_id} 的自动化。"
-            )
+        if not permissions.get(str(fleet_id), {}).get("allow_automation", False):
+            raise FleetToolError(f"玩家没有授权调用民用船 {fleet_id} 的自动化。")
         try:
             order = selected_ship_automation(profile, fleet_id, options)
         except (TypeError, ValueError) as error:
             raise FleetToolError(str(error)) from error
-        run_id = "ship_automation_" + datetime.now(UTC).strftime(
-            "%Y%m%d_%H%M%S_%f"
-        )
+        run_id = "ship_automation_" + datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
         self.prepared = {
             "run_id": run_id,
             "action": "configure_ship_automation",
@@ -1563,12 +1623,8 @@ class FleetToolbox:
         permissions = normalized_permissions(
             self.store.get_state(FLEET_PERMISSIONS_KEY, {})
         )
-        if not permissions.get(str(fleet_id), {}).get(
-            "allow_build_starbase", False
-        ):
-            raise FleetToolError(
-                f"玩家没有授权工程船 {fleet_id} 建造恒星基地。"
-            )
+        if not permissions.get(str(fleet_id), {}).get("allow_build_starbase", False):
+            raise FleetToolError(f"玩家没有授权工程船 {fleet_id} 建造恒星基地。")
         try:
             order = selected_construction_ship_starbase(
                 profile,
@@ -1608,9 +1664,7 @@ class FleetToolbox:
             )
         except ValueError as error:
             raise FleetToolError(str(error)) from error
-        run_id = "colonization_" + datetime.now(UTC).strftime(
-            "%Y%m%d_%H%M%S_%f"
-        )
+        run_id = "colonization_" + datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
         self.prepared = {
             "run_id": run_id,
             "action": "order_colony_ship_and_colonize",
@@ -1640,9 +1694,7 @@ class FleetToolbox:
             )
         except ValueError as error:
             raise FleetToolError(str(error)) from error
-        run_id = "starbase_" + datetime.now(UTC).strftime(
-            "%Y%m%d_%H%M%S_%f"
-        )
+        run_id = "starbase_" + datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
         self.prepared = {
             "run_id": run_id,
             "action": str(order["action"]),
@@ -1707,9 +1759,7 @@ class FleetToolbox:
             fleet_id = int(self.prepared["order"]["source_fleet"]["fleet_id"])
             if not permissions.get(str(fleet_id), {}).get("allow_attack", False):
                 raise FleetToolError("玩家在执行前撤销了该舰队的攻击权限。")
-            target_fleet_id = int(
-                self.prepared["order"]["hostile_target"]["fleet_id"]
-            )
+            target_fleet_id = int(self.prepared["order"]["hostile_target"]["fleet_id"])
             try:
                 refreshed = selected_attack(
                     profile,
@@ -1737,24 +1787,18 @@ class FleetToolbox:
             fleet_id = int(self.prepared["order"]["source_fleet"]["fleet_id"])
             if not permissions.get(str(fleet_id), {}).get("allow_upgrade", False):
                 raise FleetToolError("玩家在执行前撤销了该舰队的升级权限。")
-            queue_id = int(
-                self.prepared["order"]["target"]["shipyard_build_queue_id"]
-            )
+            queue_id = int(self.prepared["order"]["target"]["shipyard_build_queue_id"])
             try:
                 refreshed = selected_fleet_upgrade(profile, fleet_id, queue_id)
             except ValueError as error:
                 raise FleetToolError(str(error)) from error
-            destination_system_id = refreshed["destination_shipyard"].get(
-                "system_id"
-            )
+            destination_system_id = refreshed["destination_shipyard"].get("system_id")
         elif action == "configure_ship_automation":
             if not self.civilian_ship_enabled:
                 raise FleetToolError("玩家在执行前关闭了民用船工具。")
             _, profile = self._profile()
             fleet_id = int(self.prepared["order"]["source_fleet"]["fleet_id"])
-            if not permissions.get(str(fleet_id), {}).get(
-                "allow_automation", False
-            ):
+            if not permissions.get(str(fleet_id), {}).get("allow_automation", False):
                 raise FleetToolError("玩家在执行前撤销了该民用船的自动化权限。")
             try:
                 refreshed = selected_ship_automation(
@@ -1834,9 +1878,7 @@ class FleetToolbox:
             raise FleetToolError(str(error)) from error
         success = result.get("outcome") == "confirmed"
         if not success:
-            raise FleetToolError(
-                str(result.get("error") or "命令未获房主权威确认。")
-            )
+            raise FleetToolError(str(result.get("error") or "命令未获房主权威确认。"))
         fact = {
             "run_id": run_id,
             "action": action,
@@ -1877,8 +1919,7 @@ class FleetToolbox:
         if name == "inspect_fleet_state":
             result = self.inspect()
             authorized = sum(
-                any(fleet.get("permission", {}).values())
-                for fleet in result["fleets"]
+                any(fleet.get("permission", {}).values()) for fleet in result["fleets"]
             )
             callable_now = sum(
                 (
@@ -1926,9 +1967,7 @@ class FleetToolbox:
         elif name == "prepare_fleet_repair":
             result = self.prepare_fleet_repair(arguments)
             source = result["order"]["source_fleet"]
-            summary = (
-                f"已准备舰队 {fleet_label(source)} 返港维修；尚未发包。"
-            )
+            summary = f"已准备舰队 {fleet_label(source)} 返港维修；尚未发包。"
         elif name == "prepare_fleet_upgrade":
             result = self.prepare_fleet_upgrade(arguments)
             source = result["order"]["source_fleet"]
@@ -1939,8 +1978,7 @@ class FleetToolbox:
                 or shipyard.get("system_id")
             )
             summary = (
-                f"已准备舰队 {fleet_label(source)} 前往 {destination} 升级；"
-                "尚未发包。"
+                f"已准备舰队 {fleet_label(source)} 前往 {destination} 升级；尚未发包。"
             )
         elif name == "prepare_ship_automation":
             result = self.prepare_ship_automation(arguments)
@@ -1979,8 +2017,7 @@ class FleetToolbox:
         elif name == "execute_prepared_fleet_order":
             result = self.execute(arguments)
             summary = (
-                f"{result['action']} 已获房主权威确认；"
-                "最终游戏状态仍以后续新存档为准。"
+                f"{result['action']} 已获房主权威确认；最终游戏状态仍以后续新存档为准。"
             )
         elif name == "inspect_ship_state":
             result = self.inspect_ships()
@@ -1988,7 +2025,20 @@ class FleetToolbox:
                 f"已读取 {len(result['designs'])} 份玩家舰船设计和 "
                 f"{len(result['shipyards'])} 个直接船坞队列。"
             )
-        elif name == "prepare_ship_design_clone":
+        elif name == "inspect_ship_design_options":
+            result = self.inspect_ship_design_options(arguments)
+            if result.get("selected_section"):
+                selected = result["selected_section"]
+                summary = (
+                    f"已展开区段 {selected['section_template']} 的 "
+                    f"{len(selected['component_slots'])} 个组件槽位。"
+                )
+            else:
+                summary = (
+                    f"已读取 {len(result['section_options'])} 个可用区段和 "
+                    f"{len(result['required_component_options'])} 组必需组件。"
+                )
+        elif name in {"prepare_ship_design", "prepare_ship_design_clone"}:
             result = self.prepare_ship_design(arguments)
             summary = (
                 f"已准备舰船设计 {result['new_name']}；尚未提交，"

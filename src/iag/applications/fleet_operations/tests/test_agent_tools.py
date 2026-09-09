@@ -270,9 +270,7 @@ class FleetToolboxTests(unittest.TestCase):
         return value
 
     def test_enabled_capabilities_are_exposed_to_the_agent(self) -> None:
-        schema_names = {
-            item["function"]["name"] for item in self.toolbox().schemas()
-        }
+        schema_names = {item["function"]["name"] for item in self.toolbox().schemas()}
         self.assertTrue(
             {
                 "inspect_fleet_state",
@@ -291,6 +289,100 @@ class FleetToolboxTests(unittest.TestCase):
             len(schema_names),
             len(self.toolbox().schemas()),
             "Tool schemas must not contain duplicate function names.",
+        )
+
+    def test_full_ship_design_arguments_are_revalidated_at_execution(self) -> None:
+        self.config["experimental_ship_design_tools_enabled"] = True
+        toolbox = self.toolbox()
+        toolbox._ship_profile = lambda: (  # type: ignore[method-assign]
+            self.save,
+            {"owner_country_id": 0, "designs": []},
+        )
+        arguments = {
+            "source_design_id": 200,
+            "new_name": "IAG_TEST_DESIGN",
+            "section_replacements": [
+                {
+                    "section_slot": "stern",
+                    "section_template": "BATTLESHIP_STERN_M2",
+                    "components": [
+                        {
+                            "component_slot": "MEDIUM_GUN_01",
+                            "component_id": "MEDIUM_PLASMA_3",
+                        }
+                    ],
+                }
+            ],
+            "component_replacements": [
+                {
+                    "section_slot": "bow",
+                    "component_slot": "EXTRA_LARGE_01",
+                    "component_id": "ARC_EMITTER_2",
+                }
+            ],
+            "required_component_replacements": [
+                {
+                    "component_set": "combat_computers",
+                    "component_id": "COMBAT_COMPUTER_CARRIER_SAPIENT",
+                }
+            ],
+            "upgrade_components_automatically": True,
+            "reason": "Create a carrier design.",
+        }
+        blueprint = {
+            "name": "IAG_TEST_DESIGN",
+            "context_822c": 0,
+            "growth_stages": [],
+        }
+        with (
+            patch(
+                "iag.applications.fleet_operations.agent_tools.detect_game_root",
+                return_value=self.root,
+            ),
+            patch(
+                "iag.applications.fleet_operations.agent_tools.customize_ship_design",
+                return_value=blueprint,
+            ) as customize,
+        ):
+            prepared = toolbox.prepare_ship_design(arguments)
+
+        self.assertIn(
+            "inspect_ship_design_options",
+            {item["function"]["name"] for item in toolbox.schemas()},
+        )
+        self.assertIn(
+            "prepare_ship_design",
+            {item["function"]["name"] for item in toolbox.schemas()},
+        )
+        self.assertTrue(customize.call_args.kwargs["upgrade_components_automatically"])
+
+        with (
+            patch(
+                "iag.applications.fleet_operations.agent_tools.detect_game_root",
+                return_value=self.root,
+            ),
+            patch(
+                "iag.applications.fleet_operations.agent_tools.customize_ship_design",
+                return_value=blueprint,
+            ) as replay,
+            patch(
+                "iag.applications.fleet_operations.agent_tools.SessionProxyController"
+            ) as controller_type,
+        ):
+            controller_type.return_value.arm_and_wait.return_value = {
+                "outcome": "confirmed"
+            }
+            result = toolbox.execute_ship_action({"run_id": prepared["run_id"]})
+
+        self.assertTrue(result["success"])
+        self.assertEqual(replay.call_count, 1)
+        self.assertEqual(
+            replay.call_args.kwargs["section_replacements"],
+            arguments["section_replacements"],
+        )
+        self.assertEqual(
+            controller_type.return_value.arm_and_wait.call_args.kwargs["target"],
+            {"blueprint": blueprint},
         )
 
     def test_new_fleet_is_denied_until_player_grants_permission(self) -> None:
@@ -740,9 +832,7 @@ class FleetToolboxTests(unittest.TestCase):
             allow_execute=True,
         )
         continuation._profile = lambda: (self.save, fresh)  # type: ignore[method-assign]
-        schema_names = {
-            item["function"]["name"] for item in continuation.schemas()
-        }
+        schema_names = {item["function"]["name"] for item in continuation.schemas()}
         self.assertNotIn("prepare_new_fleet_configuration", schema_names)
 
         with patch(

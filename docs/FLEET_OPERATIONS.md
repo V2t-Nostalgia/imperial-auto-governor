@@ -49,8 +49,9 @@
 - `prepare_colonization`：准备 `3d37` 订购殖民船并殖民；初始规划目前只允许 `col_city` 或 `col_mining`。
 - `prepare_starbase_operation`：准备普通恒星基地升级、模块或建筑操作，并区分空槽建设与已有组件替换。
 - `execute_prepared_fleet_order`：通过已启动的会话代理发送上述刚准备的动作，执行前重建同一候选并记录机器事实。
-- `inspect_ship_state`：读取玩家舰船设计和相关舰船状态。
-- `prepare_ship_design_clone`：克隆现有玩家设计并替换明确部件槽；不覆盖原设计。
+- `inspect_ship_state`：读取玩家舰船设计和相关舰船状态，但不把完整组件候选库一次性塞入上下文。
+- `inspect_ship_design_options`：先列出一份设计可用的区段与必需组件，再按选定区段展开合法槽位和组件。
+- `prepare_ship_design`：以玩家现有设计为锚点创建新设计，支持多区段、空槽填充、普通组件、必需组件和自动升级；不覆盖原设计。
 - `prepare_fleet_reinforcement`：把一个设计在指定舰队中的目标总数提高到 `target_count`，不是“额外造 target_count 艘”。
 - `prepare_new_fleet`：创建一份空 Fleet Manager 模板，不预测返回 ID。
 - `execute_prepared_ship_action`：严格串行确认模板增量与单条选中舰队增援请求；不把请求确认写成舰船完工。
@@ -116,3 +117,4 @@ fleet 对象；无法唯一匹配、目标已经消失或来源舰队不再可�
 写入逐舰队权限表，所以移动、攻击和后续增援仍然默认关闭。
 
 协议差分记录见 [Fleet Manager 定量增援](protocol/FLEET_TEMPLATE_REINFORCEMENT_4_4_6.md)。
+完整舰船设计证据见 [Stellaris 4.4.6 完整舰船设计记录](protocol/SHIP_DESIGN_FULL_BLUEPRINT_4_4_6.md)。
