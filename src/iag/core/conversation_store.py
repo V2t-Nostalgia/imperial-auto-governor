@@ -12,7 +12,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-
 CONVERSATION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 CAMPAIGN_ID_RE = re.compile(r"^[a-f0-9]{16,64}$")
 
@@ -241,9 +240,31 @@ class ConversationStore:
             )
             return message_id
 
-    def _rows(self, *, after_id: int = 0) -> list[sqlite3.Row]:
+    @staticmethod
+    def _row_matches_application(
+        row: sqlite3.Row,
+        application_id: str | None,
+    ) -> bool:
+        if application_id is None:
+            return True
+        metadata = ConversationStore._json_value(row["metadata_json"], {})
+        row_application_id = (
+            str(metadata.get("application_id") or "").strip()
+            if isinstance(metadata, dict)
+            else ""
+        )
+        if application_id == "economy_governance":
+            return row_application_id in {"", application_id}
+        return row_application_id == application_id
+
+    def _rows(
+        self,
+        *,
+        after_id: int = 0,
+        application_id: str | None = None,
+    ) -> list[sqlite3.Row]:
         with self._connect() as connection:
-            return list(
+            rows = list(
                 connection.execute(
                     """
                     SELECT * FROM messages
@@ -253,6 +274,11 @@ class ConversationStore:
                     (self.conversation_id, max(int(after_id), 0)),
                 )
             )
+        return [
+            row
+            for row in rows
+            if self._row_matches_application(row, application_id)
+        ]
 
     @staticmethod
     def _json_value(raw: str | None, fallback: Any) -> Any:
@@ -268,25 +294,22 @@ class ConversationStore:
         *,
         after_id: int = 0,
         limit: int = 250,
+        application_id: str | None = None,
     ) -> list[dict[str, Any]]:
         safe_limit = max(1, min(int(limit), 1000))
-        with self._connect() as connection:
-            rows = list(
-                connection.execute(
-                    """
-                    SELECT * FROM messages
-                    WHERE conversation_id = ? AND visible = 1 AND id > ?
-                    ORDER BY id ASC
-                    LIMIT ?
-                    """,
-                    (self.conversation_id, max(int(after_id), 0), safe_limit),
-                )
+        rows = [
+            row
+            for row in self._rows(
+                after_id=after_id,
+                application_id=application_id,
             )
+            if int(row["visible"]) == 1
+        ][:safe_limit]
         result: list[dict[str, Any]] = []
         for row in rows:
             metadata = self._json_value(row["metadata_json"], {})
             content = str(row["content"])
-            if row["role"] == "tool":
+            if row["role"] == "tool" or row["kind"] == "application_tool_audit":
                 content = str(
                     metadata.get("public_summary")
                     or f"工具 {row['tool_name'] or 'unknown'} 已完成。"
@@ -302,7 +325,8 @@ class ConversationStore:
                     "metadata": {
                         key: value
                         for key, value in metadata.items()
-                        if key in {
+                        if key
+                        in {
                             "public_summary",
                             "success",
                             "run_id",
@@ -315,6 +339,41 @@ class ConversationStore:
             )
         return result
 
+    def public_message_summary(
+        self,
+        *,
+        application_id: str | None = None,
+    ) -> dict[str, Any]:
+        rows = [
+            row
+            for row in self._rows(application_id=application_id)
+            if int(row["visible"]) == 1
+        ]
+        if not rows:
+            return {
+                "message_count": 0,
+                "last_message_id": 0,
+                "last_message_at": None,
+                "last_message_preview": "",
+                "last_message_role": None,
+            }
+        row = rows[-1]
+        metadata = self._json_value(row["metadata_json"], {})
+        content = str(row["content"] or "")
+        if row["role"] == "tool" or row["kind"] == "application_tool_audit":
+            content = str(
+                metadata.get("public_summary")
+                or f"工具 {row['tool_name'] or 'unknown'} 已完成。"
+            )
+        preview = " ".join(content.split())
+        return {
+            "message_count": len(rows),
+            "last_message_id": int(row["id"]),
+            "last_message_at": str(row["created_at"]),
+            "last_message_preview": preview[:120],
+            "last_message_role": str(row["role"]),
+        }
+
     @staticmethod
     def _row_cost(row: sqlite3.Row) -> int:
         return (
@@ -326,9 +385,18 @@ class ConversationStore:
         )
 
     @staticmethod
-    def _segments(rows: list[sqlite3.Row]) -> list[list[sqlite3.Row]]:
-        """Keep an assistant tool-call and all corresponding results together."""
+    def _protocol_partition(
+        rows: list[sqlite3.Row],
+    ) -> tuple[list[list[sqlite3.Row]], list[list[sqlite3.Row]]]:
+        """Split stored rows into replayable and quarantined protocol groups.
+
+        Tool messages are only replayable as one complete, contiguous response
+        group for the immediately preceding assistant tool call.  Invalid rows
+        remain in SQLite and in the public audit transcript, but never reach a
+        provider request.
+        """
         segments: list[list[sqlite3.Row]] = []
+        quarantined: list[list[sqlite3.Row]] = []
         index = 0
         while index < len(rows):
             row = rows[index]
@@ -337,28 +405,43 @@ class ConversationStore:
                 [],
             )
             if row["role"] == "assistant" and tool_calls:
-                call_ids = {
+                ordered_call_ids = [
                     str(item.get("id"))
                     for item in tool_calls
                     if isinstance(item, dict) and item.get("id")
-                }
+                ]
+                call_ids = set(ordered_call_ids)
                 segment = [row]
                 index += 1
-                while index < len(rows):
-                    candidate = rows[index]
-                    if (
-                        candidate["role"] == "tool"
-                        and str(candidate["tool_call_id"]) in call_ids
-                    ):
-                        segment.append(candidate)
-                        index += 1
-                        continue
-                    break
-                segments.append(segment)
+                while index < len(rows) and rows[index]["role"] == "tool":
+                    segment.append(rows[index])
+                    index += 1
+                result_ids = [
+                    str(candidate["tool_call_id"] or "") for candidate in segment[1:]
+                ]
+                complete = (
+                    bool(ordered_call_ids)
+                    and len(ordered_call_ids) == len(call_ids)
+                    and len(result_ids) == len(ordered_call_ids)
+                    and set(result_ids) == call_ids
+                )
+                if complete:
+                    segments.append(segment)
+                else:
+                    quarantined.append(segment)
+                continue
+            if row["role"] == "tool":
+                quarantined.append([row])
+                index += 1
                 continue
             segments.append([row])
             index += 1
-        return segments
+        return segments, quarantined
+
+    @staticmethod
+    def _segments(rows: list[sqlite3.Row]) -> list[list[sqlite3.Row]]:
+        """Return only complete provider-replayable protocol groups."""
+        return ConversationStore._protocol_partition(rows)[0]
 
     @staticmethod
     def _protocol_message(row: sqlite3.Row) -> dict[str, Any]:
@@ -378,9 +461,7 @@ class ConversationStore:
                 message["reasoning_content"] = str(row["reasoning_content"])
         metadata = ConversationStore._json_value(row["metadata_json"], {})
         anthropic_content = (
-            metadata.get("anthropic_content")
-            if isinstance(metadata, dict)
-            else None
+            metadata.get("anthropic_content") if isinstance(metadata, dict) else None
         )
         if role == "assistant" and isinstance(anthropic_content, list):
             message["anthropic_content"] = anthropic_content
@@ -394,7 +475,7 @@ class ConversationStore:
         max_chars: int = 120_000,
     ) -> tuple[list[dict[str, Any]], dict[str, int]]:
         rows = self._rows()
-        segments = self._segments(rows)
+        segments, quarantined = self._protocol_partition(rows)
         selected: list[list[sqlite3.Row]] = []
         used = 0
         for segment in reversed(segments):
@@ -416,12 +497,24 @@ class ConversationStore:
             "included_messages": len(kept_rows),
             "omitted_messages": len(rows) - len(kept_rows),
             "estimated_chars": used,
+            "quarantined_messages": sum(len(segment) for segment in quarantined),
+            "quarantined_groups": len(quarantined),
         }
 
-    def protocol_segments(self, *, after_id: int = 0) -> list[dict[str, Any]]:
+    def protocol_segments(
+        self,
+        *,
+        after_id: int = 0,
+        application_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Return indivisible protocol groups with database boundaries."""
         result: list[dict[str, Any]] = []
-        for segment in self._segments(self._rows(after_id=after_id)):
+        for segment in self._segments(
+            self._rows(
+                after_id=after_id,
+                application_id=application_id,
+            )
+        ):
             result.append(
                 {
                     "first_id": int(segment[0]["id"]),
@@ -740,9 +833,7 @@ class ConversationStore:
                     (selected_conversation,),
                 ).fetchone()
                 if target is None:
-                    raise KeyError(
-                        f"Unknown conversation: {selected_conversation}"
-                    )
+                    raise KeyError(f"Unknown conversation: {selected_conversation}")
                 if bool(target["archived"]):
                     raise ValueError(
                         "Archived conversations must be restored before binding."
@@ -849,9 +940,7 @@ class ConversationStore:
         selected = self._validate_conversation_id(conversation_id)
         metadata = self.conversation_metadata(selected)
         if metadata["archived"]:
-            raise ValueError(
-                "Archived conversations must be restored before opening."
-            )
+            raise ValueError("Archived conversations must be restored before opening.")
         timestamp = now_iso()
         with self._connect() as connection:
             connection.execute(
@@ -891,6 +980,10 @@ class ConversationStore:
             "stored_messages": count,
             "next_review": self.get_state("next_review", None),
             "last_autonomy": self.get_state("last_autonomy", None),
+            "last_world_snapshot_warmup": self.get_state(
+                "last_world_snapshot_warmup",
+                None,
+            ),
             "autonomy_mode": self.get_state("autonomy_mode", None),
             "review_interval_months": self.get_state(
                 "review_interval_months",

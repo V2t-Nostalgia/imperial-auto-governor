@@ -1,6 +1,6 @@
 schema_version = "iag.application_manifest.v1"
 application_id = "economy_governance"
-version = "0.5.9"
+version = "0.5.10"
 display_name_zh = "帝国经济总管"
 description_zh = "管理殖民地建设、资源平衡与经济发展。"
 

@@ -35,6 +35,7 @@ DEFINITION_DIRS = {
     "starbase_level": "common/starbase_levels",
     "starbase_module": "common/starbase_modules",
     "starbase_building": "common/starbase_buildings",
+    "army": "common/armies",
 }
 
 DISTRICT_CAPACITY_FIELDS = {

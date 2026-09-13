@@ -16,6 +16,7 @@
 | `CITATION.cff` | 仓库级配置、许可证或治理文件。 | 项目维护文件；用途由路径和邻接 README 约束。 | - | `CITATION.cff` |
 | `CONTRIBUTING.md` | 仓库级配置、许可证或治理文件。 | 项目说明、设计依据或历史参考文档。 | - | `CONTRIBUTING.md` |
 | `DCO` | 仓库级配置、许可证或治理文件。 | 项目维护文件；用途由路径和邻接 README 约束。 | - | `DCO` |
+| `DEDICATION.md` | 仓库级配置、许可证或治理文件。 | 项目说明、设计依据或历史参考文档。 | - | `新工程文件` |
 | `LICENSE` | 仓库级配置、许可证或治理文件。 | 项目维护文件；用途由路径和邻接 README 约束。 | - | `LICENSE` |
 | `LICENSES/CC-BY-SA-4.0.txt` | 代码与文档许可证全文。 | 项目维护文件；用途由路径和邻接 README 约束。 | - | `LICENSES/CC-BY-SA-4.0.txt` |
 | `LICENSES/GPL-3.0-only.txt` | 代码与文档许可证全文。 | 项目维护文件；用途由路径和邻接 README 约束。 | - | `LICENSES/GPL-3.0-only.txt` |
@@ -41,6 +42,7 @@
 | `apps/control_center/tests/test_model_pool_console.py` | Agent 控制面与 Windows 启动入口。 | Narrow integration tests for model-pool console persistence. | `endpoint`, `ModelPoolConsoleTests` | `新工程文件` |
 | `apps/control_center/tests/test_save_continuation_console.py` | Agent 控制面与 Windows 启动入口。 | Python 模块；详细职责见邻接 README。 | `SaveContinuationConsoleTests` | `新工程文件` |
 | `apps/control_center/tests/test_visible_reply_stream.py` | Agent 控制面与 Windows 启动入口。 | Tests for the redacted game-overlay event boundary. | `VisibleReplyBrokerTests`, `OverlayTranscriptTests` | `新工程文件` |
+| `apps/control_center/tests/test_windows_agent_bundle_resources.py` | Agent 控制面与 Windows 启动入口。 | Python 模块；详细职责见邻接 README。 | `WindowsAgentBundleResourceTests` | `新工程文件` |
 | `apps/control_center/visible_reply_stream.py` | Agent 控制面与 Windows 启动入口。 | 维护只含玩家输入与模型可见正文的有界事件流。 | - | `新工程文件` |
 | `apps/control_center/web/app.js` | 灰风控制台的浏览器端界面资源。 | 控制台浏览器端交互、状态渲染或 API 调用逻辑。 | - | `tools/agent_runtime/web/app.js` |
 | `apps/control_center/web/app_v2.js` | 灰风控制台的浏览器端界面资源。 | 控制台浏览器端交互、状态渲染或 API 调用逻辑。 | - | `tools/agent_runtime/web/app_v2.js` |
@@ -96,6 +98,8 @@
 | `docs/VERIFICATION.md` | 平台架构、开发和迁移文档。 | 项目说明、设计依据或历史参考文档。 | - | `新工程文件` |
 | `docs/code-map/README.md` | 平台架构、开发和迁移文档。 | 该目录的职责、边界、主要文件和开发注意事项。 | - | `新工程文件` |
 | `docs/protocol/APPLICATION_COMMAND_FRAMING_4_4_6.md` | 平台架构、开发和迁移文档。 | 项目说明、设计依据或历史参考文档。 | - | `新工程文件` |
+| `docs/protocol/ARMY_LANDING_4_4_6.md` | 平台架构、开发和迁移文档。 | 项目说明、设计依据或历史参考文档。 | - | `新工程文件` |
+| `docs/protocol/ARMY_RECRUITMENT_4_4_6.md` | 平台架构、开发和迁移文档。 | 项目说明、设计依据或历史参考文档。 | - | `新工程文件` |
 | `docs/protocol/COLONIZATION_4_4_6.md` | 平台架构、开发和迁移文档。 | 项目说明、设计依据或历史参考文档。 | - | `新工程文件` |
 | `docs/protocol/CONSTRUCTION_SHIP_BUILD_STARBASE_4_4_6.md` | 平台架构、开发和迁移文档。 | 项目说明、设计依据或历史参考文档。 | - | `新工程文件` |
 | `docs/protocol/FLEET_ATTACK_4_4_6.md` | 平台架构、开发和迁移文档。 | 项目说明、设计依据或历史参考文档。 | - | `新工程文件` |
@@ -103,8 +107,10 @@
 | `docs/protocol/FLEET_MAINTENANCE_4_4_6.md` | 平台架构、开发和迁移文档。 | 项目说明、设计依据或历史参考文档。 | - | `新工程文件` |
 | `docs/protocol/FLEET_TEMPLATE_REINFORCEMENT_4_4_6.md` | 平台架构、开发和迁移文档。 | 项目说明、设计依据或历史参考文档。 | - | `新工程文件` |
 | `docs/protocol/OOS_RESYNC_SERIAL_4_4_6.md` | 平台架构、开发和迁移文档。 | 项目说明、设计依据或历史参考文档。 | - | `新工程文件` |
+| `docs/protocol/ORBITAL_BOMBARDMENT_4_4_6.md` | 平台架构、开发和迁移文档。 | 项目说明、设计依据或历史参考文档。 | - | `新工程文件` |
 | `docs/protocol/PROTOCOL_COMPATIBILITY_SUITE.md` | 平台架构、开发和迁移文档。 | 项目说明、设计依据或历史参考文档。 | - | `新工程文件` |
 | `docs/protocol/RESEARCH_SELECTION_4_4_6.md` | 平台架构、开发和迁移文档。 | 项目说明、设计依据或历史参考文档。 | - | `新工程文件` |
+| `docs/protocol/SHIP_DESIGN_FULL_BLUEPRINT_4_4_6.md` | 平台架构、开发和迁移文档。 | 项目说明、设计依据或历史参考文档。 | - | `新工程文件` |
 | `docs/protocol/STARBASE_MODULE_BUILDING_4_4_6.md` | 平台架构、开发和迁移文档。 | 项目说明、设计依据或历史参考文档。 | - | `新工程文件` |
 | `docs/protocol/STARBASE_UPGRADE_4_4_6.md` | 平台架构、开发和迁移文档。 | 项目说明、设计依据或历史参考文档。 | - | `新工程文件` |
 | `docs/reference/v0_5_8/AGENT_RUNTIME.md` | 迁移基线 v0.5.8 的原始操作与研究记录。 | 项目说明、设计依据或历史参考文档。 | - | `tools/agent_runtime/README.md` |
@@ -117,6 +123,7 @@
 | `docs/reference/v0_5_8/UBUNTU_AGENT_README.md` | 迁移基线 v0.5.8 的原始操作与研究记录。 | 项目说明、设计依据或历史参考文档。 | - | `docs/UBUNTU_AGENT_README.md` |
 | `docs/reference/v0_5_8/WINDOWS_AGENT_README.md` | 迁移基线 v0.5.8 的原始操作与研究记录。 | 项目说明、设计依据或历史参考文档。 | - | `docs/WINDOWS_AGENT_README.md` |
 | `docs/reference/v0_5_8/WINDOWS_FULL_DEPLOYMENT.md` | 迁移基线 v0.5.8 的原始操作与研究记录。 | 项目说明、设计依据或历史参考文档。 | - | `docs/WINDOWS_FULL_DEPLOYMENT.md` |
+| `docs/releases/v0.5.10.md` | 平台架构、开发和迁移文档。 | 项目说明、设计依据或历史参考文档。 | - | `新工程文件` |
 | `docs/releases/v0.5.9.md` | 平台架构、开发和迁移文档。 | 项目说明、设计依据或历史参考文档。 | - | `新工程文件` |
 | `pyproject.toml` | 仓库级配置、许可证或治理文件。 | 版本化 manifest 或 Python 构建配置。 | - | `新工程文件` |
 | `requirements.txt` | 仓库级配置、许可证或治理文件。 | Python 3.11+ 统一依赖；Windows/Linux 抓包依赖用环境标记隔离。 | - | `新工程文件` |
@@ -136,7 +143,7 @@
 | `scripts/migration/generate_code_map.py` | 可审计迁移、哈希与代码地图维护工具。 | Generate a Chinese, source-aware index for every maintained project file. | `sha256`, `migration_sources`, `maintained_files`, `python_summary`, `generic_summary`, `category`, `escape`, `main` | `新工程文件` |
 | `scripts/migration/migrate_from_v058.py` | 可审计迁移、哈希与代码地图维护工具。 | 从冻结的 IAG v0.5.8 仓库复制已验证生产文件并生成来源清单。 | `sha256`, `tracked_files`, `copy_one`, `source_commit`, `parse_args`, `main` | `新工程文件` |
 | `scripts/migration/migrate_runtime_config_v2.py` | 可审计迁移、哈希与代码地图维护工具。 | Add persistent-conversation defaults without replacing user credentials. | `migrate_config`, `main` | `tools/agent_runtime/migrate_config_v2.py` |
-| `scripts/release/build_release.py` | 仓库级配置、许可证或治理文件。 | Build and verify the five public v0.5.9 release attachments. | `network_from_spec`, `ReleaseError`, `project_version`, `sha256_file`, `run`, `source_commit`, `tracked_files`, `recreate` | `新工程文件` |
+| `scripts/release/build_release.py` | 仓库级配置、许可证或治理文件。 | Build and verify the five public v0.5.10 release attachments. | `network_from_spec`, `ReleaseError`, `project_version`, `sha256_file`, `run`, `source_commit`, `tracked_files`, `recreate` | `新工程文件` |
 | `scripts/validation/run_tests.py` | 仓库级配置、许可证或治理文件。 | Run every repository-local unittest module without requiring pytest. | `test_modules`, `build_suite`, `selected_test_modules`, `main` | `新工程文件` |
 | `services/research/Manage-IAGResearchServices.ps1` | 可选的本地联网检索服务。 | Windows PowerShell 操作、构建或诊断入口。 | - | `tools/research_services/Manage-IAGResearchServices.ps1` |
 | `services/research/README.md` | 可选的本地联网检索服务。 | 该目录的职责、边界、主要文件和开发注意事项。 | - | `新工程文件` |
@@ -164,9 +171,11 @@
 | `src/iag/applications/fleet_operations/application.toml` | 实验性舰队、民用船、扩张、设计与编制工具。 | 版本化 manifest 或 Python 构建配置。 | - | `新工程文件` |
 | `src/iag/applications/fleet_operations/conversation_agent.py` | 实验性舰队、民用船、扩张、设计与编制工具。 | Independent persistent model agent for fleet and ship operations. | `FleetConversationAgent` | `新工程文件` |
 | `src/iag/applications/fleet_operations/prompts/fleet_operator_zh.md` | 实验性舰队、民用船、扩张、设计与编制工具。 | 项目说明、设计依据或历史参考文档。 | - | `新工程文件` |
-| `src/iag/applications/fleet_operations/tests/test_agent_tools.py` | 实验性舰队、民用船、扩张、设计与编制工具。 | Python 模块；详细职责见邻接 README。 | `fleet_profile`, `expansion_profile`, `FleetToolboxTests` | `新工程文件` |
+| `src/iag/applications/fleet_operations/tests/test_agent_tools.py` | 实验性舰队、民用船、扩张、设计与编制工具。 | Python 模块；详细职责见邻接 README。 | `fleet_profile`, `expansion_profile`, `invasion_profile`, `StaticCampaignPlanner`, `FleetToolboxTests` | `新工程文件` |
 | `src/iag/applications/fleet_operations/tests/test_conversation_agent.py` | 实验性舰队、民用船、扩张、设计与编制工具。 | Python 模块；详细职责见邻接 README。 | `FakeRuntimeConfig`, `ConfirmedFleetToolbox`, `FleetCompletion`, `FleetConversationAgentTests` | `新工程文件` |
 | `src/iag/applications/fleet_operations/tests/test_save_continuations.py` | 实验性舰队、民用船、扩张、设计与编制工具。 | Python 模块；详细职责见邻接 README。 | `SaveContinuationTests` | `新工程文件` |
+| `src/iag/applications/joint_plan_review.py` | 平台原生 Application 注册、跨域调度与确定性续接。 | 按游戏月份运行压缩的跨领域计划审查，并把建议投递给计划所有者。 | - | `新工程文件` |
+| `src/iag/applications/plan_advisor.py` | 平台原生 Application 注册、跨域调度与确定性续接。 | 使用可选快速模型处理局部计划异常，并限制补丁只能修改受影响分支。 | - | `新工程文件` |
 | `src/iag/applications/registry.py` | 平台原生 Application 注册、跨域调度与确定性续接。 | 平台内置 Application 的唯一登记入口。 | - | `新工程文件` |
 | `src/iag/applications/research_strategy/README.md` | 实验性科研状态、合法候选与科技选择工具。 | 该目录的职责、边界、主要文件和开发注意事项。 | - | `新工程文件` |
 | `src/iag/applications/research_strategy/__init__.py` | 实验性科研状态、合法候选与科技选择工具。 | Save-backed, experimental research selection Application. | - | `新工程文件` |
@@ -178,18 +187,26 @@
 | `src/iag/applications/research_strategy/tests/test_agent_tools.py` | 实验性科研状态、合法候选与科技选择工具。 | Python 模块；详细职责见邻接 README。 | `research_profile`, `TechnologyToolboxTests` | `新工程文件` |
 | `src/iag/applications/research_strategy/tests/test_conversation_agent.py` | 实验性科研状态、合法候选与科技选择工具。 | Python 模块；详细职责见邻接 README。 | `FakeRuntimeConfig`, `ResearchConversationAgentTests` | `新工程文件` |
 | `src/iag/applications/save_continuations.py` | 平台原生 Application 注册、跨域调度与确定性续接。 | 在新存档到达后续接已授权的确定性跨存档工作流，不重新调用模型。 | - | `新工程文件` |
-| `src/iag/applications/specialist_conversation_agent.py` | 平台原生 Application 注册、跨域调度与确定性续接。 | Shared persistent tool loop for first-party specialist Applications. | `SpecialistConversationAgentError`, `SpecialistConversationAgent` | `新工程文件` |
+| `src/iag/applications/specialist_conversation_agent.py` | 平台原生 Application 注册、跨域调度与确定性续接。 | 运行舰队与科研的隔离会话、计划优先自主循环和局部异常升级。 | - | `新工程文件` |
+| `src/iag/applications/tests/test_joint_plan_review.py` | 平台原生 Application 注册、跨域调度与确定性续接。 | Tests for compressed annual coordination without cross-plan mutation. | `runtime_config`, `JointPlanReviewerTests` | `新工程文件` |
+| `src/iag/applications/tests/test_plan_advisor.py` | 平台原生 Application 注册、跨域调度与确定性续接。 | Tests for tightly scoped fast-adviser plan repair. | `PlanExceptionAdvisorTests` | `新工程文件` |
 | `src/iag/core/README.md` | 平台无关核心：政策、会话、上下文和稳定契约。 | 该目录的职责、边界、主要文件和开发注意事项。 | - | `新工程文件` |
 | `src/iag/core/__init__.py` | 平台无关核心：政策、会话、上下文和稳定契约。 | 与具体游戏动作无关的 Agent 核心。 | - | `新工程文件` |
+| `src/iag/core/application_plan.py` | 平台无关核心：政策、会话、上下文和稳定契约。 | 维护分层可执行计划、稳定事实条件、局部失效传播、存档确认、归档和审计。 | - | `新工程文件` |
 | `src/iag/core/application_registry.py` | 平台无关核心：政策、会话、上下文和稳定契约。 | 显式 Application 注册表；阻止目录扫描加载未知代码。 | - | `新工程文件` |
 | `src/iag/core/autonomy.py` | 平台无关核心：政策、会话、上下文和稳定契约。 | Save-driven scheduling helpers for unattended IAG reviews. | `save_identity`, `coalesce_next_review_after_turn`, `autonomy_probe` | `tools/agent_runtime/autonomy.py` |
 | `src/iag/core/campaign_strategy.py` | 平台无关核心：政策、会话、上下文和稳定契约。 | Persistent ten-year planning and player-controlled emergency state. | `game_date_parts`, `game_month_index`, `synchronize_decade_state`, `save_decade_plan`, `emergency_state`, `activate_emergency`, `end_emergency`, `public_strategy_state` | `tools/agent_runtime/campaign_strategy.py` |
 | `src/iag/core/context_window.py` | 平台无关核心：政策、会话、上下文和稳定契约。 | Token-budgeted conversation replay with loss-aware rolling summaries. | `estimate_text_tokens`, `estimate_message_tokens`, `estimate_messages_tokens`, `build_context_messages` | `tools/agent_runtime/context_window.py` |
 | `src/iag/core/contracts.py` | 平台无关核心：政策、会话、上下文和稳定契约。 | 定义跨 Agent、Mandate 与执行审计边界；未知字段会被拒绝。 | - | `新工程文件` |
 | `src/iag/core/conversation_store.py` | 平台无关核心：政策、会话、上下文和稳定契约。 | Persistent campaign conversation storage for the IAG agent. | `now_iso`, `ConversationStore` | `tools/agent_runtime/conversation_store.py` |
-| `src/iag/core/paths.py` | 平台无关核心：政策、会话、上下文和稳定契约。 | 集中解析开发工作区中的平台资源路径。 | `project_root`, `vanilla_content_pack_root`, `economy_governance_root` | `新工程文件` |
+| `src/iag/core/paths.py` | 平台无关核心：政策、会话、上下文和稳定契约。 | 集中解析开发工作区中的平台资源路径。 | `project_root`, `vanilla_content_pack_root`, `application_root`, `economy_governance_root`, `fleet_operations_root`, `research_strategy_root` | `新工程文件` |
+| `src/iag/core/read_tasks.py` | 平台无关核心：政策、会话、上下文和稳定契约。 | Bounded, recoverable thread workers for pure state reads. | `ReadTaskTimeoutError`, `ReadTask`, `ReadTaskPool`, `tool_is_read_only` | `新工程文件` |
+| `src/iag/core/resource_ledger.py` | 平台无关核心：政策、会话、上下文和稳定契约。 | 按战役与存档哈希原子预留资源，阻止多个 Application 重复消费同一份陈旧库存。 | - | `新工程文件` |
 | `src/iag/core/tests/README.md` | 平台无关核心：政策、会话、上下文和稳定契约。 | 该目录的职责、边界、主要文件和开发注意事项。 | - | `新工程文件` |
+| `src/iag/core/tests/test_application_plan.py` | 平台无关核心：政策、会话、上下文和稳定契约。 | Tests for model-authored plans and deterministic partial evaluation. | `FakeToolbox`, `ApplicationPlanBookTests` | `新工程文件` |
 | `src/iag/core/tests/test_conversation_store.py` | 平台无关核心：政策、会话、上下文和稳定契约。 | Persistence tests for provider-specific private protocol metadata. | `ConversationStoreTests` | `新工程文件` |
+| `src/iag/core/tests/test_read_tasks.py` | 平台无关核心：政策、会话、上下文和稳定契约。 | Python 模块；详细职责见邻接 README。 | `ReadTaskPoolTests` | `新工程文件` |
+| `src/iag/core/tests/test_resource_ledger.py` | 平台无关核心：政策、会话、上下文和稳定契约。 | Python 模块；详细职责见邻接 README。 | `ResourceReservationLedgerTests` | `新工程文件` |
 | `src/iag/infrastructure/README.md` | 仓库级配置、许可证或治理文件。 | 该目录的职责、边界、主要文件和开发注意事项。 | - | `新工程文件` |
 | `src/iag/infrastructure/__init__.py` | 仓库级配置、许可证或治理文件。 | 模型供应商、网页检索和其他可替换的基础设施实现。 | - | `新工程文件` |
 | `src/iag/infrastructure/llm/README.md` | 模型供应商协议和请求模板适配。 | 该目录的职责、边界、主要文件和开发注意事项。 | - | `新工程文件` |
@@ -233,6 +250,7 @@
 | `src/iag/stellaris/execution/packet/expansion_commands.py` | 协作命令的离线解析、精确构造与受约束改写。 | 精确解析并构造殖民、恒星基地升级、模块和建筑设置记录。 | - | `新工程文件` |
 | `src/iag/stellaris/execution/packet/fleet_operation_commands.py` | 协作命令的离线解析、精确构造与受约束改写。 | 精确解析并构造舰队攻击、舰船自动化和工程船建造恒星基地记录。 | - | `新工程文件` |
 | `src/iag/stellaris/execution/packet/fleet_reinforcement_commands.py` | 协作命令的离线解析、精确构造与受约束改写。 | 精确解析并构造 Fleet Manager 编制增减与两阶段增援记录。 | - | `新工程文件` |
+| `src/iag/stellaris/execution/packet/ground_warfare_commands.py` | 协作命令的离线解析、精确构造与受约束改写。 | 精确解析并构造轰炸姿态、陆军登陆和空间站陆军招募记录。 | - | `新工程文件` |
 | `src/iag/stellaris/execution/packet/iag_building_replacement_rewriter.py` | 协作命令的离线解析、精确构造与受约束改写。 | Length-preserving rewrite for Stellaris 4.4.6 building replacements. | `rewrite_building_replacement_carrier` | `tools/packet_interceptor/iag_building_replacement_rewriter.py` |
 | `src/iag/stellaris/execution/packet/iag_building_to_zone_replacer.py` | 协作命令的离线解析、精确构造与受约束改写。 | Replace one legal building construction command with a zone command. | `is_building_carrier_command`, `build_zone_core`, `build_zone_record_from_building_carrier`, `replace_building_command_with_zone`, `inspect_payload`, `sha256_hex`, `now_iso`, `append_jsonl` | `tools/packet_interceptor/iag_building_to_zone_replacer.py` |
 | `src/iag/stellaris/execution/packet/iag_building_upgrade_rewriter.py` | 协作命令的离线解析、精确构造与受约束改写。 | Length-preserving rewrite for Stellaris 4.4.6 building upgrades. | `rewrite_building_upgrade_carrier` | `tools/packet_interceptor/iag_building_upgrade_rewriter.py` |
@@ -256,24 +274,32 @@
 | `src/iag/stellaris/execution/tests/test_protocol_compatibility_control.py` | 游戏侧点击、网络发现、执行监督和确认。 | Python 模块；详细职责见邻接 README。 | `FakeSessionProxyController`, `ProtocolCompatibilityControlTests` | `新工程文件` |
 | `src/iag/stellaris/execution/tests/test_session_proxy.py` | 游戏侧点击、网络发现、执行监督和确认。 | Python 模块；详细职责见邻接 README。 | `header`, `SessionProxyTests` | `新工程文件` |
 | `src/iag/stellaris/execution/tests/test_session_proxy_controller.py` | 游戏侧点击、网络发现、执行监督和确认。 | Python 模块；详细职责见邻接 README。 | `SessionProxyControllerTests` | `新工程文件` |
+| `src/iag/stellaris/execution/tests/test_ship_design_packets.py` | 游戏侧点击、网络发现、执行监督和确认。 | Python 模块；详细职责见邻接 README。 | `section`, `battleship_blueprint`, `cruiser_blueprint`, `ShipDesignPacketTests` | `新工程文件` |
 | `src/iag/stellaris/execution/tests/test_supervisor_execution_modes.py` | 游戏侧点击、网络发现、执行监督和确认。 | Python 模块；详细职责见邻接 README。 | `SupervisorExecutionModeTests` | `新工程文件` |
 | `src/iag/stellaris/execution/windows_fixed_click.py` | 游戏侧点击、网络发现、执行监督和确认。 | Guarded fixed-coordinate Stellaris capture and click implementation for Windows. | `WindowsControlError`, `WindowGeometry`, `MOUSEINPUT`, `INPUTUNION`, `INPUT`, `BITMAPINFOHEADER`, `RGBQUAD`, `BITMAPINFO` | `tools/agent_runtime/windows_fixed_click.py` |
 | `src/iag/stellaris/execution/x11_fixed_click.py` | 游戏侧点击、网络发现、执行监督和确认。 | Calibrate and execute one fixed, guarded click in an X11 Stellaris window. | `X11ControlError`, `WindowGeometry`, `now_iso`, `atomic_write_json`, `read_json`, `x11_environment`, `run_checked`, `read_process_name` | `tools/agent_runtime/x11_fixed_click.py` |
 | `src/iag/stellaris/game_knowledge.py` | 仓库级配置、许可证或治理文件。 | Extract version-locked Stellaris rule evidence from the local installation. | `file_sha256`, `normalized_version`, `detect_game_root`, `install_identity`, `scripted_variables`, `variables_for_source`, `strip_clausewitz_comments`, `extract_named_block` | `tools/agent_runtime/game_knowledge.py` |
 | `src/iag/stellaris/state/README.md` | Stellaris 存档事实读取与规范化。 | 该目录的职责、边界、主要文件和开发注意事项。 | - | `新工程文件` |
 | `src/iag/stellaris/state/__init__.py` | Stellaris 存档事实读取与规范化。 | 权威存档的接收、身份校验、解析与状态归一化。 | - | `新工程文件` |
+| `src/iag/stellaris/state/campaign_routes.py` | Stellaris 存档事实读取与规范化。 | 搜索多目标 Pareto 战役路线，汇总阻断代价，并只为达到军力门槛的原子任务编组分配进攻。 | - | `新工程文件` |
 | `src/iag/stellaris/state/expansion_profiles.py` | Stellaris 存档事实读取与规范化。 | 解析物种宜居度、殖民来源、可殖民行星与恒星基地操作候选。 | - | `新工程文件` |
 | `src/iag/stellaris/state/extract_game_state.py` | Stellaris 存档事实读取与规范化。 | 解包 Stellaris 存档并生成标准化帝国状态。 | - | `tools/agent_runtime/extract_game_state.py` |
 | `src/iag/stellaris/state/fleet_profiles.py` | Stellaris 存档事实读取与规范化。 | 解析玩家舰队、军力、聚合耐久、位置、模板编制、增援队列和已验证动作目标。 | - | `新工程文件` |
+| `src/iag/stellaris/state/invasion_profiles.py` | Stellaris 存档事实读取与规范化。 | 解析敌对殖民地、轰炸进度、守军、运输军团和行星超空间抑制器。 | - | `新工程文件` |
 | `src/iag/stellaris/state/planet_profiles.py` | Stellaris 存档事实读取与规范化。 | 解析殖民地、区域、槽位、容量、拥有者和建设队列。 | - | `tools/save_state/extract_planet_profiles.py` |
 | `src/iag/stellaris/state/research_profiles.py` | Stellaris 存档事实读取与规范化。 | 分离已完成科技、当前研究、合法候选和储存研究点。 | - | `新工程文件` |
 | `src/iag/stellaris/state/save_ingest.py` | Stellaris 存档事实读取与规范化。 | Receive authenticated host saves and expose one verified current save. | `SaveIngestError`, `now_iso`, `configured_path`, `upload_root`, `manifest_path`, `campaign_manifest_path`, `upload_token_path`, `review_interval_months` | `tools/agent_runtime/save_ingest.py` |
 | `src/iag/stellaris/state/ship_profiles.py` | Stellaris 存档事实读取与规范化。 | 解析玩家舰船设计、部件槽和直接船坞协议证据。 | - | `新工程文件` |
+| `src/iag/stellaris/state/state_index.py` | Stellaris 存档事实读取与规范化。 | Thread-safe, snapshot-local indexes over one Stellaris gamestate string. | `WorldStateIndex` | `新工程文件` |
 | `src/iag/stellaris/state/tests/README.md` | Stellaris 存档事实读取与规范化。 | 该目录的职责、边界、主要文件和开发注意事项。 | - | `新工程文件` |
+| `src/iag/stellaris/state/tests/test_campaign_routes.py` | Stellaris 存档事实读取与规范化。 | Python 模块；详细职责见邻接 README。 | `CampaignRoutePlannerTests` | `新工程文件` |
 | `src/iag/stellaris/state/tests/test_expansion_profiles.py` | Stellaris 存档事实读取与规范化。 | Python 模块；详细职责见邻接 README。 | `ExpansionProfileTests` | `新工程文件` |
 | `src/iag/stellaris/state/tests/test_fleet_profiles.py` | Stellaris 存档事实读取与规范化。 | Python 模块；详细职责见邻接 README。 | `ExtractFleetProfilesTests` | `新工程文件` |
+| `src/iag/stellaris/state/tests/test_invasion_profiles.py` | Stellaris 存档事实读取与规范化。 | Python 模块；详细职责见邻接 README。 | `profile`, `InvasionProfileSelectionTests` | `新工程文件` |
 | `src/iag/stellaris/state/tests/test_research_profiles.py` | Stellaris 存档事实读取与规范化。 | Python 模块；详细职责见邻接 README。 | `ResearchProfileTests` | `新工程文件` |
-| `src/iag/stellaris/state/tests/test_ship_profiles.py` | Stellaris 存档事实读取与规范化。 | Python 模块；详细职责见邻接 README。 | `ShipProfileTests` | `新工程文件` |
+| `src/iag/stellaris/state/tests/test_ship_profiles.py` | Stellaris 存档事实读取与规范化。 | Python 模块；详细职责见邻接 README。 | `multisection_profile`, `ShipProfileTests` | `新工程文件` |
+| `src/iag/stellaris/state/tests/test_world_snapshot.py` | Stellaris 存档事实读取与规范化。 | Python 模块；详细职责见邻接 README。 | `WorldStateIndexTests`, `WorldSnapshotTests` | `新工程文件` |
+| `src/iag/stellaris/state/world_snapshot.py` | Stellaris 存档事实读取与规范化。 | Pinned save snapshots and shared, lazy world-state derivations. | `StaleWorldSnapshotError`, `SnapshotIdentity`, `WorldSnapshot`, `WorldStateService` | `新工程文件` |
 | `src/iag/stellaris/tests/README.md` | 仓库级配置、许可证或治理文件。 | 该目录的职责、边界、主要文件和开发注意事项。 | - | `新工程文件` |
 | `src/iag/stellaris/tests/test_game_knowledge_technology.py` | 仓库级配置、许可证或治理文件。 | Python 模块；详细职责见邻接 README。 | `TechnologyRuleTests` | `新工程文件` |
 | `stellaris_mod/README.md` | 建设载体 Clausewitz Mod 源码。 | 该目录的职责、边界、主要文件和开发注意事项。 | - | `新工程文件` |

@@ -113,6 +113,90 @@ class SessionProxyControllerTests(unittest.TestCase):
             self.assertEqual(request["source_actor"], 2)
             self.assertEqual(result["outcome"], "confirmed")
 
+    def test_player_confirmed_flow_lock_writes_session_scoped_request(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = SessionProxyController({"runtime_root": directory})
+            candidate_id = "a" * 24
+            status = {
+                "running": True,
+                "ready": True,
+                "flow": None,
+                "session_id": "session-1",
+                "flow_candidates": [
+                    {
+                        "candidate_id": candidate_id,
+                        "bidirectional": True,
+                        "manual_lockable": True,
+                    }
+                ],
+            }
+            with patch.object(controller, "status", side_effect=[status, status]):
+                result = controller.lock_flow(
+                    candidate_id=candidate_id,
+                    player_confirmed=True,
+                )
+
+            request = json.loads(
+                controller.flow_lock_path.read_text(encoding="utf-8")
+            )
+            self.assertEqual(request["session_id"], "session-1")
+            self.assertEqual(request["candidate_id"], candidate_id)
+            self.assertTrue(request["player_confirmed"])
+            self.assertTrue(result["manual_flow_lock_pending"])
+
+    def test_player_confirmed_flow_lock_accepts_one_way_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = SessionProxyController({"runtime_root": directory})
+            status = {
+                "running": True,
+                "ready": True,
+                "flow": None,
+                "session_id": "session-1",
+                "flow_candidates": [
+                    {
+                        "candidate_id": "b" * 24,
+                        "bidirectional": False,
+                        "manual_lockable": False,
+                    }
+                ],
+            }
+            with patch.object(controller, "status", side_effect=[status, status]):
+                result = controller.lock_flow(
+                    candidate_id="b" * 24,
+                    player_confirmed=True,
+                )
+
+            request = json.loads(
+                controller.flow_lock_path.read_text(encoding="utf-8")
+            )
+            self.assertEqual(request["candidate_id"], "b" * 24)
+            self.assertTrue(result["manual_flow_lock_pending"])
+
+    def test_action_sequence_stops_after_first_unconfirmed_step(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = SessionProxyController({"runtime_root": directory})
+            with patch.object(
+                controller,
+                "_arm_and_wait_locked",
+                side_effect=[
+                    {"outcome": "confirmed"},
+                    {"outcome": "rejected", "error": "host rejected"},
+                ],
+            ) as submit:
+                result = controller.arm_sequence_and_wait(
+                    steps=[
+                        {"action": "one", "target": {"value": 1}},
+                        {"action": "two", "target": {"value": 2}},
+                        {"action": "three", "target": {"value": 3}},
+                    ],
+                    request_id="batch",
+                )
+
+            self.assertEqual(submit.call_count, 2)
+            self.assertEqual(result["outcome"], "partial")
+            self.assertEqual(result["confirmed_steps"], 1)
+            self.assertEqual(result["attempted_steps"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

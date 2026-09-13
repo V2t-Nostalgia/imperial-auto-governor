@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and verify the five public v0.5.9 release attachments."""
+"""Build and verify the five public v0.5.10 release attachments."""
 
 from __future__ import annotations
 
@@ -20,15 +20,15 @@ import tempfile
 import threading
 import tomllib
 import zipfile
+from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
-
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_NAME = "RELEASE_MANIFEST.json"
@@ -36,6 +36,7 @@ PACKAGE_SUMS_NAME = "SHA256SUMS.txt"
 GOVERNANCE_FILES = (
     "AUTHORS.md",
     "CITATION.cff",
+    "DEDICATION.md",
     "LICENSE",
     "NOTICE",
     "ORIGIN.md",
@@ -129,8 +130,7 @@ def network_from_spec(specification: tuple[int, int, int, int, int]) -> Any:
 
 
 DOCUMENTATION_NETWORKS = tuple(
-    network_from_spec(specification)
-    for specification in DOCUMENTATION_NETWORK_SPECS
+    network_from_spec(specification) for specification in DOCUMENTATION_NETWORK_SPECS
 )
 PRIVATE_NETWORKS = tuple(
     network_from_spec(specification) for specification in PRIVATE_NETWORK_SPECS
@@ -185,9 +185,7 @@ def source_commit() -> str:
     commit = run(("git", "rev-parse", "HEAD")).stdout.strip().lower()
     if not re.fullmatch(r"[0-9a-f]{40,64}", commit):
         raise ReleaseError("The current source commit is invalid.")
-    dirty = run(
-        ("git", "status", "--porcelain", "--untracked-files=no")
-    ).stdout.strip()
+    dirty = run(("git", "status", "--porcelain", "--untracked-files=no")).stdout.strip()
     if dirty:
         raise ReleaseError(
             "Tracked files changed after the source commit; commit them before building."
@@ -283,9 +281,8 @@ def scan_tree(stage: Path) -> list[str]:
             errors.append(f"forbidden runtime directory: {relative.as_posix()}")
         if path.name.casefold() in FORBIDDEN_CONFIG_NAMES:
             errors.append(f"runtime configuration: {relative.as_posix()}")
-        if (
-            path.suffix.casefold() in FORBIDDEN_SUFFIXES
-            and not is_certifi_ca_bundle(relative)
+        if path.suffix.casefold() in FORBIDDEN_SUFFIXES and not is_certifi_ca_bundle(
+            relative
         ):
             errors.append(f"forbidden runtime artifact: {relative.as_posix()}")
 
@@ -367,8 +364,7 @@ def finalize_stage(
     sums = [*payload, (manifest_path, Path(MANIFEST_NAME))]
     (stage / PACKAGE_SUMS_NAME).write_text(
         "".join(
-            f"{sha256_file(path)}  {relative.as_posix()}\n"
-            for path, relative in sums
+            f"{sha256_file(path)}  {relative.as_posix()}\n" for path, relative in sums
         ),
         encoding="utf-8",
     )
@@ -437,7 +433,9 @@ def extract_verified(archive: Path, destination: Path, expected_root: str) -> Pa
                 safe_archive_path(member.filename, expected_root)
                 mode = member.external_attr >> 16
                 if stat.S_ISLNK(mode):
-                    raise ReleaseError(f"ZIP contains a symbolic link: {member.filename}")
+                    raise ReleaseError(
+                        f"ZIP contains a symbolic link: {member.filename}"
+                    )
             damaged = handle.testzip()
             if damaged:
                 raise ReleaseError(f"Damaged ZIP member: {damaged}")
@@ -536,9 +534,11 @@ def ubuntu_health(stage: Path) -> list[str]:
         (
             sys.executable,
             "-c",
-            "import apps.control_center.web_console; "
-            "import iag.stellaris.state.fleet_profiles; "
-            "import iag.applications.fleet_operations.agent_tools",
+            (
+                "import apps.control_center.web_console; "
+                "import iag.stellaris.state.fleet_profiles; "
+                "import iag.applications.fleet_operations.agent_tools"
+            ),
         ),
         cwd=stage,
         environment=environment,
@@ -555,7 +555,7 @@ def ubuntu_health(stage: Path) -> list[str]:
 class HealthHandler(http.server.BaseHTTPRequestHandler):
     token = ""
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_POST(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))
         self.rfile.read(length)
         if self.path != "/api/save/client-heartbeat":
@@ -595,7 +595,9 @@ def host_bridge_health(stage: Path) -> list[str]:
             .not_valid_before(now - timedelta(minutes=1))
             .not_valid_after(now + timedelta(hours=1))
             .add_extension(
-                x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]),
+                x509.SubjectAlternativeName(
+                    [x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]
+                ),
                 critical=False,
             )
             .sign(key, hashes.SHA256())
@@ -649,6 +651,28 @@ def windows_agent_health(stage: Path) -> list[str]:
     executable = stage / "IAGWindowsAgent.exe"
     if not executable.is_file():
         raise ReleaseError("The Windows Agent executable is missing.")
+    required_prompts = (
+        stage
+        / "_internal"
+        / "iag"
+        / "applications"
+        / "fleet_operations"
+        / "prompts"
+        / "fleet_operator_zh.md",
+        stage
+        / "_internal"
+        / "iag"
+        / "applications"
+        / "research_strategy"
+        / "prompts"
+        / "research_director_zh.md",
+    )
+    missing_prompts = [path for path in required_prompts if not path.is_file()]
+    if missing_prompts:
+        missing = ", ".join(
+            path.relative_to(stage).as_posix() for path in missing_prompts
+        )
+        raise ReleaseError(f"The Windows Agent package lacks prompts: {missing}")
     run((str(executable), "--health-check"), cwd=stage, timeout=180)
     driver_files = list(stage.rglob("WinDivert64.dll")) + list(
         stage.rglob("WinDivert64.sys")
@@ -656,7 +680,7 @@ def windows_agent_health(stage: Path) -> list[str]:
     if len(driver_files) < 2:
         raise ReleaseError("The Windows Agent package lacks WinDivert DLL/SYS files.")
     return [
-        "packaged Windows Agent health check: passed",
+        "packaged Windows Agent health check and specialist prompts: passed",
         "session proxy import and PyDivert DLL/SYS presence: passed",
     ]
 
@@ -718,6 +742,7 @@ def ubuntu_source_files(files: list[Path]) -> list[Path]:
         "CITATION.cff",
         "CONTRIBUTING.md",
         "DCO",
+        "DEDICATION.md",
         "LICENSE",
         "NOTICE",
         "ORIGIN.md",
@@ -741,9 +766,10 @@ def ubuntu_source_files(files: list[Path]) -> list[Path]:
     selected: list[Path] = []
     for path in files:
         relative = path.relative_to(ROOT).as_posix()
-        if relative in root_names or relative.startswith(prefixes):
-            if "/tests/" not in f"/{relative}":
-                selected.append(path)
+        if (
+            relative in root_names or relative.startswith(prefixes)
+        ) and "/tests/" not in f"/{relative}":
+            selected.append(path)
     return selected
 
 
@@ -892,7 +918,9 @@ def build_release(skip_build: bool = False) -> Path:
     expected = {path.name for path in archives} | {top_sums.name}
     actual = {path.name for path in final_root.iterdir() if path.is_file()}
     if actual != expected:
-        raise ReleaseError(f"Unexpected final attachment set: {sorted(actual ^ expected)}")
+        raise ReleaseError(
+            f"Unexpected final attachment set: {sorted(actual ^ expected)}"
+        )
     print(f"Release source commit: {commit}")
     for path in sorted(final_root.iterdir()):
         print(f"{path.name}\t{path.stat().st_size}\t{sha256_file(path)}")
@@ -905,7 +933,7 @@ def main() -> int:
     values = parser.parse_args()
     try:
         build_release(skip_build=values.skip_build)
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - release CLI must fail closed.
         print(f"{type(error).__name__}: {error}", file=sys.stderr)
         return 1
     return 0

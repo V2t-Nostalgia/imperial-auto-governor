@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import Any
 from iag.applications.research_strategy.conversation_agent import (
     ResearchConversationAgent,
 )
+from iag.core.application_plan import ApplicationPlanBook
 from iag.core.conversation_store import ConversationStore
 from iag.infrastructure.llm.model_pool import ModelEndpoint, ModelPool
 from iag.infrastructure.llm.model_pool_runtime import ModelPoolRuntime
@@ -53,9 +55,7 @@ class FakeRuntimeConfig:
             },
             model_pool=pool,
             request_options={},
-            application_profile=SimpleNamespace(
-                profile_id="research-profile"
-            ),
+            application_profile=SimpleNamespace(profile_id="research-profile"),
         )
 
     def snapshot(self, application_id: str = "economy_governance") -> Any:
@@ -81,9 +81,7 @@ class ResearchConversationAgentTests(unittest.TestCase):
                 tools: list[dict[str, Any]] | None,
             ) -> dict[str, Any]:
                 del request_options
-                observed_tools.extend(
-                    item["function"]["name"] for item in tools or []
-                )
+                observed_tools.extend(item["function"]["name"] for item in tools or [])
                 return {"role": "assistant", "content": "科研维持现状。"}
 
             agent = ResearchConversationAgent(
@@ -107,6 +105,10 @@ class ResearchConversationAgentTests(unittest.TestCase):
                     "inspect_research_state",
                     "prepare_research_selection",
                     "execute_prepared_research",
+                    "inspect_plan_facts",
+                    "inspect_application_plan",
+                    "create_application_plan",
+                    "edit_application_plan",
                 },
             )
             self.assertEqual(actions.public_state()["stored_messages"], 0)
@@ -127,8 +129,7 @@ class ResearchConversationAgentTests(unittest.TestCase):
                 **kwargs: Any,
             ) -> dict[str, Any]:
                 observed_tools.extend(
-                    item["function"]["name"]
-                    for item in kwargs.get("tools") or []
+                    item["function"]["name"] for item in kwargs.get("tools") or []
                 )
                 return {"role": "assistant", "content": "只做科研建议。"}
 
@@ -144,6 +145,177 @@ class ResearchConversationAgentTests(unittest.TestCase):
             )
 
             self.assertNotIn("execute_prepared_research", observed_tools)
+
+    def test_valid_autonomous_plan_skips_model_call(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pool = _test_pool()
+            runtime = FakeRuntimeConfig(root, pool)
+            history = ConversationStore(root / "research.sqlite3")
+            actions = ConversationStore(root / "campaign.sqlite3")
+            facts = {"research": {"physics_candidates": 3}}
+
+            class FakeToolbox:
+                def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+                    pass
+
+                @staticmethod
+                def schemas() -> list[dict[str, Any]]:
+                    return []
+
+                @staticmethod
+                def dispatch(
+                    _name: str,
+                    _arguments: dict[str, Any],
+                ) -> tuple[dict[str, Any], str]:
+                    raise AssertionError("No action is due.")
+
+                @staticmethod
+                def inspect() -> dict[str, Any]:
+                    return facts
+
+            ApplicationPlanBook(
+                history,
+                "research_strategy",
+                lambda: facts,
+            ).create(
+                {
+                    "plan_id": "research-focus",
+                    "title": "Research focus",
+                    "objective": "Maintain a physics candidate buffer.",
+                    "reason": "test",
+                    "nodes": [
+                        {
+                            "node_id": "physics",
+                            "title": "Physics",
+                            "objective": "Keep candidates available.",
+                            "expectations": [
+                                {
+                                    "fact": "/research/physics_candidates",
+                                    "operator": "gte",
+                                    "value": 1,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            )
+
+            agent = ResearchConversationAgent(
+                runtime,
+                history,
+                actions,
+                model_pool_runtime=ModelPoolRuntime(pool),
+                completion_fn=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                    AssertionError("The main model must not be called.")
+                ),
+                toolbox_factory=FakeToolbox,
+            )
+            result = agent.run_turn(
+                trigger="autonomous",
+                autonomy_mode="advisory",
+            )
+
+        self.assertEqual(result["context"]["mode"], "deterministic_plan")
+
+    def test_plan_anomaly_sends_only_local_context_to_main_model(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pool = _test_pool()
+            runtime = FakeRuntimeConfig(root, pool)
+            history = ConversationStore(root / "research.sqlite3")
+            actions = ConversationStore(root / "campaign.sqlite3")
+            facts = {
+                "research": {
+                    "physics_candidates": 0,
+                    "engineering_candidates": 3,
+                }
+            }
+
+            class FakeToolbox:
+                def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+                    pass
+
+                @staticmethod
+                def schemas() -> list[dict[str, Any]]:
+                    return []
+
+                @staticmethod
+                def inspect() -> dict[str, Any]:
+                    return facts
+
+            ApplicationPlanBook(
+                history,
+                "research_strategy",
+                lambda: facts,
+            ).create(
+                {
+                    "plan_id": "research-focus",
+                    "title": "Research focus",
+                    "objective": "Maintain physics options.",
+                    "reason": "test",
+                    "nodes": [
+                        {
+                            "node_id": "physics",
+                            "title": "Physics",
+                            "objective": "Keep candidates available.",
+                            "expectations": [
+                                {
+                                    "fact": "/research/physics_candidates",
+                                    "operator": "gte",
+                                    "value": 1,
+                                }
+                            ],
+                        },
+                        {
+                            "node_id": "engineering",
+                            "title": "UNRELATED_PLAN_BRANCH_MARKER",
+                            "objective": "Keep engineering choices available.",
+                            "expectations": [
+                                {
+                                    "fact": "/research/engineering_candidates",
+                                    "operator": "gte",
+                                    "value": 1,
+                                }
+                            ],
+                        },
+                    ],
+                }
+            )
+            history.append("user", "UNRELATED_FULL_HISTORY_MARKER")
+            observed_messages: list[dict[str, Any]] = []
+            observed_tools: list[str] = []
+
+            def completion(
+                _endpoint: ModelEndpoint,
+                messages: list[dict[str, Any]],
+                **kwargs: Any,
+            ) -> dict[str, Any]:
+                observed_messages.extend(messages)
+                observed_tools.extend(
+                    item["function"]["name"] for item in kwargs.get("tools") or []
+                )
+                return {"role": "assistant", "content": "Local plan review complete."}
+
+            result = ResearchConversationAgent(
+                runtime,
+                history,
+                actions,
+                model_pool_runtime=ModelPoolRuntime(pool),
+                completion_fn=completion,
+                toolbox_factory=FakeToolbox,
+            ).run_turn(
+                trigger="autonomous",
+                autonomy_mode="advisory",
+            )
+
+        self.assertEqual(result["context"]["mode"], "localized_plan_exception")
+        self.assertEqual(len(observed_messages), 2)
+        rendered = json.dumps(observed_messages, ensure_ascii=False)
+        self.assertNotIn("UNRELATED_FULL_HISTORY_MARKER", rendered)
+        self.assertNotIn("UNRELATED_PLAN_BRANCH_MARKER", rendered)
+        self.assertIn("physics_candidates", rendered)
+        self.assertEqual(observed_tools, ["edit_application_plan"])
 
 
 if __name__ == "__main__":

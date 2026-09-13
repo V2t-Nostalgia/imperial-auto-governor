@@ -86,6 +86,7 @@ class RuntimeSnapshot:
     application_model_bindings: dict[str, str]
     application_id: str
     application_profile: ApplicationModelProfile
+    model_route_profile: ApplicationModelProfile
 
     @property
     def model_pool(self) -> ModelPool:
@@ -93,14 +94,14 @@ class RuntimeSnapshot:
         pool = next(
             item
             for item in self.model_pools
-            if item.pool_id == self.application_profile.pool_id
+            if item.pool_id == self.model_route_profile.pool_id
         )
         return pool.model_copy(
             update={
                 "endpoints": [
                     endpoint.model_copy(deep=True)
                     for endpoint in pool.endpoints
-                    if endpoint.model_id == self.application_profile.model_id
+                    if endpoint.model_id == self.model_route_profile.model_id
                 ]
             },
             deep=True,
@@ -108,7 +109,7 @@ class RuntimeSnapshot:
 
     @property
     def request_options(self) -> dict[str, Any]:
-        return copy.deepcopy(self.application_profile.request_options)
+        return copy.deepcopy(self.model_route_profile.request_options)
 
     @property
     def endpoint(self) -> ModelEndpoint:
@@ -122,24 +123,26 @@ class RuntimeSnapshot:
             key=lambda item: (item[1].priority, item[0]),
         )
         if not candidates:
-            raise ValueError(
-                "The active Application model has no enabled endpoint."
-            )
+            raise ValueError("The active Application model has no enabled endpoint.")
         return candidates[0][1].model_copy(deep=True)
 
 
 class RuntimeConfig:
     """Own model catalogs and application bindings; persist only on save()."""
 
-    _MODEL_KEYS = {
-        "endpoint",
-        "model_pool",
-        "model_pool_id",
-        "model_pools",
-        "request_options",
-        "application_model_profiles",
-        "application_model_bindings",
-    } | LEGACY_ENDPOINT_KEYS | LEGACY_REQUEST_OPTION_KEYS
+    _MODEL_KEYS = (
+        {
+            "endpoint",
+            "model_pool",
+            "model_pool_id",
+            "model_pools",
+            "request_options",
+            "application_model_profiles",
+            "application_model_bindings",
+        }
+        | LEGACY_ENDPOINT_KEYS
+        | LEGACY_REQUEST_OPTION_KEYS
+    )
 
     def __init__(self, source_path: Path, document: Mapping[str, Any]) -> None:
         self.source_path = source_path.resolve()
@@ -159,9 +162,7 @@ class RuntimeConfig:
         if direct:
             return direct
 
-        environment_name = str(
-            document.get("api_key_env", "IAG_LLM_API_KEY")
-        ).strip()
+        environment_name = str(document.get("api_key_env", "IAG_LLM_API_KEY")).strip()
         if environment_name:
             environment_value = os.environ.get(environment_name, "").strip()
             if environment_value:
@@ -193,9 +194,7 @@ class RuntimeConfig:
                 "Legacy runtime configuration requires both model and base_url."
             )
 
-        context_window = int(
-            document.get("model_context_window_tokens", 128_000)
-        )
+        context_window = int(document.get("model_context_window_tokens", 128_000))
         output_reserve = int(
             document.get(
                 "max_output_tokens",
@@ -211,18 +210,13 @@ class RuntimeConfig:
             )
 
         return ModelEndpoint(
-            endpoint_id=str(
-                document.get("endpoint_id", "legacy-default")
-            ).strip()
+            endpoint_id=str(document.get("endpoint_id", "legacy-default")).strip()
             or "legacy-default",
-            display_name=str(document.get("display_name", model)).strip()
-            or model,
+            display_name=str(document.get("display_name", model)).strip() or model,
             model_id=str(document.get("model_id", model)).strip() or model,
             model=model,
             model_transport=str(document.get("model_transport", "openai_sdk")),
-            provider=str(
-                document.get("provider", "responses_compatible")
-            ),
+            provider=str(document.get("provider", "responses_compatible")),
             base_url=base_url,
             supports_reasoning=bool(
                 document.get(
@@ -249,17 +243,13 @@ class RuntimeConfig:
             messages_path=str(document.get("messages_path", "/messages")),
             models_path=document.get("models_path", "/models"),
             timeout_seconds=int(document.get("timeout_seconds", 120)),
-            probe_timeout_seconds=int(
-                document.get("probe_timeout_seconds", 10)
-            ),
+            probe_timeout_seconds=int(document.get("probe_timeout_seconds", 10)),
             rate_limit_cooldown_seconds=int(
                 document.get("rate_limit_cooldown_seconds", 300)
             ),
             sdk_max_retries=int(document.get("sdk_max_retries", 2)),
             extra_headers=dict(document.get("extra_headers", {})),
-            api_key_header=str(
-                document.get("api_key_header", "Authorization")
-            ),
+            api_key_header=str(document.get("api_key_header", "Authorization")),
             api_key_prefix=str(document.get("api_key_prefix", "Bearer ")),
         )
 
@@ -352,10 +342,7 @@ class RuntimeConfig:
         raw = document.get("application_model_bindings")
         if raw is not None and not isinstance(raw, Mapping):
             raise ValueError("application_model_bindings must be a JSON object.")
-        bindings = {
-            str(key): str(value)
-            for key, value in dict(raw or {}).items()
-        }
+        bindings = {str(key): str(value) for key, value in dict(raw or {}).items()}
         for profile in profiles:
             bindings.setdefault(profile.application_id, profile.profile_id)
         return bindings
@@ -407,28 +394,54 @@ class RuntimeConfig:
                     f"Profile {profile.profile_id!r} references an unknown model."
                 )
 
-        validated_bindings = {
-            str(key): str(value) for key, value in bindings.items()
-        }
+        validated_bindings = {str(key): str(value) for key, value in bindings.items()}
         for application_id, profile_id in validated_bindings.items():
             profile = profiles_by_id.get(profile_id)
             if profile is None or profile.application_id != application_id:
                 raise ValueError(
                     f"Application {application_id!r} has an invalid profile binding."
                 )
-            pool = pools_by_id[profile.pool_id]
+            route_profile = RuntimeConfig._resolve_model_route_profile(
+                profile,
+                profiles_by_id,
+                validated_bindings,
+            )
+            pool = pools_by_id[route_profile.pool_id]
             if not any(
-                endpoint.enabled and endpoint.model_id == profile.model_id
+                endpoint.enabled and endpoint.model_id == route_profile.model_id
                 for endpoint in pool.endpoints
             ):
                 raise ValueError(
-                    f"The active profile for {application_id!r} has no enabled endpoint."
+                    f"The active profile for {application_id!r} has no "
+                    "enabled endpoint."
                 )
         if DEFAULT_APPLICATION_ID not in validated_bindings:
-            raise ValueError(
-                f"A binding for {DEFAULT_APPLICATION_ID!r} is required."
-            )
+            raise ValueError(f"A binding for {DEFAULT_APPLICATION_ID!r} is required.")
         return validated_pools, validated_profiles, validated_bindings
+
+    @staticmethod
+    def _resolve_model_route_profile(
+        profile: ApplicationModelProfile,
+        profiles_by_id: Mapping[str, ApplicationModelProfile],
+        bindings: Mapping[str, str],
+    ) -> ApplicationModelProfile:
+        """Resolve explicit Application inheritance without allowing cycles."""
+        current = profile
+        visited = {profile.application_id}
+        while current.inherit_model_from_application_id is not None:
+            source_application_id = current.inherit_model_from_application_id
+            if source_application_id in visited:
+                raise ValueError("Application model inheritance contains a cycle.")
+            visited.add(source_application_id)
+            source_profile_id = bindings.get(source_application_id)
+            source = profiles_by_id.get(str(source_profile_id or ""))
+            if source is None or source.application_id != source_application_id:
+                raise ValueError(
+                    f"Application {current.application_id!r} inherits an "
+                    f"unbound model route from {source_application_id!r}."
+                )
+            current = source
+        return current
 
     def _load_document(self, document: Mapping[str, Any]) -> None:
         pools = self._pools_from_document(document)
@@ -446,8 +459,7 @@ class RuntimeConfig:
             {
                 key: value
                 for key, value in document.items()
-                if key not in self._MODEL_KEYS
-                and key not in APPLICATION_OPTION_KEYS
+                if key not in self._MODEL_KEYS and key not in APPLICATION_OPTION_KEYS
             }
         )
 
@@ -465,22 +477,23 @@ class RuntimeConfig:
             raise KeyError(
                 f"Application {application_id!r} has no active model profile."
             )
+        route_profile = self._resolve_model_route_profile(
+            profile,
+            {item.profile_id: item for item in self._application_model_profiles},
+            self._application_model_bindings,
+        )
         settings = copy.deepcopy(self._settings)
         settings.update(copy.deepcopy(profile.application_options))
         return RuntimeSnapshot(
             settings=settings,
-            model_pools=tuple(
-                item.model_copy(deep=True) for item in self._model_pools
-            ),
+            model_pools=tuple(item.model_copy(deep=True) for item in self._model_pools),
             application_model_profiles=tuple(
-                item.model_copy(deep=True)
-                for item in self._application_model_profiles
+                item.model_copy(deep=True) for item in self._application_model_profiles
             ),
-            application_model_bindings=copy.deepcopy(
-                self._application_model_bindings
-            ),
+            application_model_bindings=copy.deepcopy(self._application_model_bindings),
             application_id=application_id,
             application_profile=profile.model_copy(deep=True),
+            model_route_profile=route_profile.model_copy(deep=True),
         )
 
     def snapshot(
@@ -489,6 +502,44 @@ class RuntimeConfig:
     ) -> RuntimeSnapshot:
         with self._lock:
             return self._snapshot_unlocked(application_id)
+
+    def snapshot_profile(self, profile_id: str) -> RuntimeSnapshot:
+        """Build a route for an explicitly selected reusable model profile."""
+        selected = str(profile_id).strip()
+        with self._lock:
+            profile = next(
+                (
+                    item
+                    for item in self._application_model_profiles
+                    if item.profile_id == selected
+                ),
+                None,
+            )
+            if profile is None:
+                raise KeyError(f"Unknown Application model profile: {selected!r}")
+            route_profile = self._resolve_model_route_profile(
+                profile,
+                {item.profile_id: item for item in self._application_model_profiles},
+                self._application_model_bindings,
+            )
+            settings = copy.deepcopy(self._settings)
+            settings.update(copy.deepcopy(profile.application_options))
+            return RuntimeSnapshot(
+                settings=settings,
+                model_pools=tuple(
+                    item.model_copy(deep=True) for item in self._model_pools
+                ),
+                application_model_profiles=tuple(
+                    item.model_copy(deep=True)
+                    for item in self._application_model_profiles
+                ),
+                application_model_bindings=copy.deepcopy(
+                    self._application_model_bindings
+                ),
+                application_id=profile.application_id,
+                application_profile=profile.model_copy(deep=True),
+                model_route_profile=route_profile.model_copy(deep=True),
+            )
 
     def update(
         self,
@@ -514,8 +565,7 @@ class RuntimeConfig:
         with self._lock:
             pools = [item.model_copy(deep=True) for item in self._model_pools]
             profiles = [
-                item.model_copy(deep=True)
-                for item in self._application_model_profiles
+                item.model_copy(deep=True) for item in self._application_model_profiles
             ]
             bindings = copy.deepcopy(self._application_model_bindings)
 
@@ -544,15 +594,14 @@ class RuntimeConfig:
                         },
                         deep=True,
                     )
-                    if pool.pool_id == active.application_profile.pool_id
+                    if pool.pool_id == active.model_route_profile.pool_id
                     else pool
                     for pool in pools
                 ]
 
             if application_model_profiles is not None:
                 profiles = [
-                    item.model_copy(deep=True)
-                    for item in application_model_profiles
+                    item.model_copy(deep=True) for item in application_model_profiles
                 ]
             if application_model_bindings is not None:
                 bindings = {
@@ -648,8 +697,7 @@ class RuntimeConfig:
             return {
                 **copy.deepcopy(self._settings),
                 "model_pools": [
-                    self._public_pool_document(pool)
-                    for pool in self._model_pools
+                    self._public_pool_document(pool) for pool in self._model_pools
                 ],
                 "application_model_profiles": [
                     profile.model_dump(mode="json")
@@ -662,14 +710,15 @@ class RuntimeConfig:
 
     def save(self) -> None:
         with self._lock:
-            payload = json.dumps(
-                self.document(),
-                ensure_ascii=False,
-                indent=2,
-            ) + "\n"
-            self.source_path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self.source_path.with_suffix(
-                self.source_path.suffix + ".tmp"
+            payload = (
+                json.dumps(
+                    self.document(),
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
             )
+            self.source_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.source_path.with_suffix(self.source_path.suffix + ".tmp")
             temporary.write_text(payload, encoding="utf-8")
             os.replace(temporary, self.source_path)

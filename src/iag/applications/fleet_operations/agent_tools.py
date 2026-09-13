@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar
 
 from iag.core.conversation_store import ConversationStore
+from iag.core.resource_ledger import (
+    ResourceReservationError,
+    ResourceReservationLedger,
+)
 from iag.stellaris.execution.session_proxy_controller import (
     SessionProxyController,
     SessionProxyError,
 )
 from iag.stellaris.game_knowledge import detect_game_root
+from iag.stellaris.state.campaign_routes import CampaignRoutePlanner
 from iag.stellaris.state.expansion_profiles import (
     extract_expansion_profiles,
     selected_colonization,
@@ -31,6 +37,12 @@ from iag.stellaris.state.fleet_profiles import (
     selected_new_fleet_reinforcement,
     selected_ship_automation,
 )
+from iag.stellaris.state.invasion_profiles import (
+    extract_invasion_profiles,
+    selected_army_landing,
+    selected_army_recruitment,
+    selected_orbital_bombardment,
+)
 from iag.stellaris.state.planet_profiles import load_gamestate
 from iag.stellaris.state.save_ingest import resolve_current_save
 from iag.stellaris.state.ship_profiles import (
@@ -38,9 +50,96 @@ from iag.stellaris.state.ship_profiles import (
     extract_ship_profiles,
     ship_design_options,
 )
+from iag.stellaris.state.world_snapshot import WorldSnapshot, WorldStateService
 
 FLEET_PERMISSIONS_KEY = "fleet_permissions"
+FLEET_FULL_DELEGATION_KEY = "fleet_full_delegation"
 PENDING_NEW_FLEET_KEY = "pending_new_fleet_creation"
+PENDING_CAMPAIGN_KEY = "pending_campaign_route"
+PENDING_ARMY_RECRUITMENT_KEY = "pending_army_recruitment"
+CAMPAIGN_ROUTE_USAGE_KEY = "campaign_route_usage"
+
+
+INSPECT_CAMPAIGN_ROUTES_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "inspect_campaign_routes",
+        "description": (
+            "对一支已选军用舰队前往交战目标星系执行有界多目标 Pareto 路径搜索。"
+            "返回多条完整星系路径、关闭边境、恒星基地与行星抑制器成本，并依据"
+            "当前舰队部署和历史路线给出确定性的探索/拥堵排序；不会发包。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "fleet_id": {"type": "integer"},
+                "target_system_id": {"type": "integer"},
+            },
+            "required": ["fleet_id", "target_system_id"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+INSPECT_CAMPAIGN_DEPLOYMENT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "inspect_campaign_deployment",
+        "description": (
+            "读取全局战区部署：各敌对目标战线的已知敌军与已投入军力、当前/历史"
+            "走廊拥堵、未覆盖的前线或占领区驻防点，以及按相对军力生成的主攻、"
+            "战列线和守备建议。每条战线还给出空间军力安全门槛、缺口与候选增援"
+            "编组；只有合计达到安全线的原子 task_force_package 才获得进攻分配。"
+            "用于先分配舰队角色再检查具体路线；不会发包。"
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+
+
+PREPARE_CAMPAIGN_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "prepare_campaign_route",
+        "description": (
+            "选择 inspect_campaign_routes 返回的一条路线并准备战役第一步。之后每份"
+            "新同步存档由固定续接器重新验证并最多推进一步；模型不能自行跳过抑制器、"
+            "边境、舰队授权或守军检查。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "fleet_id": {"type": "integer"},
+                "target_system_id": {"type": "integer"},
+                "route_id": {"type": "string"},
+                "ground_policy": {
+                    "type": "string",
+                    "enum": [
+                        "bombard_then_land",
+                        "land_when_advantaged",
+                        "bombard_only",
+                    ],
+                },
+                "bombardment_stance": {
+                    "type": "string",
+                    "enum": ["selective", "indiscriminate"],
+                },
+                "transport_fleet_id": {"type": "integer"},
+                "reason": {"type": "string", "maxLength": 300},
+            },
+            "required": [
+                "fleet_id",
+                "target_system_id",
+                "route_id",
+                "ground_policy",
+                "bombardment_stance",
+                "reason",
+            ],
+            "additionalProperties": False,
+        },
+    },
+}
 
 INSPECT_FLEETS_TOOL = {
     "type": "function",
@@ -61,7 +160,8 @@ PREPARE_MOVE_TOOL = {
         "name": "prepare_fleet_move",
         "description": (
             "准备一条舰队移动命令。源舰队必须在最新存档中可用，且玩家已对该舰队"
-            "开启移动权限；目标星系必须有存档可验证的 d32c 目标对象。"
+            "开启移动权限；目标星系必须有存档可验证的 d32c 目标对象。此工具只用于"
+            "重新部署，不能代替攻击命令。"
         ),
         "parameters": {
             "type": "object",
@@ -81,8 +181,11 @@ PREPARE_ATTACK_TOOL = {
     "function": {
         "name": "prepare_fleet_attack",
         "description": (
-            "准备一条 6b33 舰队攻击命令。目标必须由最新存档中的玩家 hostile "
-            "情报与当前全局舰队位置唯一匹配，来源舰队还必须获得逐舰队攻击授权。"
+            "准备一条 6b33 舰队攻击命令。目标必须来自最新存档中当前传感器"
+            "确认的敌对舰队，或玩家战略地图已知的交战国恒星基地；来源舰队必须"
+            "列在目标的 reachable_from_fleet_ids 中并获得逐舰队攻击授权。目标位于"
+            "其他星系时也仍然使用本工具。固定层会合计目标星系全部已知敌军和"
+            "已在场／正在抵达的友军；低于玩家空间军力安全系数时拒绝发包。"
         ),
         "parameters": {
             "type": "object",
@@ -92,6 +195,85 @@ PREPARE_ATTACK_TOOL = {
                 "reason": {"type": "string", "maxLength": 300},
             },
             "required": ["fleet_id", "target_fleet_id", "reason"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+INSPECT_INVASION_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "inspect_invasion_state",
+        "description": (
+            "读取最新同步存档中的敌方战争殖民地、逐舰队可达性、轨道轰炸姿态、"
+            "运输舰队登陆状态，以及固定程序生成的机器人陆军招募候选。"
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+
+PREPARE_BOMBARDMENT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "prepare_orbital_bombardment",
+        "description": (
+            "准备轨道轰炸：先设置已验证的轰炸姿态，再令已授权军用舰队进入"
+            "最新存档确认可达的敌方殖民地轨道。两个协议步骤会原子化连续执行。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "fleet_id": {"type": "integer"},
+                "target_planet_id": {"type": "integer"},
+                "stance": {
+                    "type": "string",
+                    "enum": ["selective", "indiscriminate", "raiding"],
+                },
+                "reason": {"type": "string", "maxLength": 300},
+            },
+            "required": ["fleet_id", "target_planet_id", "stance", "reason"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+PREPARE_ARMY_LANDING_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "prepare_army_landing",
+        "description": (
+            "准备运输舰队登陆。来源必须是最新存档中空闲、未失踪且获玩家授权的"
+            "运输舰队；目标必须是该舰队当前可达的交战国殖民地。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "transport_fleet_id": {"type": "integer"},
+                "target_planet_id": {"type": "integer"},
+                "reason": {"type": "string", "maxLength": 300},
+            },
+            "required": ["transport_fleet_id", "target_planet_id", "reason"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+PREPARE_ARMY_RECRUITMENT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "prepare_army_recruitment",
+        "description": (
+            "准备机器人进攻部队招募。candidate_id 必须来自 inspect_invasion_state；"
+            "count 会展开为同一行动锁内逐条确认的普通招募命令，任一失败即停止。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "candidate_id": {"type": "string"},
+                "count": {"type": "integer", "minimum": 1, "maximum": 5},
+                "reason": {"type": "string", "maxLength": 300},
+            },
+            "required": ["candidate_id", "count", "reason"],
             "additionalProperties": False,
         },
     },
@@ -285,7 +467,8 @@ INSPECT_SHIPS_TOOL = {
     "function": {
         "name": "inspect_ship_state",
         "description": (
-            "读取玩家当前舰船设计、组件槽位、直接船坞队列和在建舰船。"
+            "读取玩家当前可见舰船设计、组件槽位、直接船坞队列和在建舰船。"
+            "自动设计关闭后遗留的隐藏自动生成模板不会暴露给模型。"
             "建设项 ID 是带代际的对象句柄，不应当作普通队列序号。"
         ),
         "parameters": {"type": "object", "properties": {}},
@@ -297,7 +480,8 @@ INSPECT_SHIP_DESIGN_OPTIONS_TOOL = {
     "function": {
         "name": "inspect_ship_design_options",
         "description": (
-            "按需读取一份玩家舰船设计可用的区段、必需组件和槽位候选。先不传 "
+            "按需读取一份玩家当前可见舰船设计可用的区段、必需组件和槽位候选。"
+            "隐藏自动生成模板不能作为设计锚点。先不传 "
             "section_template 查看区段与必需组件；选定区段后再传 section_template，"
             "只展开该区段的合法组件，避免把整个组件库塞入上下文。"
         ),
@@ -328,7 +512,15 @@ PREPARE_SHIP_DESIGN_TOOL = {
             "type": "object",
             "properties": {
                 "source_design_id": {"type": "integer"},
-                "new_name": {"type": "string", "maxLength": 48},
+                "new_name": {
+                    "type": "string",
+                    "maxLength": 48,
+                    "description": (
+                        "新设计的唯一字面名称。玩家未指定名称时由舰队 Agent "
+                        "根据舰型与职责自主拟定；仅使用 ASCII 字母、数字、空格、"
+                        "点、下划线或连字符。"
+                    ),
+                },
                 "component_replacements": {
                     "type": "array",
                     "maxItems": 32,
@@ -501,18 +693,76 @@ def normalized_permissions(value: Any) -> dict[str, dict[str, bool]]:
             "allow_upgrade": bool(permission.get("allow_upgrade", False)),
             "allow_automation": bool(permission.get("allow_automation", False)),
             "allow_build_starbase": bool(permission.get("allow_build_starbase", False)),
+            "allow_bombardment": bool(permission.get("allow_bombardment", False)),
+            "allow_land_armies": bool(permission.get("allow_land_armies", False)),
         }
     return result
 
 
+FLEET_PERMISSION_FIELDS = (
+    "allow_move",
+    "allow_attack",
+    "allow_reinforce",
+    "allow_repair",
+    "allow_upgrade",
+    "allow_automation",
+    "allow_build_starbase",
+    "allow_bombardment",
+    "allow_land_armies",
+)
+
+
 def fleet_label(fleet: dict[str, Any]) -> str:
     return str(
-        fleet.get("display_name_hint") or fleet.get("name_key") or fleet.get("fleet_id")
+        fleet.get("display_name_hint")
+        or fleet.get("planet_display_name_hint")
+        or fleet.get("name_key")
+        or fleet.get("planet_name_key")
+        or fleet.get("fleet_id")
+        or fleet.get("planet_id")
+    )
+
+
+def has_callable_fleet_permission(fleet: dict[str, Any]) -> bool:
+    """Return whether any player-authorized capability is callable right now."""
+    permission = fleet.get("permission", {})
+    if not isinstance(permission, dict):
+        return False
+    military_default = fleet.get("ai_callable_now") is True
+    checks = (
+        ("allow_move", fleet.get("move_callable_now", military_default)),
+        ("allow_attack", fleet.get("attack_callable_now", military_default)),
+        (
+            "allow_reinforce",
+            fleet.get("reinforcement_callable_now", military_default),
+        ),
+        ("allow_repair", fleet.get("maintenance_callable_now", False)),
+        ("allow_upgrade", fleet.get("maintenance_callable_now", False)),
+        ("allow_automation", fleet.get("civilian_callable_now", False)),
+        ("allow_build_starbase", fleet.get("civilian_callable_now", False)),
+        ("allow_bombardment", fleet.get("attack_callable_now", False)),
+        ("allow_land_armies", fleet.get("landing_callable_now", False)),
+    )
+    return any(
+        permission.get(name) is True and callable_now for name, callable_now in checks
     )
 
 
 class FleetToolbox:
     """One model-turn view over fleet state and one prepared order."""
+
+    # inspect_ship_state is intentionally absent: it may reconcile and persist
+    # a newly allocated fleet template after a fresh save arrives.
+    parallel_read_tools: ClassVar[frozenset[str]] = frozenset(
+        {
+            "inspect_fleet_state",
+            "inspect_invasion_state",
+            "inspect_expansion_state",
+            "inspect_campaign_deployment",
+            "inspect_campaign_routes",
+            "inspect_ship_design_options",
+        }
+    )
 
     tool_names: ClassVar[frozenset[str]] = frozenset(
         {
@@ -535,6 +785,13 @@ class FleetToolbox:
             "prepare_fleet_reinforcement",
             "prepare_new_fleet",
             "execute_prepared_ship_action",
+            "inspect_invasion_state",
+            "prepare_orbital_bombardment",
+            "prepare_army_landing",
+            "prepare_army_recruitment",
+            "inspect_campaign_deployment",
+            "inspect_campaign_routes",
+            "prepare_campaign_route",
         }
     )
 
@@ -544,10 +801,15 @@ class FleetToolbox:
         store: ConversationStore,
         *,
         allow_execute: bool,
+        world_snapshot: WorldSnapshot | None = None,
+        world_state_service: WorldStateService | None = None,
     ) -> None:
         self.config = dict(config)
         self.store = store
         self.allow_execute = allow_execute
+        self.world_snapshot = world_snapshot
+        self.world_state_service = world_state_service
+        self.game_root = detect_game_root(self.config)
         self.enabled = bool(self.config.get("experimental_fleet_tools_enabled", False))
         self.attack_enabled = bool(
             self.config.get("experimental_fleet_attack_enabled", False)
@@ -594,6 +856,31 @@ class FleetToolbox:
                 False,
             )
         )
+        self.invasion_enabled = bool(
+            self.config.get("experimental_invasion_tools_enabled", False)
+        )
+        self.maximum_army_recruitment_count = max(
+            1,
+            min(int(self.config.get("maximum_army_recruitment_batch", 5)), 5),
+        )
+        self.campaign_ground_force_ratio = max(
+            1.0,
+            min(float(self.config.get("campaign_ground_force_ratio", 1.25)), 5.0),
+        )
+        self.campaign_space_force_ratio = max(
+            1.0,
+            min(float(self.config.get("campaign_space_force_ratio", 1.20)), 5.0),
+        )
+        self.campaign_bombardment_threshold = max(
+            0.0,
+            min(
+                float(self.config.get("campaign_bombardment_threshold", 50.0)),
+                100.0,
+            ),
+        )
+        self.auto_authorize_recruited_transport_fleets = bool(
+            self.config.get("auto_authorize_recruited_transport_fleets", False)
+        )
         self.minimum_colonization_habitability = float(
             self.config.get("minimum_colonization_habitability", 0.30)
         )
@@ -616,6 +903,39 @@ class FleetToolbox:
             ),
         )
         self.prepared: dict[str, Any] | None = None
+        self._campaign_profile_cache: dict[str, Any] | None = None
+
+    def _full_delegation(self) -> bool:
+        return self.store.get_state(FLEET_FULL_DELEGATION_KEY, False) is True
+
+    def _permission_granted(
+        self,
+        fleet_id: int | str | None,
+        field: str,
+        permissions: dict[str, dict[str, bool]] | None = None,
+    ) -> bool:
+        if fleet_id is None:
+            return False
+        if self._full_delegation() and field.startswith("allow_"):
+            return True
+        if field not in FLEET_PERMISSION_FIELDS:
+            return False
+        selected = permissions
+        if selected is None:
+            selected = normalized_permissions(
+                self.store.get_state(FLEET_PERMISSIONS_KEY, {})
+            )
+        return selected.get(str(fleet_id), {}).get(field, False) is True
+
+    def _rendered_permission(
+        self,
+        fleet_id: int | str | None,
+        permissions: dict[str, dict[str, bool]],
+    ) -> dict[str, bool]:
+        return {
+            field: self._permission_granted(fleet_id, field, permissions)
+            for field in FLEET_PERMISSION_FIELDS
+        }
 
     def schemas(self) -> list[dict[str, Any]]:
         value: list[dict[str, Any]] = []
@@ -644,12 +964,30 @@ class FleetToolbox:
             value.append(PREPARE_COLONIZATION_TOOL)
         if self.starbase_enabled:
             value.append(PREPARE_STARBASE_OPERATION_TOOL)
+        if self.invasion_enabled:
+            value.extend(
+                [
+                    INSPECT_INVASION_TOOL,
+                    PREPARE_BOMBARDMENT_TOOL,
+                    PREPARE_ARMY_LANDING_TOOL,
+                    PREPARE_ARMY_RECRUITMENT_TOOL,
+                ]
+            )
+            if self.enabled and self.attack_enabled:
+                value.extend(
+                    [
+                        INSPECT_CAMPAIGN_DEPLOYMENT_TOOL,
+                        INSPECT_CAMPAIGN_ROUTES_TOOL,
+                        PREPARE_CAMPAIGN_TOOL,
+                    ]
+                )
         if self.allow_execute and (
             self.enabled
             or self.maintenance_enabled
             or self.civilian_ship_enabled
             or self.colonization_enabled
             or self.starbase_enabled
+            or self.invasion_enabled
         ):
             value.append(EXECUTE_FLEET_TOOL)
         if (
@@ -685,34 +1023,731 @@ class FleetToolbox:
         campaign_id = self.store.conversation_metadata().get("campaign_id")
         if not campaign_id:
             raise FleetToolError("当前战役会话尚未绑定房主存档。")
+        if self.world_snapshot is not None:
+            return self.world_snapshot.path
         return resolve_current_save(
             self.config,
             expected_campaign_id=str(campaign_id),
         )
 
+    def _pinned_snapshot(self) -> WorldSnapshot | None:
+        if self.world_snapshot is not None:
+            return self.world_snapshot
+        if self.world_state_service is None:
+            return None
+        campaign_id = self.store.conversation_metadata().get("campaign_id")
+        if not campaign_id:
+            raise FleetToolError("当前战役会话尚未绑定房主存档。")
+        self.world_snapshot = self.world_state_service.pin(
+            self.config,
+            expected_campaign_id=str(campaign_id),
+        )
+        return self.world_snapshot
+
+    def assert_world_snapshot_current(self) -> None:
+        snapshot = self.world_snapshot
+        service = self.world_state_service
+        if snapshot is None or service is None:
+            return
+        campaign_id = self.store.conversation_metadata().get("campaign_id")
+        service.assert_current(
+            snapshot,
+            self.config,
+            expected_campaign_id=(str(campaign_id) if campaign_id else None),
+        )
+
     def _profile(self) -> tuple[Path, dict[str, Any]]:
+        snapshot = self._pinned_snapshot()
+        if snapshot is not None:
+            return snapshot.path, snapshot.fleet_profile()
         path = self._save_path()
         return path, extract_fleet_profiles(load_gamestate(path))
 
     def _ship_profile(self) -> tuple[Path, dict[str, Any]]:
+        snapshot = self._pinned_snapshot()
+        if snapshot is not None:
+            return snapshot.path, snapshot.ship_profile(game_root=self.game_root)
         path = self._save_path()
         return path, extract_ship_profiles(
             load_gamestate(path),
-            game_root=detect_game_root(self.config),
+            game_root=self.game_root,
         )
 
     def _expansion_profile(self) -> tuple[Path, dict[str, Any]]:
+        snapshot = self._pinned_snapshot()
+        if snapshot is not None:
+            if self.game_root is None:
+                raise FleetToolError("未找到 Stellaris 安装目录。")
+            return snapshot.path, snapshot.expansion_profile(
+                game_root=self.game_root,
+                minimum_habitability=self.minimum_colonization_habitability,
+            )
         path = self._save_path()
         return path, extract_expansion_profiles(
             load_gamestate(path),
-            game_root=detect_game_root(self.config),
+            game_root=self.game_root,
             minimum_habitability=self.minimum_colonization_habitability,
         )
+
+    def _invasion_profile(self) -> tuple[Path, dict[str, Any]]:
+        snapshot = self._pinned_snapshot()
+        if snapshot is not None:
+            return snapshot.path, snapshot.invasion_profile(
+                game_root=self.game_root,
+                maximum_recruitment_count=self.maximum_army_recruitment_count,
+            )
+        path = self._save_path()
+        return path, extract_invasion_profiles(
+            load_gamestate(path),
+            game_root=self.game_root,
+            maximum_recruitment_count=self.maximum_army_recruitment_count,
+        )
+
+    def _campaign_profiles(
+        self,
+    ) -> tuple[
+        Path,
+        dict[str, Any],
+        dict[str, Any],
+        CampaignRoutePlanner,
+    ]:
+        snapshot = self._pinned_snapshot()
+        if snapshot is not None:
+            commitments = self._campaign_deployment_commitments()
+            fleet_profile = snapshot.fleet_profile()
+            invasion_profile = snapshot.invasion_profile(
+                game_root=self.game_root,
+                maximum_recruitment_count=self.maximum_army_recruitment_count,
+            )
+            planner = snapshot.campaign_planner(
+                game_root=self.game_root,
+                maximum_recruitment_count=self.maximum_army_recruitment_count,
+                deployment_commitments=commitments,
+                minimum_space_force_ratio=self.campaign_space_force_ratio,
+            )
+            return snapshot.path, fleet_profile, invasion_profile, planner
+        path = self._save_path()
+        save_hash = sha256_file(path)
+        commitments = self._campaign_deployment_commitments()
+        commitment_hash = hashlib.sha256(
+            json.dumps(
+                commitments,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        cache = self._campaign_profile_cache
+        if (
+            cache is not None
+            and cache.get("path") == path
+            and cache.get("save_hash") == save_hash
+            and cache.get("commitment_hash") == commitment_hash
+        ):
+            return (
+                path,
+                cache["fleet_profile"],
+                cache["invasion_profile"],
+                cache["planner"],
+            )
+        text = load_gamestate(path)
+        fleet_profile = extract_fleet_profiles(text)
+        invasion_profile = extract_invasion_profiles(
+            text,
+            game_root=self.game_root,
+            maximum_recruitment_count=self.maximum_army_recruitment_count,
+            fleet_profile=fleet_profile,
+        )
+        planner = CampaignRoutePlanner(
+            text,
+            game_root=self.game_root,
+            fleet_profile=fleet_profile,
+            invasion_profile=invasion_profile,
+            maximum_recruitment_count=self.maximum_army_recruitment_count,
+            deployment_commitments=commitments,
+            minimum_space_force_ratio=self.campaign_space_force_ratio,
+        )
+        self._campaign_profile_cache = {
+            "path": path,
+            "save_hash": save_hash,
+            "commitment_hash": commitment_hash,
+            "fleet_profile": fleet_profile,
+            "invasion_profile": invasion_profile,
+            "planner": planner,
+        }
+        return path, fleet_profile, invasion_profile, planner
+
+    def _campaign_deployment_commitments(self) -> list[dict[str, Any]]:
+        raw_usage = self.store.get_state(CAMPAIGN_ROUTE_USAGE_KEY, [])
+        usage = (
+            [dict(item) for item in raw_usage if isinstance(item, dict)]
+            if isinstance(raw_usage, list)
+            else []
+        )
+        pending = self.store.get_state(PENDING_CAMPAIGN_KEY)
+        if isinstance(pending, dict) and pending.get("selected_path_system_ids"):
+            pending_id = str(pending.get("campaign_plan_id") or "")
+            usage = [
+                item
+                for item in usage
+                if str(item.get("campaign_plan_id") or "") != pending_id
+            ]
+            usage.append(
+                {
+                    "campaign_plan_id": pending_id,
+                    "fleet_id": pending.get("fleet_id"),
+                    "target_system_id": pending.get("target_system_id"),
+                    "path_system_ids": pending.get("selected_path_system_ids"),
+                    "route_type": pending.get("route_type"),
+                    "status": pending.get("status") or "active",
+                }
+            )
+        return usage[-64:]
+
+    def _record_campaign_route_usage(
+        self,
+        plan: dict[str, Any],
+        *,
+        status: str,
+    ) -> None:
+        if not plan.get("selected_path_system_ids"):
+            return
+        plan_id = str(plan.get("campaign_plan_id") or "")
+        raw = self.store.get_state(CAMPAIGN_ROUTE_USAGE_KEY, [])
+        usage = (
+            [dict(item) for item in raw if isinstance(item, dict)]
+            if isinstance(raw, list)
+            else []
+        )
+        usage = [
+            item for item in usage if str(item.get("campaign_plan_id") or "") != plan_id
+        ]
+        usage.append(
+            {
+                "campaign_plan_id": plan_id,
+                "fleet_id": int(plan["fleet_id"]),
+                "target_system_id": int(plan["target_system_id"]),
+                "path_system_ids": [
+                    int(value) for value in plan["selected_path_system_ids"]
+                ],
+                "route_type": str(plan.get("route_type") or ""),
+                "status": status,
+                "updated_at": now_iso(),
+                "last_action_game_date": plan.get("last_action_game_date"),
+            }
+        )
+        self.store.set_state(CAMPAIGN_ROUTE_USAGE_KEY, usage[-64:])
+
+    def _resource_ledger(self) -> ResourceReservationLedger:
+        return ResourceReservationLedger(self.store)
+
+    @staticmethod
+    def _country_stockpile(profile: dict[str, Any]) -> dict[str, Any]:
+        value = profile.get("country_stockpile", {})
+        return dict(value) if isinstance(value, dict) else {}
+
+    def _resource_status(
+        self,
+        path: Path,
+        profile: dict[str, Any],
+    ) -> dict[str, Any]:
+        try:
+            return self._resource_ledger().status(
+                source_save_sha256=sha256_file(path),
+                stockpile=self._country_stockpile(profile),
+            )
+        except ResourceReservationError as error:
+            raise FleetToolError(str(error)) from error
+
+    def _campaign_landing_assessment(
+        self,
+        *,
+        target: dict[str, Any],
+        transport: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        defenders = target.get("defending_armies", {})
+        defenders = defenders if isinstance(defenders, dict) else {}
+        attackers = (
+            transport.get("transport_armies", {}) if isinstance(transport, dict) else {}
+        )
+        attackers = attackers if isinstance(attackers, dict) else {}
+        attacker_health = float(attackers.get("current_health_total") or 0.0)
+        defender_health = float(defenders.get("current_health_total") or 0.0)
+        required_health = defender_health * self.campaign_ground_force_ratio
+        adequate = defender_health <= 0 or attacker_health >= required_health
+        return {
+            "adequate": adequate,
+            "attacker_army_count": int(attackers.get("army_count") or 0),
+            "defender_army_count": int(defenders.get("army_count") or 0),
+            "attacker_current_health_total": attacker_health,
+            "defender_current_health_total": defender_health,
+            "required_attacker_health_total": required_health,
+            "safety_ratio": self.campaign_ground_force_ratio,
+            "authority": (
+                "save_army_health_pool_comparison_not_full_combat_simulation"
+            ),
+        }
+
+    @staticmethod
+    def _transport_army_count(fleet: dict[str, Any]) -> int:
+        armies = fleet.get("transport_armies", {})
+        parsed_count = (
+            int(armies.get("army_count") or 0) if isinstance(armies, dict) else 0
+        )
+        return max(int(fleet.get("ship_count") or 0), parsed_count)
+
+    def _campaign_ground_step(
+        self,
+        *,
+        plan: dict[str, Any],
+        target: dict[str, Any],
+        invasion_profile: dict[str, Any],
+        permissions: dict[str, dict[str, bool]],
+    ) -> dict[str, Any]:
+        fleet_id = int(plan["fleet_id"])
+        source = next(
+            (
+                item
+                for item in invasion_profile.get("fleets", [])
+                if int(item["fleet_id"]) == fleet_id
+            ),
+            None,
+        )
+        transport_id = plan.get("transport_fleet_id")
+        transport = next(
+            (
+                item
+                for item in invasion_profile.get("fleets", [])
+                if transport_id is not None
+                and int(item["fleet_id"]) == int(transport_id)
+            ),
+            None,
+        )
+        assessment = self._campaign_landing_assessment(
+            target=target,
+            transport=transport,
+        )
+        landing_authorized = bool(
+            transport is not None
+            and self._permission_granted(
+                transport_id,
+                "allow_land_armies",
+                permissions,
+            )
+        )
+        landing_ready = bool(
+            landing_authorized
+            and transport.get("landing_callable_now", False)
+            and assessment["adequate"]
+        )
+        damage = float(target.get("bombardment_damage") or 0.0)
+        ground_policy = str(plan["ground_policy"])
+        prefer_landing = ground_policy == "land_when_advantaged" or (
+            ground_policy == "bombard_then_land"
+            and damage >= self.campaign_bombardment_threshold
+        )
+        if prefer_landing and landing_ready:
+            return {
+                "state": "ready",
+                "action": "land_armies",
+                "order": selected_army_landing(
+                    invasion_profile,
+                    transport_fleet_id=int(transport_id),
+                    target_planet_id=int(target["planet_id"]),
+                ),
+                "landing_assessment": assessment,
+            }
+
+        if (
+            ground_policy != "bombard_only"
+            and transport is None
+            and damage >= (self.campaign_bombardment_threshold)
+        ):
+            return {
+                "state": "waiting_for_transport_fleet",
+                "mutated_game": False,
+                "landing_assessment": assessment,
+            }
+        if (
+            ground_policy != "bombard_only"
+            and transport is not None
+            and not landing_authorized
+            and damage >= self.campaign_bombardment_threshold
+        ):
+            return {
+                "state": "waiting_for_transport_permission",
+                "mutated_game": False,
+                "transport_fleet_id": int(transport_id),
+                "landing_assessment": assessment,
+            }
+        if (
+            ground_policy != "bombard_only"
+            and transport is not None
+            and landing_authorized
+            and damage >= self.campaign_bombardment_threshold
+            and not landing_ready
+        ):
+            return {
+                "state": "waiting_for_stronger_transport",
+                "mutated_game": False,
+                "transport_fleet_id": int(transport_id),
+                "landing_assessment": assessment,
+            }
+        if source is None or not source.get("attack_callable_now", False):
+            return {
+                "state": "waiting_for_military_fleet",
+                "mutated_game": False,
+                "landing_assessment": assessment,
+            }
+        if not self._permission_granted(
+            fleet_id,
+            "allow_bombardment",
+            permissions,
+        ):
+            return {
+                "state": "waiting_for_bombardment_permission",
+                "mutated_game": False,
+                "landing_assessment": assessment,
+            }
+        if ground_policy == "bombard_only" and damage >= (
+            self.campaign_bombardment_threshold
+        ):
+            return {
+                "state": "waiting_for_inhibitor_disable_or_manual_occupation",
+                "mutated_game": False,
+                "bombardment_damage": damage,
+                "landing_assessment": assessment,
+            }
+        return {
+            "state": "ready",
+            "action": "orbital_bombardment",
+            "order": selected_orbital_bombardment(
+                invasion_profile,
+                fleet_id=fleet_id,
+                target_planet_id=int(target["planet_id"]),
+                stance=str(plan["bombardment_stance"]),
+            ),
+            "landing_assessment": assessment,
+        }
+
+    @staticmethod
+    def _campaign_space_force_gate(
+        route: dict[str, Any],
+        system_id: int,
+    ) -> dict[str, Any] | None:
+        assessment = route.get("force_assessment", {})
+        if not isinstance(assessment, dict):
+            return None
+        engagement = next(
+            (
+                item
+                for item in assessment.get("engagements", [])
+                if isinstance(item, dict)
+                and int(item.get("system_id", -1)) == int(system_id)
+            ),
+            None,
+        )
+        if engagement is None or engagement.get("hard_gate_satisfied", False):
+            return None
+        status = str(engagement.get("status") or "force_assessment_unavailable")
+        return {
+            "state": (
+                "waiting_for_space_reinforcements"
+                if status == "reinforcement_required"
+                else "waiting_for_enemy_force_intelligence"
+            ),
+            "mutated_game": False,
+            "blocking_system_id": int(system_id),
+            "space_force_assessment": engagement,
+            "additional_military_power_required": float(
+                engagement.get("additional_military_power_required") or 0.0
+            ),
+        }
+
+    def _campaign_next_step(
+        self,
+        *,
+        plan: dict[str, Any],
+        route: dict[str, Any],
+        fleet_profile: dict[str, Any],
+        invasion_profile: dict[str, Any],
+    ) -> dict[str, Any]:
+        fleet_id = int(plan["fleet_id"])
+        permissions = normalized_permissions(
+            self.store.get_state(FLEET_PERMISSIONS_KEY, {})
+        )
+        source = next(
+            (
+                item
+                for item in fleet_profile.get("fleets", [])
+                if int(item["fleet_id"]) == fleet_id
+            ),
+            None,
+        )
+        if source is None:
+            return {"state": "source_fleet_missing", "mutated_game": False}
+
+        blockers = list(route.get("blockers", []))
+        objectives = blockers[0] if blockers else route.get("target_objectives", {})
+        starbases = list(
+            objectives.get(
+                "starbase_sources" if blockers else "hostile_starbases",
+                [],
+            )
+        )
+        if starbases:
+            if not self._permission_granted(
+                fleet_id,
+                "allow_attack",
+                permissions,
+            ):
+                return {
+                    "state": "waiting_for_attack_permission",
+                    "mutated_game": False,
+                }
+            if not source.get("attack_callable_now", False):
+                return {"state": "waiting_for_military_fleet", "mutated_game": False}
+            target = min(starbases, key=lambda item: int(item["fleet_id"]))
+            force_gate = self._campaign_space_force_gate(
+                route,
+                int(target["system_id"]),
+            )
+            if force_gate is not None:
+                return force_gate
+            return {
+                "state": "ready",
+                "action": "attack_fleet",
+                "order": selected_attack(
+                    fleet_profile,
+                    fleet_id,
+                    int(target["fleet_id"]),
+                ),
+            }
+
+        planetary = list(
+            objectives.get(
+                "planetary_sources" if blockers else "hostile_colonies",
+                [],
+            )
+        )
+        if planetary:
+            target = min(planetary, key=lambda item: int(item["planet_id"]))
+            return self._campaign_ground_step(
+                plan=plan,
+                target=target,
+                invasion_profile=invasion_profile,
+                permissions=permissions,
+            )
+        if blockers:
+            return {
+                "state": "unknown_inhibitor_source_needs_review",
+                "mutated_game": False,
+                "blocking_system_id": blockers[0].get("system_id"),
+            }
+
+        mobile_targets = list(objectives.get("hostile_mobile_fleets", []))
+        if mobile_targets:
+            if not self._permission_granted(
+                fleet_id,
+                "allow_attack",
+                permissions,
+            ):
+                return {
+                    "state": "waiting_for_attack_permission",
+                    "mutated_game": False,
+                }
+            if not source.get("attack_callable_now", False):
+                return {"state": "waiting_for_military_fleet", "mutated_game": False}
+            target = min(
+                mobile_targets,
+                key=lambda item: (
+                    -float(item.get("military_power") or 0.0),
+                    int(item["fleet_id"]),
+                ),
+            )
+            force_gate = self._campaign_space_force_gate(
+                route,
+                int(target["system_id"]),
+            )
+            if force_gate is not None:
+                return force_gate
+            return {
+                "state": "ready",
+                "action": "attack_fleet",
+                "order": selected_attack(
+                    fleet_profile,
+                    fleet_id,
+                    int(target["fleet_id"]),
+                ),
+            }
+        return {"state": "completed", "mutated_game": False}
+
+    def inspect_campaign_deployment(
+        self,
+        _arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not self.enabled or not self.attack_enabled or not self.invasion_enabled:
+            raise FleetToolError("战区部署需要同时启用舰队移动、攻击与入侵工具。")
+        path, fleet_profile, _invasion, planner = self._campaign_profiles()
+        permissions = normalized_permissions(
+            self.store.get_state(FLEET_PERMISSIONS_KEY, {})
+        )
+        if self._full_delegation():
+            authorized = {
+                int(fleet["fleet_id"])
+                for fleet in fleet_profile.get("fleets", [])
+                if isinstance(fleet, dict) and fleet.get("fleet_id") is not None
+            }
+        else:
+            authorized = {
+                int(fleet_id)
+                for fleet_id, grants in permissions.items()
+                if grants.get("allow_move", False) and grants.get("allow_attack", False)
+            }
+        return {
+            **planner.deployment_summary(authorized_fleet_ids=authorized),
+            "source_save": str(path),
+            "source_save_sha256": sha256_file(path),
+            "resource_reservations": self._resource_status(path, fleet_profile),
+            "authorization_rule": (
+                "Full delegation authorizes every otherwise callable fleet."
+                if self._full_delegation()
+                else "Only fleets with both allow_move and allow_attack appear in "
+                "role recommendations; garrison coverage still reflects every "
+                "observed player military fleet."
+            ),
+        }
+
+    def inspect_campaign_routes(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        if not self.enabled or not self.attack_enabled or not self.invasion_enabled:
+            raise FleetToolError("战役路线需要同时启用舰队移动、攻击与入侵工具。")
+        path, fleet_profile, _invasion, planner = self._campaign_profiles()
+        try:
+            result = planner.plan(
+                fleet_id=int(arguments["fleet_id"]),
+                target_system_id=int(arguments["target_system_id"]),
+            )
+        except (TypeError, ValueError) as error:
+            raise FleetToolError(str(error)) from error
+        return {
+            **result,
+            "source_save": str(path),
+            "source_save_sha256": sha256_file(path),
+            "resource_reservations": self._resource_status(path, fleet_profile),
+        }
+
+    def prepare_campaign_route(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        if not self.enabled or not self.attack_enabled or not self.invasion_enabled:
+            raise FleetToolError("战役路线需要同时启用舰队移动、攻击与入侵工具。")
+        pending = self.store.get_state(PENDING_CAMPAIGN_KEY)
+        if isinstance(pending, dict):
+            raise FleetToolError("当前战役已有一条路线正在执行或等待新存档。")
+        ground_policy = str(arguments.get("ground_policy") or "")
+        if ground_policy not in {
+            "bombard_then_land",
+            "land_when_advantaged",
+            "bombard_only",
+        }:
+            raise FleetToolError("不支持的战役地面行动策略。")
+        bombardment_stance = str(arguments.get("bombardment_stance") or "")
+        if bombardment_stance not in {"selective", "indiscriminate"}:
+            raise FleetToolError("战役轰炸姿态必须是选择性或无差别轰炸。")
+        path, fleet_profile, invasion_profile, planner = self._campaign_profiles()
+        try:
+            route_profile = planner.plan(
+                fleet_id=int(arguments["fleet_id"]),
+                target_system_id=int(arguments["target_system_id"]),
+            )
+            route = CampaignRoutePlanner.select_route(
+                route_profile,
+                str(arguments["route_id"]),
+            )
+        except (TypeError, ValueError) as error:
+            raise FleetToolError(str(error)) from error
+        plan_id = "campaign_" + datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
+        plan = {
+            "schema": "iag.pending_campaign_route.v1",
+            "campaign_plan_id": plan_id,
+            "status": "prepared",
+            "fleet_id": int(arguments["fleet_id"]),
+            "target_system_id": int(arguments["target_system_id"]),
+            "selected_route_id": str(route["route_id"]),
+            "route_type": str(route["route_type"]),
+            "selected_path_system_ids": list(route["path_system_ids"]),
+            "ground_policy": ground_policy,
+            "bombardment_stance": bombardment_stance,
+            "transport_fleet_id": (
+                int(arguments["transport_fleet_id"])
+                if arguments.get("transport_fleet_id") is not None
+                else None
+            ),
+            "reason": str(arguments["reason"]).strip(),
+            "created_at": now_iso(),
+            "source_save_sha256": sha256_file(path),
+            "source_game_date": fleet_profile.get("game_date"),
+        }
+        current_route = {
+            **route,
+            "target_objectives": route_profile["target_objectives"],
+        }
+        try:
+            step = self._campaign_next_step(
+                plan=plan,
+                route=current_route,
+                fleet_profile=fleet_profile,
+                invasion_profile=invasion_profile,
+            )
+        except ValueError as error:
+            raise FleetToolError(str(error)) from error
+        plan["current_step"] = step
+        if step.get("state") != "ready":
+            plan["status"] = str(step.get("state") or "needs_review")
+            plan["last_evaluated_save_sha256"] = sha256_file(path)
+            plan["updated_at"] = now_iso()
+            if plan["status"] == "completed":
+                self.store.set_state("last_campaign_route", plan)
+            elif plan["status"] not in {
+                "waiting_for_space_reinforcements",
+                "waiting_for_enemy_force_intelligence",
+            }:
+                self.store.set_state(PENDING_CAMPAIGN_KEY, plan)
+            return {
+                **plan,
+                "execution_required": False,
+                "run_id": None,
+            }
+        self.prepared = {
+            "run_id": plan_id,
+            "action": str(step["action"]),
+            "reason": plan["reason"],
+            "order": dict(step["order"]),
+            "campaign_plan": plan,
+            "source_save_sha256": sha256_file(path),
+            "source_game_date": fleet_profile.get("game_date"),
+            "prepared_at": now_iso(),
+        }
+        return {
+            **plan,
+            "run_id": plan_id,
+            "execution_required": True,
+            "prepared_action": step["action"],
+        }
 
     def inspect_ships(self) -> dict[str, Any]:
         path, profile = self._ship_profile()
         pending = self._pending_new_fleet_status()
         public_profile = dict(profile)
+        country_designs = list(public_profile.get("designs", []))
+        public_profile["designs"] = [
+            design
+            for design in country_designs
+            if isinstance(design, dict) and design.get("player_visible", True)
+        ]
+        public_profile["country_design_record_count"] = len(country_designs)
+        public_profile["hidden_autogenerated_design_count"] = sum(
+            isinstance(design, dict) and design.get("player_visible") is False
+            for design in country_designs
+        )
         component_choice_count = len(public_profile.pop("component_choice_index", []))
         return {
             **public_profile,
@@ -881,7 +1916,11 @@ class FleetToolbox:
         permissions = normalized_permissions(
             self.store.get_state(FLEET_PERMISSIONS_KEY, {})
         )
-        if not permissions.get(str(fleet_id), {}).get("allow_reinforce", False):
+        if not self._permission_granted(
+            fleet_id,
+            "allow_reinforce",
+            permissions,
+        ):
             raise FleetToolError(f"玩家没有授权调用舰队 {fleet_id} 进行增援。")
         try:
             selection = selected_fleet_reinforcement(
@@ -1109,6 +2148,264 @@ class FleetToolbox:
             "execution": execution,
         }
 
+    def reconcile_pending_army_recruitment_from_save(self) -> dict[str, Any]:
+        """Resolve the transport fleet created by a verified recruitment batch."""
+        raw = self.store.get_state(PENDING_ARMY_RECRUITMENT_KEY)
+        if not isinstance(raw, dict):
+            return {
+                "schema": "iag.save_continuation.army_recruitment.v1",
+                "state": "idle",
+                "mutated_game": False,
+            }
+        path, profile = self._invasion_profile()
+        current_hash = sha256_file(path)
+        baseline = {int(value) for value in raw.get("baseline_transport_fleet_ids", [])}
+        baseline_rows = raw.get("baseline_transport_fleets", [])
+        baseline_counts = {
+            int(item["fleet_id"]): int(item.get("army_count") or 0)
+            for item in baseline_rows
+            if isinstance(item, dict) and item.get("fleet_id") is not None
+        }
+        transports: list[dict[str, Any]] = []
+        for fleet in profile.get("fleets", []):
+            if fleet.get("ship_class") != "shipclass_transport":
+                continue
+            fleet_id = int(fleet["fleet_id"])
+            current_count = self._transport_army_count(fleet)
+            if fleet_id not in baseline or (
+                fleet_id in baseline_counts
+                and current_count > baseline_counts[fleet_id]
+            ):
+                transports.append(fleet)
+        pending = {
+            **raw,
+            "last_checked_save_sha256": current_hash,
+            "last_checked_game_date": profile.get("game_date"),
+            "updated_at": now_iso(),
+        }
+        if not transports:
+            pending["phase"] = "waiting_for_transport_formation"
+            self.store.set_state(PENDING_ARMY_RECRUITMENT_KEY, pending)
+            return {
+                "schema": "iag.save_continuation.army_recruitment.v1",
+                "state": "waiting_for_transport_formation",
+                "mutated_game": False,
+                "game_date": profile.get("game_date"),
+            }
+        if len(transports) != 1:
+            pending["phase"] = "needs_review"
+            pending["candidate_transport_fleet_ids"] = sorted(
+                int(fleet["fleet_id"]) for fleet in transports
+            )
+            self.store.set_state(PENDING_ARMY_RECRUITMENT_KEY, pending)
+            return {
+                "schema": "iag.save_continuation.army_recruitment.v1",
+                "state": "needs_review",
+                "mutated_game": False,
+                "candidate_transport_fleet_ids": pending[
+                    "candidate_transport_fleet_ids"
+                ],
+            }
+
+        transport = transports[0]
+        transport_id = int(transport["fleet_id"])
+        auto_authorized = False
+        if self.auto_authorize_recruited_transport_fleets:
+            permissions = normalized_permissions(
+                self.store.get_state(FLEET_PERMISSIONS_KEY, {})
+            )
+            permission = dict(permissions.get(str(transport_id), {}))
+            permission["allow_land_armies"] = True
+            permissions[str(transport_id)] = permission
+            self.store.set_state(FLEET_PERMISSIONS_KEY, permissions)
+            auto_authorized = True
+        expected = int(raw.get("expected_army_count") or 0)
+        observed_army_count = self._transport_army_count(transport)
+        baseline_army_count = baseline_counts.get(transport_id, 0)
+        recruited_army_count = max(observed_army_count - baseline_army_count, 0)
+        complete = recruited_army_count >= expected
+        resolved = {
+            **pending,
+            "phase": "confirmed_in_save" if complete else "transport_forming",
+            "transport_fleet_id": transport_id,
+            "transport_ship_count": int(transport.get("ship_count") or 0),
+            "observed_army_count": observed_army_count,
+            "baseline_army_count": baseline_army_count,
+            "recruited_army_count": recruited_army_count,
+            "transport_power": transport.get("transport_power"),
+            "transport_armies": transport.get("transport_armies"),
+            "auto_authorized_for_landing": auto_authorized,
+        }
+        self.store.set_state("last_army_recruitment", resolved)
+        self.store.set_state(
+            PENDING_ARMY_RECRUITMENT_KEY,
+            None if complete else resolved,
+        )
+        campaign = self.store.get_state(PENDING_CAMPAIGN_KEY)
+        if (
+            isinstance(campaign, dict)
+            and campaign.get("campaign_plan_id") == raw.get("campaign_plan_id")
+            and (
+                campaign.get("transport_fleet_id") is None
+                or campaign.get("status")
+                in {"waiting_for_transport_fleet", "waiting_for_stronger_transport"}
+            )
+        ):
+            campaign["transport_fleet_id"] = transport_id
+            campaign["updated_at"] = now_iso()
+            self.store.set_state(PENDING_CAMPAIGN_KEY, campaign)
+        return {
+            "schema": "iag.save_continuation.army_recruitment.v1",
+            "state": resolved["phase"],
+            "mutated_game": False,
+            "transport_fleet_id": transport_id,
+            "transport_ship_count": resolved["transport_ship_count"],
+            "recruited_army_count": recruited_army_count,
+            "auto_authorized_for_landing": auto_authorized,
+            "game_date": profile.get("game_date"),
+        }
+
+    def continue_pending_campaign_from_save(self) -> dict[str, Any]:
+        """Advance at most one save-backed campaign action."""
+        if not self.allow_execute:
+            raise FleetToolError("当前运行策略不允许自动续接战役。")
+        raw = self.store.get_state(PENDING_CAMPAIGN_KEY)
+        if not isinstance(raw, dict):
+            return {
+                "schema": "iag.save_continuation.campaign_route.v1",
+                "state": "idle",
+                "mutated_game": False,
+            }
+        path, fleet_profile, invasion_profile, planner = self._campaign_profiles()
+        current_hash = sha256_file(path)
+        if current_hash == str(raw.get("last_action_save_sha256") or ""):
+            return {
+                "schema": "iag.save_continuation.campaign_route.v1",
+                "state": "waiting_for_fresh_save",
+                "mutated_game": False,
+                "game_date": fleet_profile.get("game_date"),
+            }
+        plan = {
+            **raw,
+            "last_evaluated_save_sha256": current_hash,
+            "last_evaluated_game_date": fleet_profile.get("game_date"),
+            "updated_at": now_iso(),
+        }
+        try:
+            route_profile = planner.plan(
+                fleet_id=int(plan["fleet_id"]),
+                target_system_id=int(plan["target_system_id"]),
+            )
+        except ValueError as error:
+            if "no save-backed active-war objective" in str(error):
+                plan["status"] = "completed"
+                plan["completion_reason"] = "target_system_has_no_hostile_objective"
+                self.store.set_state("last_campaign_route", plan)
+                self.store.set_state(PENDING_CAMPAIGN_KEY, None)
+                self._record_campaign_route_usage(plan, status="completed")
+                return {
+                    "schema": "iag.save_continuation.campaign_route.v1",
+                    "state": "completed",
+                    "mutated_game": False,
+                    "target_system_id": plan["target_system_id"],
+                }
+            plan["status"] = "needs_review"
+            plan["error"] = str(error)
+            self.store.set_state(PENDING_CAMPAIGN_KEY, plan)
+            return {
+                "schema": "iag.save_continuation.campaign_route.v1",
+                "state": "needs_review",
+                "mutated_game": False,
+                "error": str(error),
+            }
+        route = CampaignRoutePlanner.resume_route(
+            route_profile,
+            previous_route_id=str(plan.get("selected_route_id") or "") or None,
+            previous_path_system_ids=[
+                int(value) for value in plan.get("selected_path_system_ids", [])
+            ],
+            previous_route_type=str(plan.get("route_type") or "") or None,
+        )
+        if route is None:
+            plan["status"] = str(route_profile.get("status") or "needs_review")
+            plan["route_diagnostics"] = {
+                "border_access_blockers": route_profile.get(
+                    "border_access_blockers", []
+                )
+            }
+            self.store.set_state(PENDING_CAMPAIGN_KEY, plan)
+            return {
+                "schema": "iag.save_continuation.campaign_route.v1",
+                "state": plan["status"],
+                "mutated_game": False,
+            }
+        plan.update(
+            {
+                "selected_route_id": route["route_id"],
+                "route_type": route["route_type"],
+                "selected_path_system_ids": list(route["path_system_ids"]),
+            }
+        )
+        route = {**route, "target_objectives": route_profile["target_objectives"]}
+        try:
+            step = self._campaign_next_step(
+                plan=plan,
+                route=route,
+                fleet_profile=fleet_profile,
+                invasion_profile=invasion_profile,
+            )
+        except ValueError as error:
+            plan["status"] = "needs_review"
+            plan["error"] = str(error)
+            self.store.set_state(PENDING_CAMPAIGN_KEY, plan)
+            return {
+                "schema": "iag.save_continuation.campaign_route.v1",
+                "state": "needs_review",
+                "mutated_game": False,
+                "error": str(error),
+            }
+        plan["current_step"] = step
+        if step.get("state") != "ready":
+            plan["status"] = str(step.get("state") or "needs_review")
+            if plan["status"] == "completed":
+                self.store.set_state("last_campaign_route", plan)
+                self.store.set_state(PENDING_CAMPAIGN_KEY, None)
+                self._record_campaign_route_usage(plan, status="completed")
+            else:
+                self.store.set_state(PENDING_CAMPAIGN_KEY, plan)
+            return {
+                "schema": "iag.save_continuation.campaign_route.v1",
+                "state": plan["status"],
+                "mutated_game": False,
+                "current_step": step,
+                "game_date": fleet_profile.get("game_date"),
+            }
+
+        run_id = "campaign_continue_" + datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
+        self.prepared = {
+            "run_id": run_id,
+            "action": str(step["action"]),
+            "reason": str(plan.get("reason") or "save-backed campaign continuation"),
+            "order": dict(step["order"]),
+            "campaign_plan": plan,
+            "source_save_sha256": current_hash,
+            "source_game_date": fleet_profile.get("game_date"),
+            "prepared_at": now_iso(),
+        }
+        execution = self.execute({"run_id": run_id})
+        confirmed_steps = int(execution.get("confirmed_protocol_steps") or 0)
+        mutated_game = bool(execution.get("success") or confirmed_steps > 0)
+        return {
+            "schema": "iag.save_continuation.campaign_route.v1",
+            "state": "executed" if execution.get("success") else "partially_executed",
+            "mutated_game": mutated_game,
+            "action": execution.get("action"),
+            "fleet_id": execution.get("fleet_id"),
+            "target_system_id": plan.get("target_system_id"),
+            "game_date": fleet_profile.get("game_date"),
+            "execution": execution,
+        }
+
     def execute_ship_action(self, arguments: dict[str, Any]) -> dict[str, Any]:
         if not self.allow_execute:
             raise FleetToolError("当前运行策略不允许自动执行。")
@@ -1116,6 +2413,7 @@ class FleetToolbox:
         if self.prepared is None or run_id != self.prepared["run_id"]:
             raise FleetToolError("run_id 必须来自本回合刚准备的舰船动作。")
         action = str(self.prepared.get("action") or "")
+        resource_reservation_id: str | None = None
         if action in {
             "reinforce_fleet_to_target",
             "create_new_fleet",
@@ -1253,7 +2551,11 @@ class FleetToolbox:
                 permissions = normalized_permissions(
                     self.store.get_state(FLEET_PERMISSIONS_KEY, {})
                 )
-                if not permissions.get(str(fleet_id), {}).get("allow_reinforce", False):
+                if not self._permission_granted(
+                    fleet_id,
+                    "allow_reinforce",
+                    permissions,
+                ):
                     raise FleetToolError("玩家在执行前撤销了该舰队的增援权限。")
                 try:
                     refreshed = selected_fleet_reinforcement(
@@ -1265,6 +2567,19 @@ class FleetToolbox:
                     )
                 except (TypeError, ValueError) as error:
                     raise FleetToolError(str(error)) from error
+            resource_reservation_id = f"fleet_operations:{run_id}"
+            try:
+                self._resource_ledger().reserve(
+                    reservation_id=resource_reservation_id,
+                    application_id="fleet_operations",
+                    action=action,
+                    source_save_sha256=sha256_file(profile_path),
+                    source_game_date=profile.get("game_date"),
+                    stockpile=self._country_stockpile(profile),
+                    exclusive=True,
+                )
+            except ResourceReservationError as error:
+                raise FleetToolError(str(error)) from error
             confirmations: list[dict[str, Any]] = []
             error_text: str | None = None
             sequence = list(refreshed["protocol_sequence"])
@@ -1293,6 +2608,9 @@ class FleetToolbox:
             confirmed_steps = sum(
                 result.get("outcome") == "confirmed" for result in confirmations
             )
+            if confirmed_steps == 0:
+                self._resource_ledger().release(resource_reservation_id)
+                resource_reservation_id = None
             confirmed_actions = [
                 sequence[index]
                 for index, result in enumerate(confirmations)
@@ -1324,6 +2642,7 @@ class FleetToolbox:
                 "reinforcement_request_confirmed": reinforcement_confirmed,
                 "ships_completed": 0,
                 "awaiting_fresh_save_confirmation": True,
+                "resource_reservation_id": resource_reservation_id,
                 "error": error_text,
                 "confirmations": confirmations,
             }
@@ -1365,37 +2684,27 @@ class FleetToolbox:
         for fleet in profile["fleets"]:
             if not fleet.get("player_controllable", False):
                 continue
-            permission = permissions.get(str(fleet["fleet_id"]), {})
             fleet_view = {
                 key: value for key, value in fleet.items() if key != "ship_ids"
             }
             fleets.append(
                 {
                     **fleet_view,
-                    "permission": {
-                        "allow_move": bool(permission.get("allow_move", False)),
-                        "allow_attack": bool(permission.get("allow_attack", False)),
-                        "allow_reinforce": bool(
-                            permission.get("allow_reinforce", False)
-                        ),
-                        "allow_repair": bool(permission.get("allow_repair", False)),
-                        "allow_upgrade": bool(permission.get("allow_upgrade", False)),
-                        "allow_automation": bool(
-                            permission.get("allow_automation", False)
-                        ),
-                        "allow_build_starbase": bool(
-                            permission.get("allow_build_starbase", False)
-                        ),
-                    },
+                    "permission": self._rendered_permission(
+                        fleet["fleet_id"],
+                        permissions,
+                    ),
                 }
             )
         return {
             **profile,
             "source_save": str(path),
             "source_save_sha256": sha256_file(path),
+            "resource_reservations": self._resource_status(path, profile),
             "fleets": fleets,
+            "full_delegation": self._full_delegation(),
             "attack_protocol_state": (
-                "save_backed_hostile_mapping_and_paired_6b33_verified"
+                "save_backed_war_targets_inhibitor_routes_and_paired_6b33_verified"
             ),
             "civilian_automation_protocol_state": ("paired_8f32_verified_options_only"),
             "construction_starbase_protocol_state": (
@@ -1414,12 +2723,51 @@ class FleetToolbox:
             ),
         }
 
+    def inspect_invasion(self) -> dict[str, Any]:
+        path, profile = self._invasion_profile()
+        permissions = normalized_permissions(
+            self.store.get_state(FLEET_PERMISSIONS_KEY, {})
+        )
+        fleets: list[dict[str, Any]] = []
+        for fleet in profile["fleets"]:
+            if not (
+                fleet.get("bombardment_verified_family", False)
+                or fleet.get("landing_verified_family", False)
+            ):
+                continue
+            rendered_permission = self._rendered_permission(
+                fleet["fleet_id"],
+                permissions,
+            )
+            fleets.append(
+                {
+                    **{key: value for key, value in fleet.items() if key != "ship_ids"},
+                    "permission": {
+                        "allow_bombardment": rendered_permission["allow_bombardment"],
+                        "allow_land_armies": rendered_permission["allow_land_armies"],
+                    },
+                }
+            )
+        return {
+            **profile,
+            "source_save": str(path),
+            "source_save_sha256": sha256_file(path),
+            "resource_reservations": self._resource_status(path, profile),
+            "fleets": fleets,
+            "full_delegation": self._full_delegation(),
+            "invasion_tools_enabled": self.invasion_enabled,
+            "protocol_state": (
+                "d62d_plus_d32c_bombardment_6f33_landing_b43d_recruitment"
+            ),
+        }
+
     def inspect_expansion(self) -> dict[str, Any]:
         path, profile = self._expansion_profile()
         return {
             **profile,
             "source_save": str(path),
             "source_save_sha256": sha256_file(path),
+            "resource_reservations": self._resource_status(path, profile),
             "colonization_enabled": self.colonization_enabled,
             "starbase_operations_enabled": self.starbase_enabled,
             "starbase_replacement_enabled": (self.starbase_replacement_enabled),
@@ -1438,7 +2786,7 @@ class FleetToolbox:
         permissions = normalized_permissions(
             self.store.get_state(FLEET_PERMISSIONS_KEY, {})
         )
-        if not permissions.get(str(fleet_id), {}).get("allow_move", False):
+        if not self._permission_granted(fleet_id, "allow_move", permissions):
             raise FleetToolError(f"玩家没有授权调用舰队 {fleet_id} 进行移动。")
         try:
             order = selected_move(profile, fleet_id, destination_system_id)
@@ -1468,7 +2816,7 @@ class FleetToolbox:
         permissions = normalized_permissions(
             self.store.get_state(FLEET_PERMISSIONS_KEY, {})
         )
-        if not permissions.get(str(fleet_id), {}).get("allow_move", False):
+        if not self._permission_granted(fleet_id, "allow_move", permissions):
             raise FleetToolError(f"玩家没有授权调用舰队 {fleet_id} 进行移动。")
         try:
             order = selected_coordinate_move(
@@ -1492,6 +2840,130 @@ class FleetToolbox:
         }
         return dict(self.prepared)
 
+    def _direct_attack_force_assessment(
+        self,
+        profile: dict[str, Any],
+        *,
+        fleet_id: int,
+        target_fleet_id: int,
+    ) -> dict[str, Any]:
+        source = next(
+            (
+                item
+                for item in profile.get("fleets", [])
+                if int(item["fleet_id"]) == int(fleet_id)
+            ),
+            None,
+        )
+        target = next(
+            (
+                item
+                for item in profile.get("hostile_targets", [])
+                if int(item["fleet_id"]) == int(target_fleet_id)
+            ),
+            None,
+        )
+        if source is None or target is None or target.get("system_id") is None:
+            raise FleetToolError("无法从最新存档重建攻击军力评估。")
+        target_system_id = int(target["system_id"])
+        hostile_by_id = {
+            int(item["fleet_id"]): item
+            for item in profile.get("hostile_targets", [])
+            if item.get("system_id") is not None
+            and int(item["system_id"]) == target_system_id
+        }
+        known_hostile_power = sum(
+            float(item.get("military_power") or 0.0)
+            for item in hostile_by_id.values()
+            if item.get("military_power") is not None
+        )
+        unknown_hostiles = sorted(
+            hostile_id
+            for hostile_id, item in hostile_by_id.items()
+            if item.get("military_power") is None
+        )
+        supporting: list[dict[str, Any]] = []
+        for fleet in profile.get("fleets", []):
+            support_id = int(fleet["fleet_id"])
+            if support_id == fleet_id or not fleet.get("attack_verified_family", False):
+                continue
+            movement = fleet.get("movement", {})
+            current = movement.get("current_system_id")
+            destination = movement.get("target_system_id")
+            already_present = bool(
+                current is not None
+                and int(current) == target_system_id
+                and fleet.get("availability") not in {"MIA", "UNAVAILABLE"}
+            )
+            incoming = bool(
+                destination is not None
+                and int(destination) == target_system_id
+                and fleet.get("attack_callable_now", False)
+            )
+            if not already_present and not incoming:
+                continue
+            supporting.append(
+                {
+                    "fleet_id": support_id,
+                    "military_power": float(fleet.get("military_power") or 0.0),
+                    "support_authority": (
+                        "currently_in_target_system"
+                        if already_present
+                        else "save_movement_target_system"
+                    ),
+                }
+            )
+        source_power = float(source.get("military_power") or 0.0)
+        support_power = sum(item["military_power"] for item in supporting)
+        projected_power = source_power + support_power
+        required_power = known_hostile_power * self.campaign_space_force_ratio
+        shortfall = max(required_power - projected_power, 0.0)
+        if shortfall > 0:
+            status = "reinforcement_required"
+        elif unknown_hostiles:
+            status = "opposition_power_unknown"
+        else:
+            status = "adequate_known_force"
+        return {
+            "status": status,
+            "hard_gate_satisfied": status == "adequate_known_force",
+            "target_system_id": target_system_id,
+            "target_fleet_id": target_fleet_id,
+            "source_fleet_id": fleet_id,
+            "source_fleet_military_power": source_power,
+            "supporting_fleets": supporting,
+            "supporting_military_power": support_power,
+            "known_hostile_fleet_ids": sorted(hostile_by_id),
+            "unknown_hostile_power_fleet_ids": unknown_hostiles,
+            "known_hostile_military_power": known_hostile_power,
+            "minimum_force_ratio": self.campaign_space_force_ratio,
+            "minimum_recommended_friendly_power": required_power,
+            "projected_friendly_military_power": projected_power,
+            "known_force_ratio": (
+                round(projected_power / known_hostile_power, 4)
+                if known_hostile_power > 0
+                else None
+            ),
+            "additional_military_power_required": shortfall,
+        }
+
+    @staticmethod
+    def _require_attack_force(assessment: dict[str, Any]) -> None:
+        status = str(assessment.get("status") or "")
+        if status == "adequate_known_force":
+            return
+        if status == "reinforcement_required":
+            shortfall = float(
+                assessment.get("additional_military_power_required") or 0.0
+            )
+            raise FleetToolError(
+                "目标星系的已知敌军超过当前攻击编组安全门槛；"
+                f"至少还需 {shortfall:.2f} 军力，拒绝发送单舰队攻击。"
+            )
+        raise FleetToolError(
+            "目标星系仍有军力未知的敌对目标，无法证明攻击编组达到安全门槛。"
+        )
+
     def prepare_attack(self, arguments: dict[str, Any]) -> dict[str, Any]:
         if not self.enabled or not self.attack_enabled:
             raise FleetToolError("玩家没有启用实验性舰队攻击工具。")
@@ -1502,18 +2974,150 @@ class FleetToolbox:
         permissions = normalized_permissions(
             self.store.get_state(FLEET_PERMISSIONS_KEY, {})
         )
-        if not permissions.get(str(fleet_id), {}).get("allow_attack", False):
+        if not self._permission_granted(fleet_id, "allow_attack", permissions):
             raise FleetToolError(f"玩家没有授权调用舰队 {fleet_id} 进行攻击。")
         try:
             order = selected_attack(profile, fleet_id, target_fleet_id)
         except ValueError as error:
             raise FleetToolError(str(error)) from error
+        force_assessment = self._direct_attack_force_assessment(
+            profile,
+            fleet_id=fleet_id,
+            target_fleet_id=target_fleet_id,
+        )
+        self._require_attack_force(force_assessment)
         run_id = "fleet_attack_" + datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
         self.prepared = {
             "run_id": run_id,
             "action": "attack_fleet",
             "reason": reason,
             "order": order,
+            "space_force_assessment": force_assessment,
+            "source_save_sha256": sha256_file(path),
+            "source_game_date": profile.get("game_date"),
+            "prepared_at": now_iso(),
+        }
+        return dict(self.prepared)
+
+    def prepare_orbital_bombardment(
+        self,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not self.invasion_enabled:
+            raise FleetToolError("玩家没有启用实验性入侵与陆军工具。")
+        fleet_id = int(arguments["fleet_id"])
+        path, profile = self._invasion_profile()
+        permissions = normalized_permissions(
+            self.store.get_state(FLEET_PERMISSIONS_KEY, {})
+        )
+        if not self._permission_granted(
+            fleet_id,
+            "allow_bombardment",
+            permissions,
+        ):
+            raise FleetToolError(f"玩家没有授权舰队 {fleet_id} 执行轨道轰炸。")
+        try:
+            order = selected_orbital_bombardment(
+                profile,
+                fleet_id=fleet_id,
+                target_planet_id=int(arguments["target_planet_id"]),
+                stance=str(arguments["stance"]),
+            )
+        except (TypeError, ValueError) as error:
+            raise FleetToolError(str(error)) from error
+        run_id = "bombardment_" + datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
+        self.prepared = {
+            "run_id": run_id,
+            "action": "orbital_bombardment",
+            "reason": str(arguments["reason"]).strip(),
+            "order": order,
+            "source_save_sha256": sha256_file(path),
+            "source_game_date": profile.get("game_date"),
+            "prepared_at": now_iso(),
+        }
+        return dict(self.prepared)
+
+    def prepare_army_landing(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        if not self.invasion_enabled:
+            raise FleetToolError("玩家没有启用实验性入侵与陆军工具。")
+        fleet_id = int(arguments["transport_fleet_id"])
+        path, profile = self._invasion_profile()
+        permissions = normalized_permissions(
+            self.store.get_state(FLEET_PERMISSIONS_KEY, {})
+        )
+        if not self._permission_granted(
+            fleet_id,
+            "allow_land_armies",
+            permissions,
+        ):
+            raise FleetToolError(f"玩家没有授权运输舰队 {fleet_id} 执行登陆。")
+        try:
+            order = selected_army_landing(
+                profile,
+                transport_fleet_id=fleet_id,
+                target_planet_id=int(arguments["target_planet_id"]),
+            )
+        except (TypeError, ValueError) as error:
+            raise FleetToolError(str(error)) from error
+        run_id = "army_landing_" + datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
+        self.prepared = {
+            "run_id": run_id,
+            "action": "land_armies",
+            "reason": str(arguments["reason"]).strip(),
+            "order": order,
+            "source_save_sha256": sha256_file(path),
+            "source_game_date": profile.get("game_date"),
+            "prepared_at": now_iso(),
+        }
+        return dict(self.prepared)
+
+    def prepare_army_recruitment(
+        self,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not self.invasion_enabled:
+            raise FleetToolError("玩家没有启用实验性入侵与陆军工具。")
+        path, profile = self._invasion_profile()
+        candidate_id = str(arguments["candidate_id"])
+        try:
+            order = selected_army_recruitment(
+                profile,
+                candidate_id=candidate_id,
+                count=int(arguments["count"]),
+            )
+        except (TypeError, ValueError) as error:
+            raise FleetToolError(str(error)) from error
+        campaign = self.store.get_state(PENDING_CAMPAIGN_KEY)
+        campaign_plan_id = (
+            str(campaign.get("campaign_plan_id"))
+            if isinstance(campaign, dict)
+            and campaign.get("status")
+            in {"waiting_for_transport_fleet", "waiting_for_stronger_transport"}
+            and campaign.get("campaign_plan_id")
+            else None
+        )
+        run_id = "army_recruitment_" + datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
+        self.prepared = {
+            "run_id": run_id,
+            "action": "recruit_armies",
+            "reason": str(arguments["reason"]).strip(),
+            "candidate_id": candidate_id,
+            "count": int(arguments["count"]),
+            "order": order,
+            "baseline_transport_fleet_ids": sorted(
+                int(fleet["fleet_id"])
+                for fleet in profile.get("fleets", [])
+                if fleet.get("ship_class") == "shipclass_transport"
+            ),
+            "baseline_transport_fleets": [
+                {
+                    "fleet_id": int(fleet["fleet_id"]),
+                    "army_count": self._transport_army_count(fleet),
+                }
+                for fleet in profile.get("fleets", [])
+                if fleet.get("ship_class") == "shipclass_transport"
+            ],
+            "campaign_plan_id": campaign_plan_id,
             "source_save_sha256": sha256_file(path),
             "source_game_date": profile.get("game_date"),
             "prepared_at": now_iso(),
@@ -1531,7 +3135,7 @@ class FleetToolbox:
         permissions = normalized_permissions(
             self.store.get_state(FLEET_PERMISSIONS_KEY, {})
         )
-        if not permissions.get(str(fleet_id), {}).get("allow_repair", False):
+        if not self._permission_granted(fleet_id, "allow_repair", permissions):
             raise FleetToolError(f"玩家没有授权舰队 {fleet_id} 返港维修。")
         try:
             order = selected_fleet_repair(profile, fleet_id)
@@ -1561,7 +3165,7 @@ class FleetToolbox:
         permissions = normalized_permissions(
             self.store.get_state(FLEET_PERMISSIONS_KEY, {})
         )
-        if not permissions.get(str(fleet_id), {}).get("allow_upgrade", False):
+        if not self._permission_granted(fleet_id, "allow_upgrade", permissions):
             raise FleetToolError(f"玩家没有授权舰队 {fleet_id} 执行升级。")
         try:
             order = selected_fleet_upgrade(profile, fleet_id, queue_id)
@@ -1593,7 +3197,11 @@ class FleetToolbox:
         permissions = normalized_permissions(
             self.store.get_state(FLEET_PERMISSIONS_KEY, {})
         )
-        if not permissions.get(str(fleet_id), {}).get("allow_automation", False):
+        if not self._permission_granted(
+            fleet_id,
+            "allow_automation",
+            permissions,
+        ):
             raise FleetToolError(f"玩家没有授权调用民用船 {fleet_id} 的自动化。")
         try:
             order = selected_ship_automation(profile, fleet_id, options)
@@ -1623,7 +3231,11 @@ class FleetToolbox:
         permissions = normalized_permissions(
             self.store.get_state(FLEET_PERMISSIONS_KEY, {})
         )
-        if not permissions.get(str(fleet_id), {}).get("allow_build_starbase", False):
+        if not self._permission_granted(
+            fleet_id,
+            "allow_build_starbase",
+            permissions,
+        ):
             raise FleetToolError(f"玩家没有授权工程船 {fleet_id} 建造恒星基地。")
         try:
             order = selected_construction_ship_starbase(
@@ -1719,12 +3331,17 @@ class FleetToolbox:
         )
         fleet_id: int | None = None
         destination_system_id: int | None = None
+        current_path: Path
         if action == "move_fleet":
             if not self.enabled:
                 raise FleetToolError("玩家在执行前关闭了实验性舰队工具。")
-            _, profile = self._profile()
+            current_path, profile = self._profile()
             fleet_id = int(self.prepared["order"]["source_fleet"]["fleet_id"])
-            if not permissions.get(str(fleet_id), {}).get("allow_move", False):
+            if not self._permission_granted(
+                fleet_id,
+                "allow_move",
+                permissions,
+            ):
                 raise FleetToolError("玩家在执行前撤销了该舰队的移动权限。")
             destination_system_id = int(
                 self.prepared["order"]["destination_system"]["system_id"]
@@ -1736,9 +3353,13 @@ class FleetToolbox:
         elif action == "move_fleet_to_coordinate":
             if not self.enabled or not self.coordinate_enabled:
                 raise FleetToolError("玩家在执行前关闭了星系内坐标移动。")
-            _, profile = self._profile()
+            current_path, profile = self._profile()
             fleet_id = int(self.prepared["order"]["source_fleet"]["fleet_id"])
-            if not permissions.get(str(fleet_id), {}).get("allow_move", False):
+            if not self._permission_granted(
+                fleet_id,
+                "allow_move",
+                permissions,
+            ):
                 raise FleetToolError("玩家在执行前撤销了该舰队的移动权限。")
             destination = self.prepared["order"]["destination_coordinate"]
             try:
@@ -1755,9 +3376,13 @@ class FleetToolbox:
         elif action == "attack_fleet":
             if not self.enabled or not self.attack_enabled:
                 raise FleetToolError("玩家在执行前关闭了舰队攻击工具。")
-            _, profile = self._profile()
+            current_path, profile = self._profile()
             fleet_id = int(self.prepared["order"]["source_fleet"]["fleet_id"])
-            if not permissions.get(str(fleet_id), {}).get("allow_attack", False):
+            if not self._permission_granted(
+                fleet_id,
+                "allow_attack",
+                permissions,
+            ):
                 raise FleetToolError("玩家在执行前撤销了该舰队的攻击权限。")
             target_fleet_id = int(self.prepared["order"]["hostile_target"]["fleet_id"])
             try:
@@ -1768,13 +3393,83 @@ class FleetToolbox:
                 )
             except ValueError as error:
                 raise FleetToolError(str(error)) from error
+            if not isinstance(self.prepared.get("campaign_plan"), dict):
+                force_assessment = self._direct_attack_force_assessment(
+                    profile,
+                    fleet_id=fleet_id,
+                    target_fleet_id=target_fleet_id,
+                )
+                self._require_attack_force(force_assessment)
+                self.prepared["space_force_assessment"] = force_assessment
             destination_system_id = refreshed["hostile_target"].get("system_id")
+        elif action == "orbital_bombardment":
+            if not self.invasion_enabled:
+                raise FleetToolError("玩家在执行前关闭了实验性入侵与陆军工具。")
+            current_path, profile = self._invasion_profile()
+            fleet_id = int(self.prepared["order"]["source_fleet"]["fleet_id"])
+            if not self._permission_granted(
+                fleet_id,
+                "allow_bombardment",
+                permissions,
+            ):
+                raise FleetToolError("玩家在执行前撤销了该舰队的轰炸权限。")
+            try:
+                refreshed = selected_orbital_bombardment(
+                    profile,
+                    fleet_id=fleet_id,
+                    target_planet_id=int(
+                        self.prepared["order"]["hostile_colony"]["planet_id"]
+                    ),
+                    stance=str(self.prepared["order"]["stance"]),
+                )
+            except ValueError as error:
+                raise FleetToolError(str(error)) from error
+            destination_system_id = refreshed["hostile_colony"].get("system_id")
+        elif action == "land_armies":
+            if not self.invasion_enabled:
+                raise FleetToolError("玩家在执行前关闭了实验性入侵与陆军工具。")
+            current_path, profile = self._invasion_profile()
+            fleet_id = int(self.prepared["order"]["source_fleet"]["fleet_id"])
+            if not self._permission_granted(
+                fleet_id,
+                "allow_land_armies",
+                permissions,
+            ):
+                raise FleetToolError("玩家在执行前撤销了该运输舰队的登陆权限。")
+            try:
+                refreshed = selected_army_landing(
+                    profile,
+                    transport_fleet_id=fleet_id,
+                    target_planet_id=int(
+                        self.prepared["order"]["hostile_colony"]["planet_id"]
+                    ),
+                )
+            except ValueError as error:
+                raise FleetToolError(str(error)) from error
+            destination_system_id = refreshed["hostile_colony"].get("system_id")
+        elif action == "recruit_armies":
+            if not self.invasion_enabled:
+                raise FleetToolError("玩家在执行前关闭了实验性入侵与陆军工具。")
+            current_path, profile = self._invasion_profile()
+            try:
+                refreshed = selected_army_recruitment(
+                    profile,
+                    candidate_id=str(self.prepared["candidate_id"]),
+                    count=int(self.prepared["count"]),
+                )
+            except ValueError as error:
+                raise FleetToolError(str(error)) from error
+            destination_system_id = refreshed["recruitment_starbase"].get("system_id")
         elif action == "repair_fleet":
             if not self.maintenance_enabled:
                 raise FleetToolError("玩家在执行前关闭了舰队维修与升级工具。")
-            _, profile = self._profile()
+            current_path, profile = self._profile()
             fleet_id = int(self.prepared["order"]["source_fleet"]["fleet_id"])
-            if not permissions.get(str(fleet_id), {}).get("allow_repair", False):
+            if not self._permission_granted(
+                fleet_id,
+                "allow_repair",
+                permissions,
+            ):
                 raise FleetToolError("玩家在执行前撤销了该舰队的维修权限。")
             try:
                 refreshed = selected_fleet_repair(profile, fleet_id)
@@ -1783,9 +3478,13 @@ class FleetToolbox:
         elif action == "upgrade_fleet":
             if not self.maintenance_enabled:
                 raise FleetToolError("玩家在执行前关闭了舰队维修与升级工具。")
-            _, profile = self._profile()
+            current_path, profile = self._profile()
             fleet_id = int(self.prepared["order"]["source_fleet"]["fleet_id"])
-            if not permissions.get(str(fleet_id), {}).get("allow_upgrade", False):
+            if not self._permission_granted(
+                fleet_id,
+                "allow_upgrade",
+                permissions,
+            ):
                 raise FleetToolError("玩家在执行前撤销了该舰队的升级权限。")
             queue_id = int(self.prepared["order"]["target"]["shipyard_build_queue_id"])
             try:
@@ -1796,9 +3495,13 @@ class FleetToolbox:
         elif action == "configure_ship_automation":
             if not self.civilian_ship_enabled:
                 raise FleetToolError("玩家在执行前关闭了民用船工具。")
-            _, profile = self._profile()
+            current_path, profile = self._profile()
             fleet_id = int(self.prepared["order"]["source_fleet"]["fleet_id"])
-            if not permissions.get(str(fleet_id), {}).get("allow_automation", False):
+            if not self._permission_granted(
+                fleet_id,
+                "allow_automation",
+                permissions,
+            ):
                 raise FleetToolError("玩家在执行前撤销了该民用船的自动化权限。")
             try:
                 refreshed = selected_ship_automation(
@@ -1811,10 +3514,12 @@ class FleetToolbox:
         elif action == "build_starbase":
             if not self.civilian_ship_enabled:
                 raise FleetToolError("玩家在执行前关闭了民用船工具。")
-            _, profile = self._profile()
+            current_path, profile = self._profile()
             fleet_id = int(self.prepared["order"]["source_fleet"]["fleet_id"])
-            if not permissions.get(str(fleet_id), {}).get(
-                "allow_build_starbase", False
+            if not self._permission_granted(
+                fleet_id,
+                "allow_build_starbase",
+                permissions,
             ):
                 raise FleetToolError("玩家在执行前撤销了工程船建站权限。")
             destination_system_id = int(
@@ -1831,7 +3536,7 @@ class FleetToolbox:
         elif action == "order_colony_ship_and_colonize":
             if not self.colonization_enabled:
                 raise FleetToolError("玩家在执行前关闭了自动殖民工具。")
-            _, profile = self._expansion_profile()
+            current_path, profile = self._expansion_profile()
             try:
                 refreshed = selected_colonization(
                     profile,
@@ -1848,7 +3553,7 @@ class FleetToolbox:
         }:
             if not self.starbase_enabled:
                 raise FleetToolError("玩家在执行前关闭了恒星基地工具。")
-            _, profile = self._expansion_profile()
+            current_path, profile = self._expansion_profile()
             try:
                 refreshed = selected_starbase_operation(
                     profile,
@@ -1868,16 +3573,61 @@ class FleetToolbox:
             )
         else:
             raise FleetToolError(f"不支持的已准备舰队动作：{action}。")
+        sequence_action = action in {
+            "orbital_bombardment",
+            "land_armies",
+            "recruit_armies",
+        }
+        resource_reservation_id: str | None = None
+        resource_costs: dict[str, Any] = {}
+        exclusive_cost = action in {
+            "build_starbase",
+            "order_colony_ship_and_colonize",
+            "upgrade_starbase",
+            "set_starbase_module",
+            "set_starbase_building",
+            "upgrade_fleet",
+        }
+        if action == "recruit_armies":
+            resource_costs = dict(refreshed.get("total_cost", {}))
+        current_save_sha256 = sha256_file(current_path)
+        if resource_costs or exclusive_cost:
+            resource_reservation_id = f"fleet_operations:{run_id}"
+            try:
+                self._resource_ledger().reserve(
+                    reservation_id=resource_reservation_id,
+                    application_id="fleet_operations",
+                    action=action,
+                    source_save_sha256=current_save_sha256,
+                    source_game_date=profile.get("game_date"),
+                    stockpile=self._country_stockpile(profile),
+                    costs=resource_costs,
+                    exclusive=exclusive_cost,
+                )
+            except ResourceReservationError as error:
+                raise FleetToolError(str(error)) from error
         try:
-            result = SessionProxyController(self.config).arm_and_wait(
-                action=action,
-                target=dict(refreshed["target"]),
-                request_id=run_id,
-            )
+            controller = SessionProxyController(self.config)
+            if sequence_action:
+                result = controller.arm_sequence_and_wait(
+                    steps=[dict(step) for step in refreshed["protocol_sequence"]],
+                    request_id=run_id,
+                )
+            else:
+                result = controller.arm_and_wait(
+                    action=action,
+                    target=dict(refreshed["target"]),
+                    request_id=run_id,
+                )
         except SessionProxyError as error:
+            if resource_reservation_id is not None:
+                self._resource_ledger().release(resource_reservation_id)
             raise FleetToolError(str(error)) from error
         success = result.get("outcome") == "confirmed"
-        if not success:
+        confirmed_steps = int(result.get("confirmed_steps") or 0)
+        if resource_reservation_id is not None and not success and confirmed_steps == 0:
+            self._resource_ledger().release(resource_reservation_id)
+        if not success and not sequence_action:
             raise FleetToolError(str(result.get("error") or "命令未获房主权威确认。"))
         fact = {
             "run_id": run_id,
@@ -1887,28 +3637,74 @@ class FleetToolbox:
             "recorded_at": now_iso(),
             "proxy_result": result,
         }
-        fact_key = (
-            "last_expansion_execution"
-            if action
-            in {
-                "order_colony_ship_and_colonize",
-                "upgrade_starbase",
-                "set_starbase_module",
-                "set_starbase_building",
-            }
-            else "last_fleet_execution"
-        )
+        if action in {"orbital_bombardment", "land_armies", "recruit_armies"}:
+            fact_key = "last_invasion_execution"
+        elif action in {
+            "order_colony_ship_and_colonize",
+            "upgrade_starbase",
+            "set_starbase_module",
+            "set_starbase_building",
+        }:
+            fact_key = "last_expansion_execution"
+        else:
+            fact_key = "last_fleet_execution"
         self.store.set_state(fact_key, fact)
+        campaign_plan = self.prepared.get("campaign_plan")
+        if isinstance(campaign_plan, dict) and (success or confirmed_steps > 0):
+            campaign_plan = {
+                **campaign_plan,
+                "status": "awaiting_fresh_save",
+                "last_action": action,
+                "last_action_save_sha256": current_save_sha256,
+                "last_action_game_date": profile.get("game_date"),
+                "last_execution_run_id": run_id,
+                "last_confirmation": {
+                    "success": success,
+                    "confirmed_steps": confirmed_steps,
+                },
+                "updated_at": now_iso(),
+            }
+            self.store.set_state(PENDING_CAMPAIGN_KEY, campaign_plan)
+            self._record_campaign_route_usage(campaign_plan, status="active")
+        if action == "recruit_armies" and (success or confirmed_steps > 0):
+            self.store.set_state(
+                PENDING_ARMY_RECRUITMENT_KEY,
+                {
+                    "schema": "iag.pending_army_recruitment.v1",
+                    "phase": "awaiting_transport_save",
+                    "recruitment_run_id": run_id,
+                    "expected_army_count": int(self.prepared.get("count") or 0),
+                    "baseline_transport_fleet_ids": list(
+                        self.prepared.get("baseline_transport_fleet_ids", [])
+                    ),
+                    "last_action_save_sha256": current_save_sha256,
+                    "last_action_game_date": profile.get("game_date"),
+                    "campaign_plan_id": (
+                        self.prepared.get("campaign_plan_id")
+                        or (
+                            campaign_plan.get("campaign_plan_id")
+                            if isinstance(campaign_plan, dict)
+                            else None
+                        )
+                    ),
+                    "created_at": now_iso(),
+                },
+            )
         self.prepared = None
         return {
             "schema": "iag.tool_result.fleet_execution.v1",
-            "success": True,
+            "success": success,
             "run_id": run_id,
             "fleet_id": fleet_id,
             "destination_system_id": destination_system_id,
             "action": action,
             "order": refreshed,
             "confirmation": result,
+            "resource_reservation_id": resource_reservation_id,
+            "confirmed_protocol_steps": confirmed_steps,
+            "requested_protocol_steps": (
+                len(refreshed.get("protocol_sequence", [])) if sequence_action else 1
+            ),
         }
 
     def dispatch(
@@ -1922,18 +3718,50 @@ class FleetToolbox:
                 any(fleet.get("permission", {}).values()) for fleet in result["fleets"]
             )
             callable_now = sum(
-                (
-                    fleet.get("ai_callable_now") is True
-                    or fleet.get("civilian_callable_now") is True
-                )
-                and any(fleet.get("permission", {}).values())
-                for fleet in result["fleets"]
+                has_callable_fleet_permission(fleet) for fleet in result["fleets"]
             )
             summary = (
                 f"已读取 {len(result['fleets'])} 支玩家舰队；"
                 f"{authorized} 支已获至少一项 AI 权限，"
                 f"其中 {callable_now} 支当前可调用。"
             )
+        elif name == "inspect_invasion_state":
+            result = self.inspect_invasion()
+            summary = (
+                f"已读取 {len(result['hostile_colonies'])} 个当前可达敌方殖民地、"
+                f"{len(result['blocked_hostile_colonies'])} 个受阻目标和 "
+                f"{len(result['army_recruitment_candidates'])} 个陆军招募候选。"
+            )
+        elif name == "inspect_campaign_deployment":
+            result = self.inspect_campaign_deployment(arguments)
+            uncovered = sum(
+                item.get("coverage_state") == "uncovered"
+                for item in result["garrison_candidates"]
+            )
+            summary = (
+                f"已读取 {len(result['fronts'])} 个战争目标战线和 "
+                f"{len(result['garrison_candidates'])} 个驻防点；"
+                f"其中 {uncovered} 个尚无驻守舰队。"
+            )
+        elif name == "inspect_campaign_routes":
+            result = self.inspect_campaign_routes(arguments)
+            summary = (
+                f"已为舰队 {arguments['fleet_id']} 生成 "
+                f"{result['route_count']} 条非支配战役路线；"
+                f"状态为 {result['status']}。"
+            )
+        elif name == "prepare_campaign_route":
+            result = self.prepare_campaign_route(arguments)
+            if result["execution_required"]:
+                summary = (
+                    f"已准备战役 {result['campaign_plan_id']} 的第一步 "
+                    f"{result['prepared_action']}；后续将按新存档逐步续接。"
+                )
+            else:
+                summary = (
+                    f"战役 {result['campaign_plan_id']} 当前状态为 "
+                    f"{result['status']}，本份存档未发包。"
+                )
         elif name == "prepare_fleet_move":
             result = self.prepare_move(arguments)
             source = result["order"]["source_fleet"]
@@ -1963,6 +3791,27 @@ class FleetToolbox:
             summary = (
                 f"已准备舰队 {fleet_label(source)} 攻击敌对舰队 "
                 f"{fleet_label(target)}；尚未发包。"
+            )
+        elif name == "prepare_orbital_bombardment":
+            result = self.prepare_orbital_bombardment(arguments)
+            target = result["order"]["hostile_colony"]
+            summary = (
+                f"已准备舰队 {fleet_label(result['order']['source_fleet'])} 以 "
+                f"{result['order']['stance']} 姿态轰炸 "
+                f"{fleet_label(target)}；尚未发包。"
+            )
+        elif name == "prepare_army_landing":
+            result = self.prepare_army_landing(arguments)
+            summary = (
+                f"已准备运输舰队 {fleet_label(result['order']['source_fleet'])} 登陆 "
+                f"{fleet_label(result['order']['hostile_colony'])}；尚未发包。"
+            )
+        elif name == "prepare_army_recruitment":
+            result = self.prepare_army_recruitment(arguments)
+            summary = (
+                f"已准备在恒星基地 "
+                f"{result['order']['recruitment_starbase']['starbase_index']} 招募 "
+                f"{result['order']['count']} 支 {result['order']['army_type']}；尚未发包。"
             )
         elif name == "prepare_fleet_repair":
             result = self.prepare_fleet_repair(arguments)
@@ -2016,14 +3865,26 @@ class FleetToolbox:
             )
         elif name == "execute_prepared_fleet_order":
             result = self.execute(arguments)
-            summary = (
-                f"{result['action']} 已获房主权威确认；最终游戏状态仍以后续新存档为准。"
-            )
+            if result["success"]:
+                summary = (
+                    f"{result['action']} 已获房主权威确认；"
+                    "最终游戏状态仍以后续新存档为准。"
+                )
+            else:
+                confirmation = result["confirmation"]
+                summary = (
+                    f"{result['action']} 仅确认 "
+                    f"{confirmation.get('confirmed_steps', 0)}/"
+                    f"{confirmation.get('requested_steps', 0)} 个协议步骤；"
+                    "已停止余下步骤并等待新存档。"
+                )
         elif name == "inspect_ship_state":
             result = self.inspect_ships()
             summary = (
-                f"已读取 {len(result['designs'])} 份玩家舰船设计和 "
-                f"{len(result['shipyards'])} 个直接船坞队列。"
+                f"已读取 {len(result['designs'])} 份玩家可见舰船设计和 "
+                f"{len(result['shipyards'])} 个直接船坞队列；"
+                f"排除 {result.get('hidden_autogenerated_design_count', 0)} 份"
+                "自动设计关闭后遗留的隐藏模板。"
             )
         elif name == "inspect_ship_design_options":
             result = self.inspect_ship_design_options(arguments)

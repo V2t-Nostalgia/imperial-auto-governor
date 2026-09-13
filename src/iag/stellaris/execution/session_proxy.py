@@ -28,7 +28,7 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from iag.stellaris.execution.packet.autonomous_commands import (
     ACTOR_TAG,
@@ -94,6 +94,18 @@ from iag.stellaris.execution.packet.fleet_reinforcement_commands import (
     parse_template_creation,
     parse_template_edit,
 )
+from iag.stellaris.execution.packet.ground_warfare_commands import (
+    ArmyLandingTarget,
+    ArmyRecruitmentTarget,
+    BombardmentStanceTarget,
+    VERIFIED_BOMBARDMENT_STANCES,
+    build_army_landing_record,
+    build_army_recruitment_record,
+    build_bombardment_stance_record,
+    parse_army_landing_record,
+    parse_army_recruitment_record,
+    parse_bombardment_stance_record,
+)
 from iag.stellaris.execution.packet.iag_same_family_construction_rewriter import (
     rewrite_district_carrier,
     rewrite_zone_carrier,
@@ -107,6 +119,7 @@ from iag.stellaris.execution.packet.iag_stream_command_injector import (
     forward_distance_uint24,
     is_reliable_packet,
     read_uint24_be,
+    write_uint24_be,
 )
 from iag.stellaris.execution.packet.ship_commands import (
     ShipBuildTarget,
@@ -261,6 +274,19 @@ class FlowKey:
     route: str
 
 
+def flow_candidate_id(flow: FlowKey) -> str:
+    """Return a stable, opaque identifier for one observed UDP tuple."""
+    canonical = "\x00".join(
+        (
+            flow.local_ip,
+            str(flow.local_port),
+            flow.host_ip,
+            str(flow.host_port),
+        )
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
+
+
 @dataclass
 class FlowEvidence:
     outbound_packets: int = 0
@@ -271,6 +297,14 @@ class FlowEvidence:
     last_seen: float = 0.0
     last_outbound_seen: float = 0.0
     last_inbound_seen: float = 0.0
+
+
+@dataclass(frozen=True)
+class FlowLockRequest:
+    request_id: str
+    session_id: str
+    candidate_id: str
+    player_confirmed: bool
 
 
 class FlowDiscovery:
@@ -288,8 +322,96 @@ class FlowDiscovery:
         self.candidate_window_seconds = candidate_window_seconds
         self.candidates: dict[FlowKey, FlowEvidence] = defaultdict(FlowEvidence)
         self.locked: FlowKey | None = None
+        self.lock_method: str | None = None
         self.provisional: FlowKey | None = None
         self.provisional_since = 0.0
+
+    def _lock(self, candidate: FlowKey, method: str) -> FlowKey:
+        self.locked = candidate
+        self.lock_method = method
+        self.provisional = None
+        self.provisional_since = 0.0
+        return candidate
+
+    def _promote_direct_candidate(
+        self,
+        candidate: FlowKey,
+        port_owners: dict[int, set[str]],
+    ) -> FlowKey:
+        """Attach late process-ownership evidence to an existing direct tuple."""
+        if (
+            candidate.route != "direct_peer_ip"
+            or not port_owners.get(candidate.local_port)
+        ):
+            return candidate
+
+        promoted = replace(candidate, route="direct_peer_ip_owned_port")
+        evidence = self.candidates.pop(candidate)
+        existing = self.candidates.get(promoted)
+        if existing is None:
+            self.candidates[promoted] = evidence
+        else:
+            existing.outbound_packets += evidence.outbound_packets
+            existing.inbound_packets += evidence.inbound_packets
+            existing.reliable_outbound_packets += (
+                evidence.reliable_outbound_packets
+            )
+            existing.reliable_inbound_packets += evidence.reliable_inbound_packets
+            seen = [
+                value
+                for value in (existing.first_seen, evidence.first_seen)
+                if value
+            ]
+            existing.first_seen = min(seen, default=0.0)
+            existing.last_seen = max(existing.last_seen, evidence.last_seen)
+            existing.last_outbound_seen = max(
+                existing.last_outbound_seen,
+                evidence.last_outbound_seen,
+            )
+            existing.last_inbound_seen = max(
+                existing.last_inbound_seen,
+                evidence.last_inbound_seen,
+            )
+        if self.provisional == candidate:
+            self.provisional = promoted
+        return promoted
+
+    def _direct_fallback_candidates(
+        self,
+        observed_at: float,
+    ) -> dict[FlowKey, str]:
+        """Return high-confidence direct tuples that need no strict 3+3 sample."""
+        candidates: dict[FlowKey, str] = {}
+        for candidate, evidence in self.candidates.items():
+            if (
+                candidate.route != "direct_peer_ip_owned_port"
+                or observed_at - evidence.last_seen > self.candidate_window_seconds
+            ):
+                continue
+
+            outbound_fresh = bool(evidence.outbound_packets) and (
+                observed_at - evidence.last_outbound_seen
+                <= self.candidate_window_seconds
+            )
+            inbound_fresh = bool(evidence.inbound_packets) and (
+                observed_at - evidence.last_inbound_seen
+                <= self.candidate_window_seconds
+            )
+            if outbound_fresh and inbound_fresh:
+                candidates[candidate] = "automatic_direct_owned_bidirectional"
+                continue
+
+            reliable_fresh = (
+                bool(evidence.reliable_outbound_packets) and outbound_fresh
+            ) or (bool(evidence.reliable_inbound_packets) and inbound_fresh)
+            packet_count = evidence.outbound_packets + evidence.inbound_packets
+            if (
+                reliable_fresh
+                and packet_count >= 2
+                and observed_at - evidence.first_seen >= self.relay_settle_seconds
+            ):
+                candidates[candidate] = "automatic_direct_owned_reliable"
+        return candidates
 
     def _eligible_candidates(self, observed_at: float) -> list[FlowKey]:
         eligible: list[FlowKey] = []
@@ -324,16 +446,44 @@ class FlowDiscovery:
             if candidate.route.startswith("direct_peer_ip")
         ]
         if len(direct) == 1:
-            self.locked = direct[0]
-        elif len(eligible) != 1:
+            self._lock(direct[0], "automatic_direct_reliable")
+            return self.locked
+
+        direct_fallbacks = self._direct_fallback_candidates(observed_at)
+        if len(direct_fallbacks) == 1:
+            candidate, method = next(iter(direct_fallbacks.items()))
+            self._lock(candidate, method)
+            return self.locked
+
+        if len(eligible) != 1:
             self.provisional = None
             self.provisional_since = 0.0
         elif self.provisional != eligible[0]:
             self.provisional = eligible[0]
             self.provisional_since = observed_at
         elif observed_at - self.provisional_since >= self.relay_settle_seconds:
-            self.locked = eligible[0]
+            self._lock(eligible[0], "automatic_unique_reliable")
         return self.locked
+
+    def lock_confirmed_candidate(
+        self,
+        candidate_id: str,
+        *,
+        observed_at: float,
+    ) -> FlowKey:
+        """Lock any observed candidate explicitly selected by the player."""
+        del observed_at
+        candidate = next(
+            (
+                candidate
+                for candidate in self.candidates
+                if flow_candidate_id(candidate) == candidate_id
+            ),
+            None,
+        )
+        if candidate is None:
+            raise ValueError("The selected flow candidate no longer exists.")
+        return self._lock(candidate, "manual_player_confirmed")
 
     def observe(
         self,
@@ -375,6 +525,8 @@ class FlowDiscovery:
         direct_inbound = src_ip == host_ip and dst_ip == local_ip
         outbound_owners = port_owners.get(src_port, set())
         inbound_owners = port_owners.get(dst_port, set())
+        if key is not None:
+            key = self._promote_direct_candidate(key, port_owners)
         relay_outbound = bool(outbound_owners) and not inbound_owners
         relay_inbound = bool(inbound_owners) and not outbound_owners
         if key is None:
@@ -474,11 +626,22 @@ class FlowDiscovery:
                 evidence.reliable_inbound_packets += 1
         return self._consider_lock(observed_at)
 
-    def candidate_payload(self) -> list[dict[str, object]]:
+    def candidate_payload(
+        self,
+        observed_at: float | None = None,
+    ) -> list[dict[str, object]]:
         """Expose bounded route evidence without logging packet contents."""
+        if observed_at is None:
+            observed_at = max(
+                (evidence.last_seen for evidence in self.candidates.values()),
+                default=time.monotonic(),
+            )
+        eligible = set(self._eligible_candidates(observed_at))
+        direct_fallbacks = self._direct_fallback_candidates(observed_at)
         return [
             {
                 **asdict(key),
+                "candidate_id": flow_candidate_id(key),
                 "outbound_packets": evidence.outbound_packets,
                 "inbound_packets": evidence.inbound_packets,
                 "reliable_outbound_packets": (
@@ -487,6 +650,17 @@ class FlowDiscovery:
                 "reliable_inbound_packets": evidence.reliable_inbound_packets,
                 "bidirectional": bool(
                     evidence.outbound_packets and evidence.inbound_packets
+                ),
+                "reliable_observed": bool(
+                    evidence.reliable_outbound_packets
+                    or evidence.reliable_inbound_packets
+                ),
+                "automatic_eligible": key in eligible or key in direct_fallbacks,
+                "automatic_lock_basis": direct_fallbacks.get(key),
+                "manual_lockable": True,
+                "last_seen_age_seconds": round(
+                    max(0.0, observed_at - evidence.last_seen),
+                    3,
                 ),
             }
             for key, evidence in sorted(
@@ -498,6 +672,43 @@ class FlowDiscovery:
                 ),
             )
         ][:16]
+
+
+def parse_flow_lock_document(
+    raw: Any,
+    expected_session_id: str,
+) -> FlowLockRequest:
+    """Validate one player-confirmed flow-lock request."""
+    if not isinstance(raw, dict):
+        raise TypeError("The flow-lock file root must be an object.")
+    if raw.get("session_id") != expected_session_id:
+        raise ValueError("The flow-lock session_id does not match this proxy.")
+    request_id = str(raw.get("request_id", "")).strip()
+    if not request_id or len(request_id) > 96:
+        raise ValueError(
+            "The flow-lock request requires a request_id of at most 96 characters."
+        )
+    candidate_id = str(raw.get("candidate_id", "")).strip().casefold()
+    if not re.fullmatch(r"[0-9a-f]{24}", candidate_id):
+        raise ValueError("The flow-lock request has an invalid candidate_id.")
+    if raw.get("player_confirmed") is not True:
+        raise ValueError("The player must explicitly confirm the selected flow.")
+    return FlowLockRequest(
+        request_id=request_id,
+        session_id=expected_session_id,
+        candidate_id=candidate_id,
+        player_confirmed=True,
+    )
+
+
+def parse_flow_lock_request(
+    path: Path,
+    expected_session_id: str,
+) -> FlowLockRequest:
+    return parse_flow_lock_document(
+        json.loads(path.read_text(encoding="utf-8")),
+        expected_session_id,
+    )
 
 
 def _brokered_route(owner_names: set[str]) -> str:
@@ -591,6 +802,9 @@ class ArmRequest:
         | FleetTemplateRemoveTarget
         | FleetReinforcementTarget
         | FleetAttackTarget
+        | BombardmentStanceTarget
+        | ArmyLandingTarget
+        | ArmyRecruitmentTarget
         | ConstructionShipStarbaseTarget
         | ShipAutomationTarget
         | OrderColonyShipTarget
@@ -678,6 +892,9 @@ def parse_arm_document(raw: Any, expected_session_id: str) -> ArmRequest:
             | FleetTemplateRemoveTarget
             | FleetReinforcementTarget
             | FleetAttackTarget
+            | BombardmentStanceTarget
+            | ArmyLandingTarget
+            | ArmyRecruitmentTarget
             | FleetRepairTarget
             | FleetUpgradeTarget
             | ConstructionShipStarbaseTarget
@@ -786,6 +1003,52 @@ def parse_arm_document(raw: Any, expected_session_id: str) -> ArmRequest:
             target_fleet_object=_validate_u32(
                 int(target_raw["target_fleet_object"]),
                 "target_fleet_object",
+            ),
+        )
+    elif action == "set_orbital_bombardment_stance":
+        stance = str(target_raw["stance"])
+        if stance not in VERIFIED_BOMBARDMENT_STANCES:
+            raise ValueError("Bombardment stance is not in the verified allowlist.")
+        target = BombardmentStanceTarget(
+            source_fleet_object=_validate_u32(
+                int(target_raw["source_fleet_object"]),
+                "source_fleet_object",
+            ),
+            stance=stance,
+        )
+    elif action == "land_armies":
+        target = ArmyLandingTarget(
+            source_fleet_object=_validate_u32(
+                int(target_raw["source_fleet_object"]),
+                "source_fleet_object",
+            ),
+            target_colony_object=_validate_u32(
+                int(target_raw["target_colony_object"]),
+                "target_colony_object",
+            ),
+        )
+    elif action == "recruit_army":
+        target = ArmyRecruitmentTarget(
+            context_822c=_validate_u32(
+                int(target_raw.get("context_822c", 0)),
+                "context_822c",
+            ),
+            army_build_queue_id=_validate_u32(
+                int(target_raw["army_build_queue_id"]),
+                "army_build_queue_id",
+            ),
+            army_type=str(target_raw["army_type"]),
+            species_id=_validate_u32(
+                int(target_raw["species_id"]),
+                "species_id",
+            ),
+            source_colony_object=_validate_u32(
+                int(target_raw["source_colony_object"]),
+                "source_colony_object",
+            ),
+            recruitment_starbase_object=_validate_u32(
+                int(target_raw["recruitment_starbase_object"]),
+                "recruitment_starbase_object",
             ),
         )
     elif action == "repair_fleet":
@@ -1166,9 +1429,28 @@ def translate_outbound_command_serials(
     return bytes(output), changes
 
 
+def translate_existing_outbound_stream(
+    payload: bytes,
+    *,
+    stream_translators: Sequence[StreamTranslator],
+    actor: int,
+    serial_delta: int,
+) -> tuple[bytes, list[dict[str, int]]]:
+    """Apply every translation already reserved by earlier injections."""
+    outgoing = payload
+    for translator in stream_translators:
+        outgoing = translator.translate_outbound(outgoing)
+    return translate_outbound_command_serials(
+        outgoing,
+        actor=actor,
+        delta=serial_delta,
+    )
+
+
 @dataclass(frozen=True)
 class Injection:
     payload: bytes
+    wire_payloads: tuple[bytes, ...]
     injection_offset: int
     serial: int
     command_record_length: int
@@ -1723,6 +2005,33 @@ def _build_request_record(request: ArmRequest, command_serial: int) -> bytes:
             origin=request.request_origin,
             target=request.target,
         )
+    if request.action == "set_orbital_bombardment_stance":
+        if not isinstance(request.target, BombardmentStanceTarget):
+            raise RuntimeError("The bombardment action has the wrong target type.")
+        return build_bombardment_stance_record(
+            command_serial=command_serial,
+            actor=request.source_actor,
+            origin=request.request_origin,
+            target=request.target,
+        )
+    if request.action == "land_armies":
+        if not isinstance(request.target, ArmyLandingTarget):
+            raise RuntimeError("The army-landing action has the wrong target type.")
+        return build_army_landing_record(
+            command_serial=command_serial,
+            actor=request.source_actor,
+            origin=request.request_origin,
+            target=request.target,
+        )
+    if request.action == "recruit_army":
+        if not isinstance(request.target, ArmyRecruitmentTarget):
+            raise RuntimeError("The army-recruitment action has the wrong target type.")
+        return build_army_recruitment_record(
+            command_serial=command_serial,
+            actor=request.source_actor,
+            origin=request.request_origin,
+            target=request.target,
+        )
     if request.action == "repair_fleet":
         if not isinstance(request.target, FleetRepairTarget):
             raise RuntimeError("The fleet-repair action has the wrong target type.")
@@ -1974,6 +2283,12 @@ def retag_matching_response(
                 parsed_target = _parse_fleet_coordinate_target(record)
             elif isinstance(request.target, FleetAttackTarget):
                 parsed_target = parse_fleet_attack_record(record)
+            elif isinstance(request.target, BombardmentStanceTarget):
+                parsed_target = parse_bombardment_stance_record(record)
+            elif isinstance(request.target, ArmyLandingTarget):
+                parsed_target = parse_army_landing_record(record)
+            elif isinstance(request.target, ArmyRecruitmentTarget):
+                parsed_target = parse_army_recruitment_record(record)
             elif isinstance(request.target, FleetRepairTarget):
                 parsed_target = parse_fleet_repair_record(record)
             elif isinstance(request.target, FleetUpgradeTarget):
@@ -2085,6 +2400,20 @@ def retag_matching_response(
     elif isinstance(request.target, FleetAttackTarget):
         metadata["source_fleet_object"] = request.target.source_fleet_object
         metadata["target_fleet_object"] = request.target.target_fleet_object
+    elif isinstance(request.target, BombardmentStanceTarget):
+        metadata["source_fleet_object"] = request.target.source_fleet_object
+        metadata["bombardment_stance"] = request.target.stance
+    elif isinstance(request.target, ArmyLandingTarget):
+        metadata["source_fleet_object"] = request.target.source_fleet_object
+        metadata["target_colony_object"] = request.target.target_colony_object
+    elif isinstance(request.target, ArmyRecruitmentTarget):
+        metadata["army_build_queue_id"] = request.target.army_build_queue_id
+        metadata["army_type"] = request.target.army_type
+        metadata["species_id"] = request.target.species_id
+        metadata["source_colony_object"] = request.target.source_colony_object
+        metadata["recruitment_starbase_object"] = (
+            request.target.recruitment_starbase_object
+        )
     elif isinstance(request.target, FleetRepairTarget):
         metadata["source_fleet_object"] = request.target.source_fleet_object
         metadata["context_822c"] = request.target.context_822c
@@ -2136,9 +2465,11 @@ def retag_matching_response(
         metadata["template_id_transport"] = "deterministic_allocator_not_on_wire"
     elif isinstance(request.target, FleetReinforcementTarget):
         metadata["fleet_template_id"] = request.target.fleet_template_id
-    else:
-        metadata["technology_id"] = request.target.technology_id
         metadata["context_822c"] = request.target.context_822c
+    elif isinstance(request.target, ResearchTarget):
+        metadata["technology_id"] = request.target.technology_id
+    else:
+        raise TypeError("Unsupported response metadata target.")
     return rewritten, metadata
 
 
@@ -2157,15 +2488,27 @@ def inject_at_packet_boundary(
         return None
     command = _build_request_record(request, command_serial)
     application_prefix = application_prefix_for_record(command)
-    inserted_length = len(application_prefix) + len(command)
-    if (
-        len(payload) + inserted_length > max_payload_length
-    ):
-        return None
     application = application_prefix + command
+    inserted_length = len(application)
+    fragment_capacity = max_payload_length - RELIABLE_HEADER_LENGTH
+    if fragment_capacity <= 0:
+        raise ValueError(
+            "max_payload_length must leave room after the reliable header."
+        )
+    injection_offset = read_uint24_be(payload, 6)
+    wire_payloads = tuple(
+        write_uint24_be(
+            payload,
+            6,
+            injection_offset + offset,
+        )
+        + application[offset : offset + fragment_capacity]
+        for offset in range(0, inserted_length, fragment_capacity)
+    )
     return Injection(
         payload=payload + application,
-        injection_offset=read_uint24_be(payload, 6),
+        wire_payloads=wire_payloads,
+        injection_offset=injection_offset,
         serial=command_serial,
         command_record_length=len(command),
         inserted_length=inserted_length,
@@ -2185,6 +2528,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log", type=Path, required=True)
     parser.add_argument("--ready-file", type=Path, required=True)
     parser.add_argument("--status-file", type=Path, required=True)
+    parser.add_argument("--flow-lock-file", type=Path, required=True)
     parser.add_argument("--arm-file", type=Path, required=True)
     parser.add_argument("--acknowledge-disposable-session", action="store_true")
     return parser.parse_args()
@@ -2216,17 +2560,20 @@ def run() -> int:
         transport_process_names,
     )
     last_port_refresh = time.monotonic()
+    last_candidate_confidence: tuple[tuple[object, ...], ...] = ()
     active_filter = DISCOVERY_FILTER
     last_serials: dict[tuple[str, int, int], int] = {}
     arm_request: ArmRequest | None = None
     arm_error_signature: tuple[int, int] | None = None
+    last_flow_lock_request: dict[str, object] | None = None
     stream_translators: list[StreamTranslator] = []
-    carrier_rewrites: dict[bytes, bytes] = {}
+    carrier_rewrites: dict[bytes, tuple[bytes, ...]] = {}
     proxy_actor: int | None = None
     synthetic_serial_count = 0
     last_synthetic_serial = 0
     completed_requests: list[dict[str, object]] = []
     last_request: dict[str, object] | None = None
+    armed_at: float | None = None
     injected_at: float | None = None
     injected_serial: int | None = None
     active_inserted_length: int | None = None
@@ -2266,7 +2613,9 @@ def run() -> int:
                 for port, names in sorted(port_owners.items())
             },
             "flow": asdict(discovery.locked) if discovery.locked else None,
-            "flow_candidates": discovery.candidate_payload(),
+            "flow_lock_method": discovery.lock_method,
+            "flow_candidates": discovery.candidate_payload(time.monotonic()),
+            "last_flow_lock_request": last_flow_lock_request,
             "last_serials": {
                 f"{direction}_actor_{actor}_origin_{origin}": serial
                 for (direction, actor, origin), serial in sorted(last_serials.items())
@@ -2302,6 +2651,7 @@ def run() -> int:
     ) -> None:
         nonlocal arm_request
         nonlocal arm_error_signature
+        nonlocal armed_at
         nonlocal injected_at
         nonlocal response_retagged
         nonlocal response_timeout_logged
@@ -2314,7 +2664,7 @@ def run() -> int:
             "action": arm_request.action,
             "outcome": outcome,
             "source_actor": arm_request.source_actor,
-            "serial_u32": injected_serial,
+            "serial_u32": injected_serial if injected_at is not None else None,
             "host_acknowledged_inserted_bytes": (
                 host_acknowledged_inserted_bytes
             ),
@@ -2331,6 +2681,7 @@ def run() -> int:
         last_request = record
         arm_request = None
         arm_error_signature = None
+        armed_at = None
         injected_at = None
         response_retagged = False
         response_timeout_logged = False
@@ -2358,6 +2709,7 @@ def run() -> int:
         "supported_actions": list(SUPPORTED_SESSION_PROXY_ACTIONS),
         "command_serial_translation": True,
         "multi_injection": True,
+        "manual_flow_lock_supported": True,
         "request_origin_default": 0,
     }
     append_jsonl(args.log, started)
@@ -2405,30 +2757,98 @@ def run() -> int:
                         )
                         write_json(args.status_file, status())
 
+                locked: FlowKey | None = None
+                if args.flow_lock_file.exists():
+                    try:
+                        lock_request = parse_flow_lock_request(
+                            args.flow_lock_file,
+                            session_id,
+                        )
+                        locked = discovery.lock_confirmed_candidate(
+                            lock_request.candidate_id,
+                            observed_at=now,
+                        )
+                        last_flow_lock_request = {
+                            "request_id": lock_request.request_id,
+                            "candidate_id": lock_request.candidate_id,
+                            "outcome": "locked",
+                            "lock_method": discovery.lock_method,
+                            "flow": asdict(locked),
+                            "finished_at": now_iso(),
+                        }
+                        append_jsonl(
+                            args.log,
+                            {
+                                "event": "player_confirmed_flow_lock_accepted",
+                                "timestamp": now_iso(),
+                                **last_flow_lock_request,
+                            },
+                        )
+                    except (OSError, TypeError, ValueError) as error:
+                        last_flow_lock_request = {
+                            "outcome": "rejected",
+                            "error": f"{type(error).__name__}: {error}",
+                            "finished_at": now_iso(),
+                        }
+                        append_jsonl(
+                            args.log,
+                            {
+                                "event": "player_confirmed_flow_lock_rejected",
+                                "timestamp": now_iso(),
+                                **last_flow_lock_request,
+                            },
+                        )
+                    finally:
+                        args.flow_lock_file.unlink(missing_ok=True)
+                        write_json(args.status_file, status())
+
                 candidate_packets_before = sum(
                     evidence.outbound_packets + evidence.inbound_packets
                     for evidence in discovery.candidates.values()
                 )
-                locked = discovery.observe(
-                    src_ip=str(packet.src_addr),
-                    src_port=int(packet.src_port),
-                    dst_ip=str(packet.dst_addr),
-                    dst_port=int(packet.dst_port),
-                    local_ip=args.local_ip,
-                    host_ip=args.host_ip,
-                    port_owners=port_owners,
-                    game_process_present=game_process_present,
-                    is_outbound=bool(packet.is_outbound),
-                    is_inbound=bool(packet.is_inbound),
-                    payload=original,
-                    observed_at=now,
-                )
+                if locked is None:
+                    locked = discovery.observe(
+                        src_ip=str(packet.src_addr),
+                        src_port=int(packet.src_port),
+                        dst_ip=str(packet.dst_addr),
+                        dst_port=int(packet.dst_port),
+                        local_ip=args.local_ip,
+                        host_ip=args.host_ip,
+                        port_owners=port_owners,
+                        game_process_present=game_process_present,
+                        is_outbound=bool(packet.is_outbound),
+                        is_inbound=bool(packet.is_inbound),
+                        payload=original,
+                        observed_at=now,
+                    )
                 candidate_packets_after = sum(
                     evidence.outbound_packets + evidence.inbound_packets
                     for evidence in discovery.candidates.values()
                 )
                 if candidate_packets_after != candidate_packets_before:
                     write_json(args.status_file, status())
+                candidate_snapshot = discovery.candidate_payload(now)
+                candidate_confidence = tuple(
+                    (
+                        candidate.get("candidate_id"),
+                        candidate.get("route"),
+                        candidate.get("bidirectional"),
+                        candidate.get("reliable_observed"),
+                        candidate.get("automatic_eligible"),
+                        candidate.get("automatic_lock_basis"),
+                    )
+                    for candidate in candidate_snapshot
+                )
+                if candidate_confidence != last_candidate_confidence:
+                    append_jsonl(
+                        args.log,
+                        {
+                            "event": "flow_candidate_confidence_changed",
+                            "timestamp": now_iso(),
+                            "candidates": candidate_snapshot,
+                        },
+                    )
+                    last_candidate_confidence = candidate_confidence
                 if locked is not None:
                     append_jsonl(
                         args.log,
@@ -2436,6 +2856,7 @@ def run() -> int:
                             "event": "flow_locked",
                             "timestamp": now_iso(),
                             **asdict(locked),
+                            "lock_method": discovery.lock_method,
                             "configured_host_ip": args.host_ip,
                         },
                     )
@@ -2534,6 +2955,13 @@ def run() -> int:
                                 source_actor=requested_actor,
                             )
                             proxy_actor = requested_actor
+                            armed_at = now
+                            injected_serial = None
+                            active_inserted_length = None
+                            active_command_record_length = None
+                            response_retagged = False
+                            response_timeout_logged = False
+                            host_acknowledged_inserted_bytes = False
                             append_jsonl(
                                 args.log,
                                 {
@@ -2575,10 +3003,32 @@ def run() -> int:
                         and is_outbound_flow
                         and original in carrier_rewrites
                     ):
-                        packet.payload = carrier_rewrites[original]
-                        divert.send(packet, recalculate_checksum=True)
+                        for wire_payload in carrier_rewrites[original]:
+                            packet.payload = wire_payload
+                            divert.send(packet, recalculate_checksum=True)
                         carrier_retransmissions += 1
                         continue
+
+                    if stream_translators and is_outbound_flow:
+                        outgoing, serial_changes = translate_existing_outbound_stream(
+                            original,
+                            stream_translators=stream_translators,
+                            actor=proxy_actor or 0,
+                            serial_delta=synthetic_serial_count,
+                        )
+                        if outgoing != original:
+                            translated_sender_packets += 1
+                        if serial_changes:
+                            translated_command_serials += len(serial_changes)
+                            append_jsonl(
+                                args.log,
+                                {
+                                    "event": "outbound_command_serials_translated",
+                                    "timestamp": now_iso(),
+                                    "changes": serial_changes,
+                                },
+                            )
+                        packet.payload = outgoing
 
                     if arm_request is not None and injected_at is None and is_outbound_flow:
                         serial = next_actor_serial(
@@ -2588,21 +3038,17 @@ def run() -> int:
                             reserved_serials=synthetic_serial_count,
                             previous_synthetic_serial=last_synthetic_serial,
                         )
-                        translated_carrier = original
-                        for translator in stream_translators:
-                            translated_carrier = translator.translate_outbound(
-                                translated_carrier
-                            )
                         injection = inject_at_packet_boundary(
-                            translated_carrier,
+                            outgoing,
                             request=arm_request,
                             command_serial=serial,
                             max_payload_length=args.max_payload_length,
                         )
                         if injection is not None:
-                            packet.payload = injection.payload
-                            divert.send(packet, recalculate_checksum=True)
-                            carrier_rewrites[original] = injection.payload
+                            for wire_payload in injection.wire_payloads:
+                                packet.payload = wire_payload
+                                divert.send(packet, recalculate_checksum=True)
+                            carrier_rewrites[original] = injection.wire_payloads
                             stream_translators.append(StreamTranslator(
                                 injection_offset=injection.injection_offset,
                                 inserted_length=injection.inserted_length,
@@ -2629,6 +3075,13 @@ def run() -> int:
                                     "subsequent_command_serial_delta": synthetic_serial_count,
                                     "before_length": len(original),
                                     "after_length": len(injection.payload),
+                                    "wire_payload_lengths": [
+                                        len(value)
+                                        for value in injection.wire_payloads
+                                    ],
+                                    "wire_fragment_count": len(
+                                        injection.wire_payloads
+                                    ),
                                     "sender_offset": read_uint24_be(original, 6),
                                     "ack_offset": read_uint24_be(original, 10),
                                     "target": asdict(arm_request.target),
@@ -2637,30 +3090,7 @@ def run() -> int:
                             write_json(args.status_file, status())
                             continue
 
-                    elif stream_translators and is_outbound_flow:
-                        outgoing = original
-                        for translator in stream_translators:
-                            outgoing = translator.translate_outbound(outgoing)
-                        if outgoing != original:
-                            translated_sender_packets += 1
-                        outgoing, serial_changes = translate_outbound_command_serials(
-                            outgoing,
-                            actor=proxy_actor or 0,
-                            delta=synthetic_serial_count,
-                        )
-                        if serial_changes:
-                            translated_command_serials += len(serial_changes)
-                            append_jsonl(
-                                args.log,
-                                {
-                                    "event": "outbound_command_serials_translated",
-                                    "timestamp": now_iso(),
-                                    "changes": serial_changes,
-                                },
-                            )
-                        packet.payload = outgoing
-
-                    elif stream_translators and is_inbound_flow:
+                    if stream_translators and is_inbound_flow:
                         outgoing = original
                         for translator in reversed(stream_translators):
                             outgoing = translator.translate_inbound(outgoing)
@@ -2737,6 +3167,27 @@ def run() -> int:
                     )
 
                 if (
+                    arm_request is not None
+                    and injected_at is None
+                    and armed_at is not None
+                    and now - armed_at >= args.response_timeout_seconds
+                ):
+                    append_jsonl(
+                        args.log,
+                        {
+                            "event": "carrier_wait_timeout",
+                            "timestamp": now_iso(),
+                            "seconds": args.response_timeout_seconds,
+                        },
+                    )
+                    finish_request(
+                        "carrier_timeout",
+                        error=(
+                            "No pure reliable ACK carrier became available "
+                            "before the timeout."
+                        ),
+                    )
+                elif (
                     injected_at is not None
                     and not response_retagged
                     and not response_timeout_logged
@@ -2788,6 +3239,7 @@ def run() -> int:
                 "session_id": session_id,
                 "state": state_name(),
                 "flow": asdict(discovery.locked) if discovery.locked else None,
+                "flow_lock_method": discovery.lock_method,
                 "injected_serial_u32": injected_serial,
                 "host_acknowledged_inserted_bytes": host_acknowledged_inserted_bytes,
                 "response_retagged": response_retagged,
@@ -2800,6 +3252,7 @@ def run() -> int:
                 "completed_request_count": len(completed_requests),
             },
         )
+        args.flow_lock_file.unlink(missing_ok=True)
         args.ready_file.unlink(missing_ok=True)
         write_json(args.status_file, status())
     return 0

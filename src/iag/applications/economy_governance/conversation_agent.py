@@ -6,15 +6,22 @@ from __future__ import annotations
 import inspect
 import json
 from collections.abc import Callable
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
+from iag.applications.plan_advisor import PlanExceptionAdvisor
+from iag.core.application_plan import (
+    ApplicationPlanBook,
+    tool_requires_execution_lock,
+)
 from iag.core.campaign_strategy import (
     public_strategy_state,
     render_strategy_context,
 )
 from iag.core.context_window import build_context_messages
 from iag.core.conversation_store import ConversationStore, now_iso
+from iag.core.read_tasks import ReadTask, ReadTaskPool, tool_is_read_only
 from iag.infrastructure.llm.model_client import chat_completion_message
 from iag.infrastructure.llm.model_pool import TOOL_CALL_PROTOCOLS
 from iag.infrastructure.llm.model_pool_runtime import (
@@ -24,6 +31,7 @@ from iag.infrastructure.llm.model_pool_runtime import (
 from iag.infrastructure.llm.runtime_config import RuntimeConfig
 from iag.stellaris.state.extract_game_state import load_save_metadata
 from iag.stellaris.state.save_ingest import resolve_current_save
+from iag.stellaris.state.world_snapshot import WorldSnapshot, WorldStateService
 
 from .agent_tools import (
     AgentToolbox,
@@ -76,6 +84,29 @@ RUNTIME_PROTOCOL = """
 破坏事实准确性。
 """.strip()
 
+PLAN_RUNTIME_PROTOCOL = """
+# 持续计划书
+
+长期经济目标应先写入计划书，记录层级目标、星球分工、资源预期范围、继续/暂停/
+完成条件以及模型自行决定的容差。计划节点可以是约束或决策点；只有具体候选和工具
+参数已经明确时才附加确定性 action，不要把计划写成固定建设队列。
+
+条件中的 fact 必须来自 inspect_plan_facts 返回的稳定路径。已有活动计划时，
+应用 edit_application_plan 在同一本计划书中追加或修订根目标，不要覆盖它。
+确定性 action 只允许 prepare_* 后接可选 execute_*；需要月底存档确认的
+建设使用 wait_for_conditions 并写明 completion_conditions。
+
+计划仍有效时本地程序会直接审查并推进，不会再次调用模型。收到局部计划异常时，
+只检查输入中的受影响节点和相关事实，用 edit_application_plan 保留上层目标、已完成
+节点和无关分支，并明确失效、保留、替换及恢复位置。
+""".strip()
+
+ECONOMY_LOCALIZED_ROLE_PROMPT = """
+你是 Imperial Auto Governor 的经济治理计划维护者。本轮不是完整内政巡检；你只能
+处理输入中已经定位的经济计划异常，不能代替舰队或科研 Application 决策，也不能
+重建整局战略。玩家授权、最新存档、合法候选和本地执行检查仍是强制边界。
+""".strip()
+
 
 class ConversationAgentError(RuntimeError):
     """The configured model cannot complete a persistent tool turn."""
@@ -106,9 +137,7 @@ def _normalized_tool_calls(raw: Any, round_index: int) -> list[dict[str, Any]]:
         function = function if isinstance(function, dict) else {}
         result.append(
             {
-                "id": str(
-                    item.get("id") or f"iag_call_{round_index}_{call_index}"
-                ),
+                "id": str(item.get("id") or f"iag_call_{round_index}_{call_index}"),
                 "type": "function",
                 "function": {
                     "name": str(function.get("name") or ""),
@@ -146,6 +175,17 @@ def _supports_visible_delta_callback(function: Callable[..., Any]) -> bool:
     )
 
 
+def _supports_keyword(function: Callable[..., Any], name: str) -> bool:
+    try:
+        parameters = inspect.signature(function).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.name == name or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+
+
 class ConversationAgent:
     def __init__(
         self,
@@ -155,6 +195,10 @@ class ConversationAgent:
         model_pool_runtime: ModelPoolRuntime | None = None,
         completion_fn: Callable[..., dict[str, Any]] = chat_completion_message,
         toolbox_factory: Callable[..., AgentToolbox] = AgentToolbox,
+        execution_lock: Any = None,
+        plan_advisor: PlanExceptionAdvisor | None = None,
+        world_state_service: WorldStateService | None = None,
+        read_task_pool: ReadTaskPool | None = None,
     ):
         self.runtime_config = runtime_config
         self.store = store
@@ -163,8 +207,16 @@ class ConversationAgent:
         )
         self.completion_fn = completion_fn
         self.toolbox_factory = toolbox_factory
+        self.execution_lock = execution_lock
+        self.world_state_service = world_state_service
+        self.read_task_pool = read_task_pool
+        self.plan_advisor = plan_advisor or PlanExceptionAdvisor(
+            runtime_config,
+            completion_fn=completion_fn,
+        )
 
-    def _prompt(self, config: dict[str, Any]) -> str:
+    @staticmethod
+    def _strategic_prompt(config: dict[str, Any]) -> str:
         runtime_root = Path(config["runtime_root"]).expanduser()
         configured = Path(
             config.get(
@@ -172,21 +224,45 @@ class ConversationAgent:
                 runtime_root / "operator" / "strategic_prompt.md",
             )
         ).expanduser()
-        prompt_path = configured if configured.is_absolute() else runtime_root / configured
+        prompt_path = (
+            configured if configured.is_absolute() else runtime_root / configured
+        )
         try:
-            strategic = prompt_path.read_text(encoding="utf-8").strip()
+            return prompt_path.read_text(encoding="utf-8").strip()
         except FileNotFoundError as error:
             raise ConversationAgentError(
                 f"Strategic prompt does not exist: {prompt_path}"
             ) from error
+
+    def _localized_prompt(self, _config: dict[str, Any]) -> str:
+        return (
+            ECONOMY_LOCALIZED_ROLE_PROMPT
+            + "\n\n"
+            + RUNTIME_PROTOCOL
+            + "\n\n"
+            + PLAN_RUNTIME_PROTOCOL
+            + "\n\n本轮仅处理用户消息中的局部计划异常。不要重建整局态势、"
+            "读取无关事实或改写未出现在局部上下文中的计划分支。"
+        )
+
+    def _prompt(
+        self,
+        config: dict[str, Any],
+        world_snapshot: WorldSnapshot | None = None,
+    ) -> str:
+        strategic = self._strategic_prompt(config)
         game_date: str | None = None
         metadata = self.store.conversation_metadata()
         campaign_id = metadata.get("campaign_id")
         if campaign_id:
             try:
-                save_path = resolve_current_save(
-                    config,
-                    expected_campaign_id=str(campaign_id),
+                save_path = (
+                    world_snapshot.path
+                    if world_snapshot is not None
+                    else resolve_current_save(
+                        config,
+                        expected_campaign_id=str(campaign_id),
+                    )
                 )
                 game_date = load_save_metadata(save_path).get("date")
             except Exception:
@@ -196,9 +272,7 @@ class ConversationAgent:
         strategy = public_strategy_state(
             self.store,
             game_date,
-            renewal_lead_months=int(
-                config.get("decade_plan_renewal_lead_months", 12)
-            ),
+            renewal_lead_months=int(config.get("decade_plan_renewal_lead_months", 12)),
         )
         pending = self.store.get_state("pending_execution_confirmations", None)
         if not isinstance(pending, list):
@@ -218,14 +292,31 @@ class ConversationAgent:
             ],
             "last_execution": self.store.get_state("last_execution", None),
         }
+        plan = self.store.get_state(
+            "application_plan:economy_governance",
+            None,
+        )
+        plan_context = (
+            {
+                key: value
+                for key, value in plan.items()
+                if key not in {"runtime", "original_plan"}
+            }
+            if isinstance(plan, dict)
+            else None
+        )
         return (
             strategic
             + "\n\n"
             + RUNTIME_PROTOCOL
             + "\n\n"
+            + PLAN_RUNTIME_PROTOCOL
+            + "\n\n"
             + render_strategy_context(strategy)
             + "\n\n# 本地执行事实账本\n\n"
             + json.dumps(ledger, ensure_ascii=False, indent=2)
+            + "\n\n# 当前经济计划\n\n"
+            + json.dumps(plan_context, ensure_ascii=False, indent=2)
             + "\n\n该账本优先于会话中的自然语言自述。未在账本或新存档中确认的动作，"
             "一律不得视为已完成。"
         )
@@ -277,14 +368,178 @@ class ConversationAgent:
         trigger: str,
         user_content: str | None = None,
         autonomy_mode: str = "paused",
-        visible_event_callback: (
-            Callable[[str, dict[str, Any]], None] | None
-        ) = None,
+        visible_event_callback: (Callable[[str, dict[str, Any]], None] | None) = None,
+        world_snapshot: WorldSnapshot | None = None,
     ) -> dict[str, Any]:
         runtime = self.runtime_config.snapshot()
         config = runtime.settings
         self.model_pool_runtime.replace_pool(runtime.model_pool)
         request_options = runtime.request_options
+        if trigger not in {"chat", "manual_review", "autonomous"}:
+            raise ConversationAgentError(f"Unsupported trigger: {trigger}")
+        if autonomy_mode not in {"paused", "advisory", "execute"}:
+            raise ConversationAgentError(f"Unsupported autonomy mode: {autonomy_mode}")
+
+        # Autonomy controls scheduled reviews. A direct player message remains
+        # an explicit authorization channel even while autonomous work is paused.
+        allow_execute = trigger == "chat" or autonomy_mode == "execute"
+        toolbox_kwargs: dict[str, Any] = {
+            "allow_execute": allow_execute,
+            "trigger": trigger,
+        }
+        if _supports_keyword(self.toolbox_factory, "world_snapshot"):
+            toolbox_kwargs["world_snapshot"] = world_snapshot
+        if _supports_keyword(self.toolbox_factory, "world_state_service"):
+            toolbox_kwargs["world_state_service"] = self.world_state_service
+        toolbox = self.toolbox_factory(
+            config,
+            self.store,
+            **toolbox_kwargs,
+        )
+        plan_fact_provider = getattr(toolbox, "inspect_empire_state", None)
+        if not callable(plan_fact_provider):
+            plan_fact_provider = lambda: {
+                "application_id": "economy_governance",
+                "fact_provider_available": False,
+            }
+        plan_book = ApplicationPlanBook(
+            self.store,
+            "economy_governance",
+            plan_fact_provider,
+        )
+        tool_schemas = [*toolbox.schemas(), *plan_book.schemas()]
+        localized_plan_context: dict[str, Any] | None = None
+        external_review_ids: list[str] = []
+        if trigger == "autonomous":
+            try:
+                evaluation = plan_book.evaluate()
+                decision = str(evaluation.get("decision") or "")
+                if decision in {"continue", "execute"}:
+                    advancement = plan_book.execute_due_action(
+                        evaluation,
+                        toolbox,
+                        allow_execute=allow_execute,
+                        execution_lock=self.execution_lock,
+                    )
+                    provisional_count = int(
+                        advancement.get("executed") is True
+                        and advancement.get("provisional") is True
+                    )
+                    confirmed_count = int(
+                        advancement.get("executed") is True and provisional_count == 0
+                    )
+                    if provisional_count:
+                        summary = (
+                            "经济治理已按计划提交一个确定性节点，正等待"
+                            "新存档确认；未调用主模型。"
+                        )
+                    elif advancement.get("executed"):
+                        summary = (
+                            "经济治理已通过计划书审查并执行一个确定性节点；"
+                            "未调用主模型。"
+                        )
+                    else:
+                        summary = "经济状态仍在计划允许范围内；本轮无需调用主模型。"
+                    self.store.append(
+                        "system",
+                        summary,
+                        kind="plan_autonomy",
+                        visible=True,
+                    )
+                    self.store.set_state(
+                        "last_autonomy",
+                        {
+                            "finished_at": now_iso(),
+                            "trigger": trigger,
+                            "mode": autonomy_mode,
+                            "plan_decision": advancement.get("decision"),
+                            "executed": bool(advancement.get("executed")),
+                            "executed_count": confirmed_count,
+                            "provisional_count": provisional_count,
+                        },
+                    )
+                    return {
+                        "schema": "iag.application_plan_turn.v1",
+                        "application_id": "economy_governance",
+                        "finished_at": now_iso(),
+                        "trigger": trigger,
+                        "final_content": summary,
+                        "plan_evaluation": evaluation,
+                        "plan_advancement": advancement,
+                        "tool_events": [],
+                        "context": {"mode": "deterministic_plan"},
+                        "executed": bool(advancement.get("executed")),
+                        "executed_count": confirmed_count,
+                        "provisional_count": provisional_count,
+                    }
+                if decision == "localized_anomaly":
+                    adviser = self.plan_advisor.handle(evaluation, plan_book)
+                    if adviser.get("decision") in {"continue", "patched"}:
+                        action = (
+                            "确认原计划继续"
+                            if adviser.get("decision") == "continue"
+                            else "完成局部计划修补"
+                        )
+                        summary = f"经济治理快速参谋已{action}；主模型未调用。"
+                        self.store.append(
+                            "system",
+                            summary,
+                            kind="plan_adviser",
+                            visible=True,
+                        )
+                        self.store.set_state(
+                            "last_autonomy",
+                            {
+                                "finished_at": now_iso(),
+                                "trigger": trigger,
+                                "mode": autonomy_mode,
+                                "plan_decision": adviser.get("decision"),
+                                "executed": False,
+                                "executed_count": 0,
+                                "provisional_count": 0,
+                            },
+                        )
+                        return {
+                            "schema": "iag.application_plan_turn.v1",
+                            "application_id": "economy_governance",
+                            "finished_at": now_iso(),
+                            "trigger": trigger,
+                            "final_content": summary,
+                            "plan_evaluation": evaluation,
+                            "plan_adviser": adviser,
+                            "tool_events": [],
+                            "context": {"mode": "fast_plan_adviser"},
+                            "executed": False,
+                            "executed_count": 0,
+                            "provisional_count": 0,
+                        }
+                    localized_plan_context = adviser.get("main_context")
+                elif decision == "localized_model_decision":
+                    external_review_ids = [
+                        str(item.get("review_id") or "")
+                        for item in evaluation.get("external_review_directives", [])
+                        if isinstance(item, dict) and item.get("review_id")
+                    ]
+                    localized_plan_context = {
+                        "schema": "iag.localized_plan_decision.v1",
+                        **evaluation,
+                    }
+            except Exception as error:  # noqa: BLE001 - isolate domain failure
+                localized_plan_context = {
+                    "schema": "iag.localized_plan_runtime_error.v1",
+                    "application_id": "economy_governance",
+                    "error": f"{type(error).__name__}: {error}",
+                    "instruction": "只处理计划运行错误，不要重读无关全局状态。",
+                }
+
+        if not bool(config.get("tool_calling_enabled", True)):
+            raise ConversationAgentError("当前模型配置已关闭工具调用。")
+        if localized_plan_context is not None:
+            tool_schemas = [
+                schema
+                for schema in tool_schemas
+                if schema.get("function", {}).get("name") == "edit_application_plan"
+            ]
         try:
             endpoint = self.model_pool_runtime.context_endpoint(
                 provider=TOOL_CALL_PROTOCOLS,
@@ -294,12 +549,6 @@ class ConversationAgent:
             raise ConversationAgentError(
                 "模型池中没有当前可用且支持工具调用的模型端点。"
             ) from error
-        if not bool(config.get("tool_calling_enabled", True)):
-            raise ConversationAgentError("当前模型配置已关闭工具调用。")
-        if trigger not in {"chat", "manual_review", "autonomous"}:
-            raise ConversationAgentError(f"Unsupported trigger: {trigger}")
-        if autonomy_mode not in {"paused", "advisory", "execute"}:
-            raise ConversationAgentError(f"Unsupported autonomy mode: {autonomy_mode}")
 
         if trigger == "chat":
             text = str(user_content or "").strip()
@@ -325,27 +574,26 @@ class ConversationAgent:
                 )
         else:
             label = "玩家要求立即巡检" if trigger == "manual_review" else "后台自主巡检"
-            self.store.append(
-                "user",
-                (
+            trigger_content = (
+                "[计划局部处理] 只处理下列异常或计划决策点，不要重新检查完整世界：\n"
+                + json.dumps(
+                    localized_plan_context,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                if localized_plan_context is not None
+                else (
                     f"[{label}] 请读取最新同步存档，结合整局会话完成本轮内政审计。"
                     "需要建设时使用合法候选；无需建设时记录 noop。"
-                ),
+                )
+            )
+            self.store.append(
+                "user",
+                trigger_content,
                 kind="autonomy_trigger",
                 visible=True,
                 metadata={"trigger": trigger},
             )
-
-        # Autonomy controls scheduled reviews. A direct player message remains
-        # an explicit authorization channel even while autonomous work is paused.
-        allow_execute = trigger == "chat" or autonomy_mode == "execute"
-        toolbox = self.toolbox_factory(
-            config,
-            self.store,
-            allow_execute=allow_execute,
-            trigger=trigger,
-        )
-        tool_schemas = toolbox.schemas()
 
         def pooled_completion(
             _budget_endpoint: Any,
@@ -365,9 +613,7 @@ class ConversationAgent:
                 require_tools=True,
             )
 
-        supports_visible_stream = _supports_visible_delta_callback(
-            self.completion_fn
-        )
+        supports_visible_stream = _supports_visible_delta_callback(self.completion_fn)
 
         def visible_completion(
             messages: list[dict[str, Any]],
@@ -413,15 +659,46 @@ class ConversationAgent:
                 require_tools=True,
             )
 
-        messages, context_stats = build_context_messages(
-            self.store,
-            config,
-            endpoint=endpoint,
-            request_options=request_options,
-            system_prompt=self._prompt(config),
-            tool_schemas=tool_schemas,
-            completion_fn=pooled_completion,
-        )
+        if localized_plan_context is not None:
+            system_prompt = self._localized_prompt(config)
+        elif _supports_keyword(self._prompt, "world_snapshot"):
+            system_prompt = self._prompt(config, world_snapshot=world_snapshot)
+        else:
+            # Preserve compatibility with application subclasses that still
+            # override the pre-snapshot ``_prompt(config)`` hook.
+            system_prompt = self._prompt(config)
+        if localized_plan_context is not None:
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": (
+                        "只处理以下局部计划上下文：\n"
+                        + json.dumps(
+                            localized_plan_context,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                    ),
+                },
+            ]
+            context_stats = {
+                "schema": "iag.context_window.v1",
+                "mode": "localized_plan_exception",
+                "included_segments": 1,
+                "omitted_segments": 0,
+            }
+        else:
+            messages, context_stats = build_context_messages(
+                self.store,
+                config,
+                endpoint=endpoint,
+                request_options=request_options,
+                system_prompt=system_prompt,
+                tool_schemas=tool_schemas,
+                completion_fn=pooled_completion,
+                application_id="economy_governance",
+            )
 
         maximum_rounds = max(1, min(int(config.get("tool_loop_max_rounds", 12)), 16))
         final_content = ""
@@ -442,16 +719,12 @@ class ConversationAgent:
             reasoning_content = assistant.get("reasoning_content")
             assistant_metadata: dict[str, Any] = {"origin": "model"}
             if isinstance(assistant.get("anthropic_content"), list):
-                assistant_metadata["anthropic_content"] = assistant[
-                    "anthropic_content"
-                ]
+                assistant_metadata["anthropic_content"] = assistant["anthropic_content"]
             assistant_message_id = self.store.append(
                 "assistant",
                 content,
                 reasoning_content=(
-                    str(reasoning_content)
-                    if reasoning_content is not None
-                    else None
+                    str(reasoning_content) if reasoning_content is not None else None
                 ),
                 tool_calls=valid_calls or None,
                 kind="tool_call" if valid_calls else "assistant_message",
@@ -464,9 +737,7 @@ class ConversationAgent:
                     {
                         "id": assistant_message_id,
                         "role": "assistant",
-                        "kind": (
-                            "tool_call" if valid_calls else "assistant_message"
-                        ),
+                        "kind": ("tool_call" if valid_calls else "assistant_message"),
                         "content": content,
                         "round_index": round_index,
                     },
@@ -478,17 +749,42 @@ class ConversationAgent:
                 final_content = content.strip()
                 break
 
-            for call_index, call in enumerate(valid_calls):
-                call_id = str(call.get("id") or f"iag_call_{round_index}_{call_index}")
+            def dispatch_call(
+                call: dict[str, Any],
+                call_index: int,
+                _round_index: int = round_index,
+            ) -> tuple[str, str, bool, bool, dict[str, Any], str]:
+                call_id = str(
+                    call.get("id") or f"iag_call_{_round_index}_{call_index}"
+                )
                 function = call.get("function")
                 function = function if isinstance(function, dict) else {}
                 name = str(function.get("name") or "")
-                success = True
+                dispatch_succeeded = True
+                is_plan_tool = plan_book.handles(name)
                 try:
                     arguments = _parse_arguments(function.get("arguments", "{}"))
-                    result, summary = toolbox.dispatch(name, arguments)
+                    if is_plan_tool:
+                        result, summary = plan_book.dispatch(name, arguments)
+                    else:
+                        if not tool_is_read_only(name, toolbox):
+                            assert_current = getattr(
+                                toolbox,
+                                "assert_world_snapshot_current",
+                                None,
+                            )
+                            if callable(assert_current):
+                                assert_current()
+                        lock_context = (
+                            self.execution_lock
+                            if self.execution_lock is not None
+                            and tool_requires_execution_lock(name)
+                            else nullcontext()
+                        )
+                        with lock_context:
+                            result, summary = toolbox.dispatch(name, arguments)
                 except Exception as error:
-                    success = False
+                    dispatch_succeeded = False
                     result = {
                         "schema": "iag.tool_error.v1",
                         "success": False,
@@ -496,6 +792,118 @@ class ConversationAgent:
                         "error": f"{type(error).__name__}: {error}",
                     }
                     summary = f"工具 {name or 'unknown'} 被本地拒绝：{error}"
+                return (
+                    call_id,
+                    name,
+                    is_plan_tool,
+                    dispatch_succeeded,
+                    result,
+                    summary,
+                )
+
+            def timed_out_call(
+                call: dict[str, Any],
+                call_index: int,
+                error: BaseException,
+                _round_index: int = round_index,
+            ) -> tuple[str, str, bool, bool, dict[str, Any], str]:
+                call_id = str(
+                    call.get("id") or f"iag_call_{_round_index}_{call_index}"
+                )
+                function = call.get("function")
+                function = function if isinstance(function, dict) else {}
+                name = str(function.get("name") or "")
+                return (
+                    call_id,
+                    name,
+                    plan_book.handles(name),
+                    False,
+                    {
+                        "schema": "iag.tool_error.v1",
+                        "success": False,
+                        "tool": name,
+                        "error": f"{type(error).__name__}: {error}",
+                    },
+                    f"工具 {name or 'unknown'} 读取超时：{error}",
+                )
+
+            dispatched: list[
+                tuple[str, str, bool, bool, dict[str, Any], str]
+            ] = []
+            call_index = 0
+            while call_index < len(valid_calls):
+                call = valid_calls[call_index]
+                function = call.get("function")
+                function = function if isinstance(function, dict) else {}
+                name = str(function.get("name") or "")
+                parallel_read = (
+                    self.read_task_pool is not None
+                    and not plan_book.handles(name)
+                    and tool_is_read_only(name, toolbox)
+                )
+                if not parallel_read:
+                    dispatched.append(dispatch_call(call, call_index))
+                    call_index += 1
+                    continue
+
+                end = call_index
+                while end < len(valid_calls):
+                    next_function = valid_calls[end].get("function")
+                    next_function = (
+                        next_function if isinstance(next_function, dict) else {}
+                    )
+                    next_name = str(next_function.get("name") or "")
+                    if plan_book.handles(next_name) or not tool_is_read_only(
+                        next_name,
+                        toolbox,
+                    ):
+                        break
+                    end += 1
+                batch_calls = valid_calls[call_index:end]
+                base_index = call_index
+                batch_results = self.read_task_pool.run(
+                    [
+                        ReadTask(
+                            key=str(item.get("id") or offset),
+                            fn=(
+                                lambda item=item, offset=offset, base_index=base_index: dispatch_call(
+                                    item,
+                                    base_index + offset,
+                                )
+                            ),
+                        )
+                        for offset, item in enumerate(batch_calls)
+                    ],
+                    timeout_seconds=float(
+                        config.get("read_task_timeout_seconds", 45.0)
+                    ),
+                )
+                for offset, (item, value) in enumerate(
+                    zip(batch_calls, batch_results)
+                ):
+                    if isinstance(value, BaseException):
+                        dispatched.append(
+                            timed_out_call(item, call_index + offset, value)
+                        )
+                    else:
+                        dispatched.append(value)
+                call_index = end
+
+            for (
+                call_id,
+                name,
+                is_plan_tool,
+                dispatch_succeeded,
+                result,
+                summary,
+            ) in dispatched:
+                if not is_plan_tool and tool_requires_execution_lock(name):
+                    plan_book.record_application_tool_event(
+                        name,
+                        result,
+                        summary,
+                    )
+                success = dispatch_succeeded and result.get("success") is not False
                 rendered = render_tool_result(result)
                 self.store.append(
                     "tool",
@@ -534,11 +942,10 @@ class ConversationAgent:
                 visible=True,
             )
 
-        turn_action_recorded = bool(
-            getattr(toolbox, "turn_action_recorded", False)
-        )
+        turn_action_recorded = bool(getattr(toolbox, "turn_action_recorded", False))
         if (
             trigger in {"manual_review", "autonomous"}
+            and localized_plan_context is None
             and not toolbox.review_recorded
             and not turn_action_recorded
         ):
@@ -603,21 +1010,15 @@ class ConversationAgent:
             "mode": autonomy_mode,
             "prepared_run_id": toolbox.prepared_run_id,
             "executed": toolbox.executed,
-            "executed_count": len(
-                confirmed_items
-            ),
+            "executed_count": len(confirmed_items),
             "provisional_count": len(provisional_items),
-            "executed_run_ids": [
-                item.get("run_id")
-                for item in confirmed_items
-            ],
-            "provisional_run_ids": [
-                item.get("run_id") for item in provisional_items
-            ],
+            "executed_run_ids": [item.get("run_id") for item in confirmed_items],
+            "provisional_run_ids": [item.get("run_id") for item in provisional_items],
             "review_recorded": toolbox.review_recorded,
         }
         if trigger in {"manual_review", "autonomous"}:
             self.store.set_state("last_autonomy", autonomy_record)
+        plan_book.complete_external_reviews(external_review_ids)
         return {
             "schema": "iag.conversation_turn.v1",
             "finished_at": now_iso(),
@@ -627,8 +1028,6 @@ class ConversationAgent:
             "context": context_stats,
             "prepared_run_id": toolbox.prepared_run_id,
             "executed": toolbox.executed,
-            "executed_count": len(
-                confirmed_items
-            ),
+            "executed_count": len(confirmed_items),
             "provisional_count": len(provisional_items),
         }

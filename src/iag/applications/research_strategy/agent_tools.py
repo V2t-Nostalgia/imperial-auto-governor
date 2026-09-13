@@ -22,6 +22,7 @@ from iag.stellaris.state.research_profiles import (
     extract_research_profile,
 )
 from iag.stellaris.state.save_ingest import resolve_current_save
+from iag.stellaris.state.world_snapshot import WorldSnapshot, WorldStateService
 
 INSPECT_RESEARCH_TOOL = {
     "type": "function",
@@ -93,6 +94,10 @@ def sha256_file(path: Path) -> str:
 class TechnologyToolbox:
     """One model-turn view over research state and one prepared selection."""
 
+    parallel_read_tools: ClassVar[frozenset[str]] = frozenset(
+        {"inspect_research_state"}
+    )
+
     tool_names: ClassVar[frozenset[str]] = frozenset(
         {
             "inspect_research_state",
@@ -107,10 +112,14 @@ class TechnologyToolbox:
         store: ConversationStore,
         *,
         allow_execute: bool,
+        world_snapshot: WorldSnapshot | None = None,
+        world_state_service: WorldStateService | None = None,
     ) -> None:
         self.config = dict(config)
         self.store = store
         self.allow_execute = allow_execute
+        self.world_snapshot = world_snapshot
+        self.world_state_service = world_state_service
         self.enabled = bool(
             self.config.get("experimental_research_tools_enabled", False)
         )
@@ -134,14 +143,46 @@ class TechnologyToolbox:
         campaign_id = self.store.conversation_metadata().get("campaign_id")
         if not campaign_id:
             raise TechnologyToolError("当前战役会话尚未绑定房主存档。")
+        if self.world_snapshot is not None:
+            return self.world_snapshot.path
         return resolve_current_save(
             self.config,
             expected_campaign_id=str(campaign_id),
         )
 
+    def _pinned_snapshot(self) -> WorldSnapshot | None:
+        if self.world_snapshot is not None:
+            return self.world_snapshot
+        if self.world_state_service is None:
+            return None
+        campaign_id = self.store.conversation_metadata().get("campaign_id")
+        if not campaign_id:
+            raise TechnologyToolError("当前战役会话尚未绑定房主存档。")
+        self.world_snapshot = self.world_state_service.pin(
+            self.config,
+            expected_campaign_id=str(campaign_id),
+        )
+        return self.world_snapshot
+
+    def assert_world_snapshot_current(self) -> None:
+        snapshot = self.world_snapshot
+        service = self.world_state_service
+        if snapshot is None or service is None:
+            return
+        campaign_id = self.store.conversation_metadata().get("campaign_id")
+        service.assert_current(
+            snapshot,
+            self.config,
+            expected_campaign_id=(str(campaign_id) if campaign_id else None),
+        )
+
     def _profile(self) -> tuple[Path, dict[str, Any]]:
-        path = self._save_path()
         game_root = detect_game_root(self.config)
+
+        snapshot = self._pinned_snapshot()
+        if snapshot is not None:
+            return snapshot.path, snapshot.research_profile(game_root=game_root)
+        path = self._save_path()
 
         def area_for(technology_id: str) -> str | None:
             if game_root is None:

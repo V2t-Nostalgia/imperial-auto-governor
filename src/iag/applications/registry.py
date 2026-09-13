@@ -14,7 +14,7 @@ def builtin_application_registry() -> ApplicationRegistry:
             ApplicationManifest(
                 schema_version="iag.application_manifest.v1",
                 application_id="economy_governance",
-                version="0.5.9",
+                version="0.5.10",
                 display_name_zh="帝国经济总管",
                 description_zh="管理殖民地建设、资源平衡与经济发展。",
                 agent_roles=("economy_governor",),
@@ -39,7 +39,7 @@ def builtin_application_registry() -> ApplicationRegistry:
             ApplicationManifest(
                 schema_version="iag.application_manifest.v1",
                 application_id="fleet_operations",
-                version="0.5.9",
+                version="0.5.10",
                 display_name_zh="舰队与扩张行动",
                 description_zh=(
                     "管理玩家授权的舰队、民用船、殖民与恒星基地命令。"
@@ -73,7 +73,7 @@ def builtin_application_registry() -> ApplicationRegistry:
             ApplicationManifest(
                 schema_version="iag.application_manifest.v1",
                 application_id="research_strategy",
-                version="0.5.9",
+                version="0.5.10",
                 display_name_zh="科研战略",
                 description_zh="读取合法科技候选并执行实验性科研选择。",
                 agent_roles=("research_director",),

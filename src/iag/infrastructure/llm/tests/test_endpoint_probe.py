@@ -73,6 +73,7 @@ class EndpointProbeTests(unittest.TestCase):
         self.assertTrue(result.model_found)
         self.assertEqual(result.discovered_model_count, 1)
         self.assertEqual(observed["url"], "https://api.example.test/v1/models")
+        self.assertEqual(result.probe_url, observed["url"])
         self.assertEqual(observed["authorization"], "Bearer test-key")
         self.assertEqual(observed["timeout"], 10)
 
@@ -105,6 +106,16 @@ class EndpointProbeTests(unittest.TestCase):
     def test_null_models_path_explicitly_disables_probe(self) -> None:
         result = probe_endpoint(endpoint(models_path=None))
         self.assertEqual(result.status, "probe_unsupported")
+
+    def test_missing_key_returns_an_authentication_result(self) -> None:
+        result = probe_endpoint(endpoint(enabled=False, api_key=None))
+
+        self.assertEqual(result.status, "authentication_failed")
+        self.assertIn("has no API key", result.detail)
+        self.assertEqual(
+            result.probe_url,
+            "https://api.example.test/v1/models",
+        )
 
     def test_anthropic_probe_uses_native_authentication_headers(self) -> None:
         observed: dict[str, Any] = {}

@@ -41,14 +41,17 @@ from iag.stellaris.execution.session_proxy import (
     build_fleet_move_record,
     build_research_record,
     build_zone_specialization_record,
+    flow_candidate_id,
     flow_packet_direction,
     inject_at_packet_boundary,
     next_actor_serial,
     observe_command_serials,
     packet_filter_for_flow,
     parse_arm_request,
+    parse_flow_lock_document,
     retag_matching_response,
     session_udp_port_owners,
+    translate_existing_outbound_stream,
     translate_outbound_command_serials,
     write_json,
 )
@@ -437,6 +440,121 @@ class SessionProxyTests(unittest.TestCase):
         self.assertEqual(locked.host_port, 52489)
         self.assertEqual(locked.route, "direct_peer_ip_owned_port")
 
+    def test_owned_direct_flow_locks_without_reliable_marker(self) -> None:
+        discovery = FlowDiscovery(minimum_each_direction=3)
+        common = {
+            "local_ip": "192.0.2.10",
+            "host_ip": "192.0.2.20",
+            "port_owners": {58778: {"steam.exe"}},
+            "game_process_present": True,
+        }
+        discovery.observe(
+            src_ip="192.0.2.10",
+            src_port=58778,
+            dst_ip="192.0.2.20",
+            dst_port=52489,
+            is_outbound=True,
+            is_inbound=False,
+            payload=b"ordinary-outbound-frame",
+            observed_at=1.0,
+            **common,
+        )
+        locked = discovery.observe(
+            src_ip="192.0.2.20",
+            src_port=52489,
+            dst_ip="192.0.2.10",
+            dst_port=58778,
+            is_outbound=False,
+            is_inbound=True,
+            payload=b"ordinary-inbound-frame",
+            observed_at=1.1,
+            **common,
+        )
+
+        self.assertIsNotNone(locked)
+        self.assertEqual(
+            discovery.lock_method,
+            "automatic_direct_owned_bidirectional",
+        )
+
+    def test_owned_direct_reliable_flow_can_lock_before_reverse_traffic(self) -> None:
+        discovery = FlowDiscovery(minimum_each_direction=3)
+        common = {
+            "local_ip": "192.0.2.10",
+            "host_ip": "192.0.2.20",
+            "port_owners": {58778: {"steam.exe"}},
+            "game_process_present": True,
+            "is_outbound": True,
+            "is_inbound": False,
+        }
+        discovery.observe(
+            src_ip="192.0.2.10",
+            src_port=58778,
+            dst_ip="192.0.2.20",
+            dst_port=52489,
+            payload=header(),
+            observed_at=1.0,
+            **common,
+        )
+        locked = discovery.observe(
+            src_ip="192.0.2.10",
+            src_port=58778,
+            dst_ip="192.0.2.20",
+            dst_port=52489,
+            payload=header(),
+            observed_at=1.6,
+            **common,
+        )
+
+        self.assertIsNotNone(locked)
+        self.assertEqual(
+            discovery.lock_method,
+            "automatic_direct_owned_reliable",
+        )
+
+    def test_direct_candidate_gains_late_process_ownership(self) -> None:
+        discovery = FlowDiscovery(minimum_each_direction=3)
+        common = {
+            "local_ip": "192.0.2.10",
+            "host_ip": "192.0.2.20",
+            "game_process_present": True,
+        }
+        discovery.observe(
+            src_ip="192.0.2.10",
+            src_port=58778,
+            dst_ip="192.0.2.20",
+            dst_port=52489,
+            port_owners={},
+            is_outbound=True,
+            is_inbound=False,
+            payload=b"ordinary-outbound-frame",
+            observed_at=1.0,
+            **common,
+        )
+        before = discovery.candidate_payload(observed_at=1.0)[0]
+        locked = discovery.observe(
+            src_ip="192.0.2.20",
+            src_port=52489,
+            dst_ip="192.0.2.10",
+            dst_port=58778,
+            port_owners={58778: {"steam.exe"}},
+            is_outbound=False,
+            is_inbound=True,
+            payload=b"ordinary-inbound-frame",
+            observed_at=1.1,
+            **common,
+        )
+        after = discovery.candidate_payload(observed_at=1.1)[0]
+
+        self.assertIsNotNone(locked)
+        assert locked is not None
+        self.assertEqual(locked.route, "direct_peer_ip_owned_port")
+        self.assertEqual(before["candidate_id"], after["candidate_id"])
+        self.assertEqual(
+            discovery.lock_method,
+            "automatic_direct_owned_bidirectional",
+        )
+
     def test_flow_discovery_locks_steam_relay_by_transport_port(self) -> None:
         discovery = FlowDiscovery(minimum_each_direction=2)
         reliable = header()
@@ -648,6 +766,109 @@ class SessionProxyTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertIsNone(discovery.provisional)
 
+    def test_player_can_confirm_fresh_bidirectional_candidate_without_marker(
+        self,
+    ) -> None:
+        discovery = FlowDiscovery(minimum_each_direction=1)
+        common = {
+            "local_ip": "192.0.2.10",
+            "host_ip": "192.0.2.20",
+            "port_owners": {52000: {"steam.exe"}},
+            "game_process_present": True,
+        }
+        discovery.observe(
+            src_ip="192.0.2.10",
+            src_port=52000,
+            dst_ip="198.51.100.45",
+            dst_port=61000,
+            is_outbound=True,
+            is_inbound=False,
+            payload=b"ordinary-steam-frame",
+            observed_at=1.0,
+            **common,
+        )
+        discovery.observe(
+            src_ip="198.51.100.45",
+            src_port=61000,
+            dst_ip="192.0.2.10",
+            dst_port=52000,
+            is_outbound=False,
+            is_inbound=True,
+            payload=b"ordinary-steam-frame",
+            observed_at=2.0,
+            **common,
+        )
+        candidate = discovery.candidate_payload(observed_at=2.0)[0]
+
+        locked = discovery.lock_confirmed_candidate(
+            str(candidate["candidate_id"]),
+            observed_at=2.1,
+        )
+
+        self.assertEqual(locked.host_ip, "198.51.100.45")
+        self.assertEqual(discovery.lock_method, "manual_player_confirmed")
+        self.assertFalse(candidate["reliable_observed"])
+        self.assertTrue(candidate["manual_lockable"])
+        self.assertEqual(candidate["candidate_id"], flow_candidate_id(locked))
+
+    def test_player_can_lock_one_way_candidate_without_freshness_limit(self) -> None:
+        discovery = FlowDiscovery(minimum_each_direction=1)
+        common = {
+            "local_ip": "192.0.2.10",
+            "host_ip": "192.0.2.20",
+            "port_owners": {52000: {"steam.exe"}},
+            "game_process_present": True,
+        }
+        discovery.observe(
+            src_ip="192.0.2.10",
+            src_port=52000,
+            dst_ip="198.51.100.45",
+            dst_port=61000,
+            is_outbound=True,
+            is_inbound=False,
+            payload=b"ordinary-steam-frame",
+            observed_at=1.0,
+            **common,
+        )
+        candidate_id = str(
+            discovery.candidate_payload(observed_at=1.0)[0]["candidate_id"]
+        )
+        candidate = discovery.candidate_payload(observed_at=120.0)[0]
+
+        locked = discovery.lock_confirmed_candidate(
+            candidate_id,
+            observed_at=120.0,
+        )
+
+        self.assertEqual(locked.host_ip, "198.51.100.45")
+        self.assertEqual(discovery.lock_method, "manual_player_confirmed")
+        self.assertFalse(candidate["bidirectional"])
+        self.assertFalse(candidate["reliable_observed"])
+        self.assertTrue(candidate["manual_lockable"])
+
+    def test_flow_lock_document_requires_session_and_player_confirmation(self) -> None:
+        candidate_id = "a" * 24
+        request = parse_flow_lock_document(
+            {
+                "request_id": "lock-1",
+                "session_id": "session-1",
+                "candidate_id": candidate_id,
+                "player_confirmed": True,
+            },
+            "session-1",
+        )
+        self.assertEqual(request.candidate_id, candidate_id)
+        with self.assertRaisesRegex(ValueError, "explicitly confirm"):
+            parse_flow_lock_document(
+                {
+                    "request_id": "lock-2",
+                    "session_id": "session-1",
+                    "candidate_id": candidate_id,
+                    "player_confirmed": False,
+                },
+                "session-1",
+            )
+
     def test_flow_discovery_ignores_non_stellaris_relay_port(self) -> None:
         discovery = FlowDiscovery(minimum_each_direction=2)
         result = discovery.observe(
@@ -811,6 +1032,65 @@ class SessionProxyTests(unittest.TestCase):
             inbound = translator.translate_inbound(inbound)
         self.assertEqual(read_uint24_be(inbound, 10), 1000)
 
+    def test_armed_followup_keeps_existing_offset_and_serial_translation(
+        self,
+    ) -> None:
+        record = build_building_record(
+            command_serial=56,
+            actor=2,
+            origin=0,
+            target=BuildingTarget(
+                context_822c=0,
+                build_queue_id=11,
+                colony_id=12,
+                zone_id=13,
+                building_id="building_research_lab_1",
+            ),
+        )
+        ordinary_packet = header(sender=1000) + APPLICATION_COMMAND_PREFIX + record
+
+        translated, serial_changes = translate_existing_outbound_stream(
+            ordinary_packet,
+            stream_translators=[
+                StreamTranslator(injection_offset=1000, inserted_length=1216)
+            ],
+            actor=2,
+            serial_delta=1,
+        )
+
+        self.assertEqual(read_uint24_be(translated, 6), 2216)
+        self.assertEqual(serial_changes[0]["serial_u32"], 56)
+        self.assertEqual(serial_changes[0]["translated_serial_u32"], 57)
+        observations: dict[tuple[str, int, int], int] = {}
+        parsed = observe_command_serials(translated, observations, "outbound")
+        self.assertEqual(parsed[0]["serial_u32"], 57)
+
+        followup = ArmRequest(
+            request_id="attack-while-translating",
+            session_id="test",
+            action="build_building",
+            source_actor=2,
+            host_actor=1,
+            request_origin=0,
+            target=BuildingTarget(
+                context_822c=0,
+                build_queue_id=13,
+                colony_id=12,
+                zone_id=14,
+                building_id="building_foundry_1",
+            ),
+            previous_serial_floor=0,
+        )
+        self.assertIsNone(
+            inject_at_packet_boundary(
+                translated,
+                request=followup,
+                command_serial=58,
+                max_payload_length=1400,
+            )
+        )
+        self.assertEqual(read_uint24_be(translated, 6), 2216)
+
     def test_building_record_resizes_for_longer_identifier(self) -> None:
         target = BuildingTarget(
             context_822c=0,
@@ -930,6 +1210,63 @@ class SessionProxyTests(unittest.TestCase):
                 command_serial=1,
                 max_payload_length=1400,
             )
+        )
+
+    def test_large_injection_uses_contiguous_reliable_stream_fragments(
+        self,
+    ) -> None:
+        request = ArmRequest(
+            request_id="large-design",
+            session_id="test",
+            action="build_building",
+            source_actor=2,
+            host_actor=1,
+            request_origin=0,
+            target=BuildingTarget(
+                context_822c=0,
+                build_queue_id=0,
+                colony_id=0,
+                zone_id=0,
+            ),
+        )
+        record = bytearray(1459)
+        declared = len(record) - 1
+        record[0] = declared & 0xFF
+        record[1:6] = bytes.fromhex("0004000000")
+        carrier = header(sender=5000)
+
+        with patch(
+            "iag.stellaris.execution.session_proxy._build_request_record",
+            return_value=bytes(record),
+        ):
+            injection = inject_at_packet_boundary(
+                carrier,
+                request=request,
+                command_serial=57,
+                max_payload_length=1400,
+            )
+
+        self.assertIsNotNone(injection)
+        assert injection is not None
+        self.assertEqual(injection.inserted_length, 1462)
+        self.assertEqual(len(injection.payload), 1487)
+        self.assertEqual(
+            [len(value) for value in injection.wire_payloads],
+            [1400, 112],
+        )
+        self.assertEqual(
+            [read_uint24_be(value, 6) for value in injection.wire_payloads],
+            [5000, 6375],
+        )
+        self.assertEqual(
+            b"".join(
+                value[RELIABLE_HEADER_LENGTH:]
+                for value in injection.wire_payloads
+            ),
+            injection.payload[RELIABLE_HEADER_LENGTH:],
+        )
+        self.assertTrue(
+            all(len(value) <= 1400 for value in injection.wire_payloads)
         )
 
     def test_zone_arm_builds_current_session_record_and_dynamic_envelope(self) -> None:

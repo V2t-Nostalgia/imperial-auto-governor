@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ from iag.applications.fleet_operations.conversation_agent import (
     FleetConversationAgent,
 )
 from iag.core.conversation_store import ConversationStore
+from iag.core.read_tasks import ReadTaskPool
 from iag.infrastructure.llm.model_pool import ModelEndpoint, ModelPool
 from iag.infrastructure.llm.model_pool_runtime import ModelPoolRuntime
 
@@ -124,6 +126,113 @@ class FleetCompletion:
 
 
 class FleetConversationAgentTests(unittest.TestCase):
+    def test_consecutive_inspect_calls_run_in_bounded_parallel_pool(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pool = _test_pool()
+            runtime = FakeRuntimeConfig(root, pool)
+            history = ConversationStore(root / "fleet.sqlite3")
+            actions = ConversationStore(root / "campaign.sqlite3")
+            started = 0
+            maximum_active = 0
+            active = 0
+            lock = threading.Lock()
+            all_started = threading.Event()
+
+            class ParallelInspectToolbox:
+                prepared = None
+                parallel_read_tools = frozenset(
+                    f"inspect_test_{index}" for index in range(4)
+                )
+
+                def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+                    pass
+
+                @staticmethod
+                def schemas() -> list[dict[str, Any]]:
+                    return [
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": f"inspect_test_{index}",
+                                "description": "Read independent test state.",
+                                "parameters": {
+                                    "type": "object",
+                                    "properties": {},
+                                },
+                            },
+                        }
+                        for index in range(4)
+                    ]
+
+                @staticmethod
+                def dispatch(
+                    name: str,
+                    _arguments: dict[str, Any],
+                ) -> tuple[dict[str, Any], str]:
+                    nonlocal started, active, maximum_active
+                    with lock:
+                        started += 1
+                        active += 1
+                        maximum_active = max(maximum_active, active)
+                        if started == 4:
+                            all_started.set()
+                    try:
+                        if not all_started.wait(1):
+                            raise AssertionError("Inspect tools were dispatched serially.")
+                        return {"success": True, "tool": name}, name
+                    finally:
+                        with lock:
+                            active -= 1
+
+            completion_calls = 0
+
+            def completion(
+                _endpoint: ModelEndpoint,
+                _messages: list[dict[str, Any]],
+                **_kwargs: Any,
+            ) -> dict[str, Any]:
+                nonlocal completion_calls
+                completion_calls += 1
+                if completion_calls == 1:
+                    return {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": f"read-{index}",
+                                "type": "function",
+                                "function": {
+                                    "name": f"inspect_test_{index}",
+                                    "arguments": "{}",
+                                },
+                            }
+                            for index in range(4)
+                        ],
+                    }
+                return {"role": "assistant", "content": "读取完成。"}
+
+            read_pool = ReadTaskPool(max_workers=4, timeout_seconds=2)
+            try:
+                result = FleetConversationAgent(
+                    runtime,
+                    history,
+                    actions,
+                    model_pool_runtime=ModelPoolRuntime(pool),
+                    completion_fn=completion,
+                    toolbox_factory=ParallelInspectToolbox,
+                    read_task_pool=read_pool,
+                ).run_turn(
+                    trigger="chat",
+                    user_content="并行读取",
+                )
+            finally:
+                read_pool.close()
+
+        self.assertEqual(maximum_active, 4)
+        self.assertEqual(len(result["tool_events"]), 4)
+        self.assertEqual(read_pool.status()["submitted"], 4)
+
     def test_confirmed_fleet_execution_enters_specialist_ledger(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

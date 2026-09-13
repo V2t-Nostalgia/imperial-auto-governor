@@ -233,7 +233,7 @@
 
 .conversation-toolbar {
   display: grid;
-  grid-template-columns: minmax(190px, 1fr) minmax(190px, 1fr) auto auto auto;
+  grid-template-columns: minmax(190px, 1fr) auto auto auto;
   gap: 9px;
   align-items: end;
   margin-bottom: 12px;
@@ -260,6 +260,139 @@
 .conversation-status-row b {
   color: var(--gold);
   font: 600 12px Consolas, monospace;
+}
+
+.application-chat-shell {
+  display: grid;
+  grid-template-columns: minmax(210px, .32fr) minmax(0, 1fr);
+  min-height: 530px;
+  border: 1px solid var(--line);
+  background: rgba(1, 10, 13, .76);
+}
+
+.application-contact-pane {
+  min-width: 0;
+  border-right: 1px solid var(--line);
+  background: rgba(4, 22, 27, .9);
+}
+
+.application-contact-heading,
+.application-thread-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  min-height: 58px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(95, 196, 181, .2);
+}
+
+.application-contact-heading {
+  display: grid;
+  align-content: center;
+}
+
+.application-contact-heading strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.application-contact-list {
+  display: grid;
+  align-content: start;
+}
+
+.application-contact {
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) auto;
+  gap: 8px;
+  width: 100%;
+  min-height: 76px;
+  padding: 11px 10px;
+  border: 0;
+  border-bottom: 1px solid rgba(95, 196, 181, .15);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  clip-path: none;
+}
+
+.application-contact:hover,
+.application-contact.selected {
+  background: rgba(28, 81, 83, .42);
+}
+
+.application-contact.selected {
+  box-shadow: inset 3px 0 var(--teal);
+}
+
+.application-contact-presence {
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border: 1px solid var(--teal);
+  border-radius: 50%;
+  background: rgba(100, 227, 208, .25);
+}
+
+.application-contact.running .application-contact-presence {
+  background: var(--gold);
+  border-color: var(--gold);
+  box-shadow: 0 0 8px rgba(216, 184, 107, .65);
+}
+
+.application-contact-copy {
+  min-width: 0;
+}
+
+.application-contact-name {
+  display: block;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.application-contact-preview {
+  display: block;
+  overflow: hidden;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.application-contact-meta {
+  display: grid;
+  justify-items: end;
+  gap: 7px;
+  color: var(--muted);
+  font: 9px Consolas, monospace;
+}
+
+.application-unread {
+  min-width: 18px;
+  padding: 2px 5px;
+  border-radius: 10px;
+  background: var(--gold);
+  color: #122026;
+  font: 700 10px Consolas, monospace;
+  text-align: center;
+}
+
+.application-thread-pane {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.application-thread-heading h3 {
+  margin: 2px 0 0;
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 500;
 }
 
 .strategy-console {
@@ -347,6 +480,7 @@
 .conversation-log {
   min-height: 360px;
   height: 470px;
+  border-width: 0 0 1px;
   overflow-y: auto;
   overscroll-behavior: contain;
   border: 1px solid var(--line);
@@ -434,7 +568,7 @@
 }
 
 .conversation-composer {
-  margin-top: 10px;
+  padding: 10px 12px 0;
 }
 
 .conversation-composer textarea {
@@ -467,6 +601,10 @@
   flex-wrap: wrap;
   gap: 7px;
   margin: 12px 0 4px;
+}
+
+.application-thread-hint {
+  margin: 8px 12px 11px;
 }
 
 .compact-setting-grid {
@@ -949,6 +1087,10 @@
     min-height: 560px;
   }
 
+  .application-chat-shell {
+    grid-template-columns: 190px minmax(0, 1fr);
+  }
+
   .model-catalog-layout {
     grid-template-columns: 220px minmax(0, 1fr);
   }
@@ -969,6 +1111,29 @@
 
   .conversation-log {
     height: 420px;
+  }
+
+  .application-chat-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .application-contact-pane {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .application-contact-heading {
+    min-height: 48px;
+  }
+
+  .application-contact-list {
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .application-contact {
+    min-width: 185px;
+    border-right: 1px solid rgba(95, 196, 181, .15);
   }
 
   .strategy-grid,

@@ -40,6 +40,7 @@ class ModelConfigurationFrontendTests(unittest.TestCase):
             "application-select",
             "application-profile-select",
             "application-profile-name",
+            "application-model-route-mode",
             "application-pool-select",
             "application-model-select",
             "open-model-catalog",
@@ -125,6 +126,23 @@ class ModelConfigurationFrontendTests(unittest.TestCase):
             self.javascript,
         )
         self.assertIn("application_agents", self.javascript)
+        self.assertIn(
+            "function updateConversationActionAvailability(selected)",
+            self.javascript,
+        )
+        self.assertIn(
+            "latestStatus?.campaign_binding?.execution_allowed",
+            self.javascript,
+        )
+
+    def test_application_model_route_can_be_shared_or_independent(self) -> None:
+        self.assertIn("为此 Application 独立指定", self.html)
+        self.assertIn("沿用经济治理当前模型", self.html)
+        self.assertIn(
+            "inherit_model_from_application_id",
+            self.javascript,
+        )
+        self.assertIn("activeApplicationProfile", self.javascript)
 
     def test_protocol_start_respects_backend_target_readiness(self) -> None:
         self.assertIn("actions.can_start_live", self.javascript)
@@ -161,6 +179,29 @@ class ModelConfigurationFrontendTests(unittest.TestCase):
         )
         self.assertIn('["allow_repair", "返港维修"]', self.javascript)
         self.assertIn('["allow_upgrade", "舰队升级"]', self.javascript)
+        self.assertIn("experimental-invasion-tools-enabled", html_ids)
+        self.assertIn("maximum-army-recruitment-batch", html_ids)
+        self.assertIn("auto-authorize-recruited-transport-fleets", html_ids)
+        self.assertIn("campaign-ground-force-ratio", html_ids)
+        self.assertIn("campaign-bombardment-threshold", html_ids)
+        self.assertIn('["allow_bombardment", "轨道轰炸"]', self.javascript)
+        self.assertIn('["allow_land_armies", "陆军登陆"]', self.javascript)
+
+    def test_proxy_exposes_player_confirmed_candidate_locking(self) -> None:
+        html_ids = set(re.findall(r'\bid="([^"]+)"', self.html))
+        self.assertEqual(
+            {
+                "session-proxy-flow-candidates",
+                "session-proxy-flow-candidate-list",
+            }
+            - html_ids,
+            set(),
+        )
+        self.assertIn("/api/session-proxy/flow/lock", self.javascript)
+        self.assertNotIn("candidate.manual_lockable", self.javascript)
+        self.assertIn("player_confirmed: true", self.javascript)
+        self.assertIn("可直接锁定任意已观察候选", self.javascript)
+        self.assertIn("人工路径不检查方向、可靠帧、活跃时间或自动评分", self.html)
 
 
 if __name__ == "__main__":

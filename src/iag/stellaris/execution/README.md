@@ -7,8 +7,8 @@
 - `port_discovery.py` 从进程和 UDP 连接发现本局对等端。
 - `host_bridge_pairing.py`、`host_executor_protocol.py` 定义 Agent 与房主桥协议。
 - `iag_supervisor.py` 在 `carrier_click` 与 `session_proxy` 之间选择执行链，并记录机器确认事实。
-- `session_proxy.py` 在整局可靠流中插入受约束命令并维护偏移、ACK 和 actor serial。它登记经济建设/变更、舰队移动/攻击/维修/升级、科研、舰船自动化、殖民、恒星基地、舰船设计以及 Fleet Manager 编制/增援等 25 个动作。
-- `session_proxy_controller.py` 管理代理的进房前启动、动作提交和离房后停止。
+- `session_proxy.py` 在整局可靠流中插入受约束命令并维护偏移、ACK 和 actor serial。它登记经济建设/变更、舰队移动/攻击/维修/升级、轨道轰炸、陆军登陆/招募、科研、舰船自动化、殖民、恒星基地、舰船设计以及 Fleet Manager 编制/增援等 28 个动作。
+- `session_proxy_controller.py` 管理代理的进房前启动、玩家确认候选四元组、动作提交和离房后停止。自动发现会动态补齐端口归属，并对房主 IP 直连与 Steam 中继采用分层置信规则；人工锁定接受当前列表中的任意候选，不检查方向、新鲜度、可靠帧或评分，并留下独立审计标记。
 - `protocol_compatibility.py` 是会话代理命令目录、版本验收计划与差异报告的唯一登记层。
 - `protocol_compatibility_control.py` 把同一目录接入网页控制端，持久化逐项验收状态，且不调用 LLM。
 - `passive_network_observer.py` 只读观测 Linux 端流量。

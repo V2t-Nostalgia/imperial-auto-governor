@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any
 
 from iag.applications.fleet_operations.agent_tools import (
+    PENDING_ARMY_RECRUITMENT_KEY,
+    PENDING_CAMPAIGN_KEY,
     PENDING_NEW_FLEET_KEY,
     FleetToolbox,
     sha256_file,
@@ -27,6 +29,7 @@ from iag.stellaris.state.save_ingest import (
 
 ATTEMPTS_STATE_KEY = "save_continuation_attempts"
 LAST_RESULT_STATE_KEY = "last_save_continuation"
+LAST_MUTATING_SAVE_STATE_KEY = "last_mutating_save_continuation"
 
 
 @dataclass(frozen=True)
@@ -160,11 +163,167 @@ def _run_new_fleet(
     ).continue_pending_new_fleet_from_save()
 
 
+def _workflow_probe(
+    config: dict[str, Any],
+    store: ConversationStore,
+    *,
+    state_key: str,
+    handler: str,
+    id_key: str,
+    required_feature: str,
+    waiting_hash_key: str,
+) -> dict[str, Any]:
+    raw = store.get_state(state_key)
+    if not isinstance(raw, dict):
+        return {
+            "handler": handler,
+            "pending": False,
+            "due": False,
+            "blocks_autonomy": False,
+            "reason": "no_pending_workflow",
+        }
+    workflow_id = str(raw.get(id_key) or "unknown")
+    continuation_id = f"{handler}:{workflow_id}"
+    result: dict[str, Any] = {
+        "handler": handler,
+        "continuation_id": continuation_id,
+        "pending": True,
+        "due": False,
+        "blocks_autonomy": False,
+        "phase": raw.get("phase") or raw.get("status"),
+        "reason": "not_ready",
+    }
+    try:
+        source = _current_save_reference(config, store)
+    except (
+        FileNotFoundError,
+        PermissionError,
+        SaveIngestError,
+        TypeError,
+        ValueError,
+    ) as error:
+        result["reason"] = f"save_unavailable:{type(error).__name__}"
+        result["error"] = str(error)
+        return result
+    result["save"] = source
+    current_hash = str(source["sha256"])
+    if current_hash == str(raw.get(waiting_hash_key) or ""):
+        result["reason"] = "waiting_for_fresh_save"
+        result["blocks_autonomy"] = True
+        return result
+    if current_hash == str(raw.get("last_checked_save_sha256") or "") or (
+        current_hash == str(raw.get("last_evaluated_save_sha256") or "")
+    ):
+        result["reason"] = "already_evaluated_for_save"
+        result["blocks_autonomy"] = str(result["phase"]) not in {
+            "waiting_for_attack_permission",
+            "waiting_for_bombardment_permission",
+            "waiting_for_transport_permission",
+            "waiting_for_transport_fleet",
+            "waiting_for_stronger_transport",
+            "needs_review",
+        }
+        return result
+    attempts = store.get_state(ATTEMPTS_STATE_KEY, {})
+    attempts = attempts if isinstance(attempts, dict) else {}
+    if str(attempts.get(continuation_id) or "") == current_hash:
+        result["reason"] = "already_attempted_for_save"
+        return result
+    if str(store.get_state("autonomy_mode", "paused")) != "execute":
+        result["reason"] = "execution_not_authorized"
+        return result
+    if str(config.get("execution_mode", "session_proxy")) != "session_proxy":
+        result["reason"] = "session_proxy_not_selected"
+        return result
+    if not bool(config.get(required_feature, False)):
+        result["reason"] = f"{required_feature}_disabled"
+        return result
+    runtime_root = Path(str(config["runtime_root"])).expanduser()
+    if (runtime_root / "state" / "emergency_stop").is_file():
+        result["reason"] = "emergency_stop_active"
+        result["blocks_autonomy"] = True
+        return result
+    result["due"] = True
+    result["blocks_autonomy"] = True
+    result["reason"] = "fresh_save_ready"
+    return result
+
+
+def _army_recruitment_probe(
+    config: dict[str, Any],
+    store: ConversationStore,
+) -> dict[str, Any]:
+    return _workflow_probe(
+        config,
+        store,
+        state_key=PENDING_ARMY_RECRUITMENT_KEY,
+        handler="army_recruitment",
+        id_key="recruitment_run_id",
+        required_feature="experimental_invasion_tools_enabled",
+        waiting_hash_key="last_action_save_sha256",
+    )
+
+
+def _run_army_recruitment(
+    config: dict[str, Any],
+    store: ConversationStore,
+) -> dict[str, Any]:
+    return FleetToolbox(
+        config,
+        store,
+        allow_execute=True,
+    ).reconcile_pending_army_recruitment_from_save()
+
+
+def _campaign_probe(
+    config: dict[str, Any],
+    store: ConversationStore,
+) -> dict[str, Any]:
+    result = _workflow_probe(
+        config,
+        store,
+        state_key=PENDING_CAMPAIGN_KEY,
+        handler="campaign_route",
+        id_key="campaign_plan_id",
+        required_feature="experimental_invasion_tools_enabled",
+        waiting_hash_key="last_action_save_sha256",
+    )
+    if result.get("due") and not (
+        bool(config.get("experimental_fleet_tools_enabled", False))
+        and bool(config.get("experimental_fleet_attack_enabled", False))
+    ):
+        result["due"] = False
+        result["blocks_autonomy"] = False
+        result["reason"] = "fleet_attack_tools_disabled"
+    return result
+
+
+def _run_campaign(
+    config: dict[str, Any],
+    store: ConversationStore,
+) -> dict[str, Any]:
+    return FleetToolbox(
+        config,
+        store,
+        allow_execute=True,
+    ).continue_pending_campaign_from_save()
+
+
 BUILTIN_HANDLERS = (
     SaveContinuationHandler(
         name="new_fleet_creation",
         probe=_new_fleet_probe,
         run=_run_new_fleet,
+    ),
+    SaveContinuationHandler(
+        name="army_recruitment",
+        probe=_army_recruitment_probe,
+        run=_run_army_recruitment,
+    ),
+    SaveContinuationHandler(
+        name="campaign_route",
+        probe=_campaign_probe,
+        run=_run_campaign,
     ),
 )
 
@@ -177,6 +336,30 @@ def probe_save_continuations(
 ) -> dict[str, Any]:
     """Return the first ready continuation and whether an LLM turn must wait."""
     probes = [handler.probe(config, store) for handler in handlers]
+    consumed = store.get_state(LAST_MUTATING_SAVE_STATE_KEY)
+    if isinstance(consumed, dict) and consumed.get("source_save_sha256"):
+        try:
+            current = _current_save_reference(config, store)
+        except (
+            FileNotFoundError,
+            PermissionError,
+            SaveIngestError,
+            TypeError,
+            ValueError,
+        ):
+            current = None
+        if isinstance(current, dict) and str(current.get("sha256") or "") == str(
+            consumed["source_save_sha256"]
+        ):
+            return {
+                "schema": "iag.save_continuation_probe.v1",
+                "due": False,
+                "blocks_autonomy": True,
+                "ready": None,
+                "reason": "save_already_consumed_by_mutating_continuation",
+                "consumed_by": consumed.get("continuation_id"),
+                "handlers": probes,
+            }
     ready = next((item for item in probes if item.get("due")), None)
     return {
         "schema": "iag.save_continuation_probe.v1",
@@ -235,6 +418,15 @@ def run_save_continuations(
         "mutated_game": bool(outcome.get("mutated_game", False)),
         "outcome": outcome,
     }
+    if result["mutated_game"]:
+        store.set_state(
+            LAST_MUTATING_SAVE_STATE_KEY,
+            {
+                "source_save_sha256": str(source["sha256"]),
+                "continuation_id": continuation_id,
+                "handler": handler_name,
+            },
+        )
     store.set_state(LAST_RESULT_STATE_KEY, result)
     return result
 
@@ -242,8 +434,32 @@ def run_save_continuations(
 def continuation_public_summary(result: dict[str, Any]) -> str:
     """Render a concise audit line without asking the model to restate it."""
     state = str(result.get("state") or "unknown")
+    handler = str(result.get("handler") or "")
     outcome = result.get("outcome")
     outcome = outcome if isinstance(outcome, dict) else {}
+    if handler == "army_recruitment":
+        if state in {"confirmed_in_save", "transport_forming"}:
+            return (
+                f"新存档已识别招募产生的运输舰队 "
+                f"{outcome.get('transport_fleet_id') or '待分配'}；"
+                "登陆授权与编成状态已按玩家策略更新。"
+            )
+        if state == "waiting_for_transport_formation":
+            return "陆军招募已确认，但新运输舰队尚未在存档中生成。"
+        if state == "needs_review":
+            return "新存档出现多个运输舰队候选，固定续接器拒绝猜测归属。"
+    if handler == "campaign_route":
+        if state in {"executed", "partially_executed"}:
+            return (
+                f"战役续接器已按新存档推进一步："
+                f"{outcome.get('action') or '待确认'}；等待下一份存档。"
+            )
+        if state == "completed":
+            return "新存档已确认目标星系不存在敌对目标，本次战役完成。"
+        if state.startswith("waiting_for_"):
+            return f"战役续接暂停：{state}。"
+        if state == "needs_review":
+            return "战役路线无法从当前存档唯一续接，已停止发包并等待复核。"
     if state == "executed":
         return (
             "新存档已唯一解析新舰队模板，固定续接器已写入初始编制并"

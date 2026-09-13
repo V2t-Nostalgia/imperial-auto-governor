@@ -35,6 +35,14 @@ from iag.stellaris.execution.packet.fleet_operation_commands import (
     build_fleet_upgrade_record,
     build_ship_automation_record,
 )
+from iag.stellaris.execution.packet.ground_warfare_commands import (
+    ArmyLandingTarget,
+    ArmyRecruitmentTarget,
+    BombardmentStanceTarget,
+    build_army_landing_record,
+    build_army_recruitment_record,
+    build_bombardment_stance_record,
+)
 from iag.stellaris.execution.packet.iag_stream_command_injector import (
     RELIABLE_HEADER_LENGTH,
     find_command_records,
@@ -184,9 +192,61 @@ STARBASE_BUILDING_RECORD = bytes.fromhex(
     "7274657273632c01000c00000000000c3a0100140068000000040004"
     "000400"
 )
+BOMBARDMENT_STANCE_RECORD = bytes.fromhex(
+    "690004000000d62d01000300f30101000300400201000c0002000000"
+    "c70001000c00ff7f0000cc0001000e0000130401000e0000db000100"
+    "14001a0000000400410001000300502c01001400aa120000d22d0100"
+    "0f000e00696e6469736372696d696e61746504000400"
+)
+ARMY_LANDING_RECORD = bytes.fromhex(
+    "6b00040000006f3301000300f30101000300400201000c0002000000"
+    "c70001000c00ff7f0000cc0001000e0000130401000e0000db000100"
+    "14001b0000000400410001000300502c01001400020200021e390100"
+    "140004000000634001000e0000de3501000e000004000400"
+)
+ARMY_RECRUITMENT_RECORD = bytes.fromhex(
+    "970004000000b43d01000300f30101000300400201000c0002000000"
+    "c70001000c00ff7f0000cc0001000e0000130401000e0000db000100"
+    "14001c0000000400410001000300822c010014000000000063400100"
+    "140001000000c83d01000300ec4601000f000c00726f626f7469635f"
+    "61726d794c2b01001400b6000000132a01001400000000000c3a0100"
+    "140000000000040004000400"
+)
 
 
 class ExtendedProtocolCommandTests(unittest.TestCase):
+    def test_ground_warfare_commands_match_live_records(self) -> None:
+        stance = BombardmentStanceTarget(4778, "indiscriminate")
+        self.assertEqual(
+            build_bombardment_stance_record(
+                command_serial=26,
+                actor=2,
+                origin=0,
+                target=stance,
+            ),
+            BOMBARDMENT_STANCE_RECORD,
+        )
+        landing = ArmyLandingTarget(33554946, 4)
+        self.assertEqual(
+            build_army_landing_record(
+                command_serial=27,
+                actor=2,
+                origin=0,
+                target=landing,
+            ),
+            ARMY_LANDING_RECORD,
+        )
+        recruitment = ArmyRecruitmentTarget(0, 1, "robotic_army", 182, 0, 0)
+        self.assertEqual(
+            build_army_recruitment_record(
+                command_serial=28,
+                actor=2,
+                origin=0,
+                target=recruitment,
+            ),
+            ARMY_RECRUITMENT_RECORD,
+        )
+
     def test_building_mutations_match_live_pairs(self) -> None:
         upgrade = BuildingUpgradeTarget(
             0,
@@ -455,6 +515,15 @@ class ExtendedProtocolCommandTests(unittest.TestCase):
             (
                 "set_starbase_building",
                 StarbaseComponentTarget(0, 8371, "crew_quarters", 0, 104),
+            ),
+            (
+                "set_orbital_bombardment_stance",
+                BombardmentStanceTarget(4778, "selective"),
+            ),
+            ("land_armies", ArmyLandingTarget(33554946, 4)),
+            (
+                "recruit_army",
+                ArmyRecruitmentTarget(0, 1, "robotic_army", 182, 0, 0),
             ),
         )
         for action, target in cases:

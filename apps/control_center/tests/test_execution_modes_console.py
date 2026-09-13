@@ -5,6 +5,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from apps.control_center.web_console import ConsoleError, ConsoleService
 from iag.core.conversation_store import ConversationStore
@@ -40,6 +41,12 @@ def settings_payload(**overrides: object) -> dict[str, object]:
         "minimum_colonization_habitability": 0.30,
         "experimental_starbase_tools_enabled": False,
         "experimental_starbase_replacement_enabled": False,
+        "experimental_invasion_tools_enabled": False,
+        "maximum_army_recruitment_batch": 5,
+        "auto_authorize_recruited_transport_fleets": False,
+        "campaign_ground_force_ratio": 1.25,
+        "campaign_space_force_ratio": 1.20,
+        "campaign_bombardment_threshold": 50.0,
         "experimental_research_tools_enabled": False,
         "experimental_research_reselection_enabled": False,
     }
@@ -133,19 +140,21 @@ class ExecutionModeConsoleTests(unittest.TestCase):
                 minimum_colonization_habitability=0.45,
                 experimental_starbase_tools_enabled=True,
                 experimental_starbase_replacement_enabled=True,
+                experimental_invasion_tools_enabled=True,
+                maximum_army_recruitment_batch=4,
+                auto_authorize_recruited_transport_fleets=True,
+                campaign_ground_force_ratio=1.5,
+                campaign_space_force_ratio=1.4,
+                campaign_bombardment_threshold=60,
                 experimental_research_tools_enabled=True,
             )
         )
         self.assertEqual(result["execution_mode"], "session_proxy")
         self.assertTrue(result["experimental_fleet_tools_enabled"])
-        self.assertTrue(
-            result["experimental_fleet_maintenance_tools_enabled"]
-        )
+        self.assertTrue(result["experimental_fleet_maintenance_tools_enabled"])
         self.assertTrue(result["experimental_fleet_coordinate_tools_enabled"])
         self.assertTrue(result["experimental_ship_design_tools_enabled"])
-        self.assertTrue(
-            result["experimental_fleet_reinforcement_tools_enabled"]
-        )
+        self.assertTrue(result["experimental_fleet_reinforcement_tools_enabled"])
         self.assertEqual(result["maximum_fleet_reinforcement_increase"], 7)
         self.assertTrue(result["experimental_new_fleet_tools_enabled"])
         self.assertEqual(result["maximum_new_fleet_initial_ships"], 4)
@@ -154,6 +163,12 @@ class ExecutionModeConsoleTests(unittest.TestCase):
         self.assertEqual(result["minimum_colonization_habitability"], 0.45)
         self.assertTrue(result["experimental_starbase_tools_enabled"])
         self.assertTrue(result["experimental_starbase_replacement_enabled"])
+        self.assertTrue(result["experimental_invasion_tools_enabled"])
+        self.assertEqual(result["maximum_army_recruitment_batch"], 4)
+        self.assertTrue(result["auto_authorize_recruited_transport_fleets"])
+        self.assertEqual(result["campaign_ground_force_ratio"], 1.5)
+        self.assertEqual(result["campaign_space_force_ratio"], 1.4)
+        self.assertEqual(result["campaign_bombardment_threshold"], 60)
         self.assertTrue(result["experimental_research_tools_enabled"])
         reloaded = RuntimeConfig.load(self.path).snapshot().settings
         self.assertEqual(reloaded["execution_mode"], "session_proxy")
@@ -211,6 +226,28 @@ class ExecutionModeConsoleTests(unittest.TestCase):
                 )
             )
 
+    def test_invasion_tools_require_proxy_and_bound_recruitment_batch(self) -> None:
+        with self.assertRaisesRegex(ConsoleError, "入侵与陆军工具"):
+            self.service.save_execution_settings(
+                settings_payload(experimental_invasion_tools_enabled=True)
+            )
+        with self.assertRaisesRegex(ConsoleError, "陆军招募上限"):
+            self.service.save_execution_settings(
+                settings_payload(maximum_army_recruitment_batch=6)
+            )
+        with self.assertRaisesRegex(ConsoleError, "兵力安全系数"):
+            self.service.save_execution_settings(
+                settings_payload(campaign_ground_force_ratio=0.9)
+            )
+        with self.assertRaisesRegex(ConsoleError, "空间军力安全系数"):
+            self.service.save_execution_settings(
+                settings_payload(campaign_space_force_ratio=0.9)
+            )
+        with self.assertRaisesRegex(ConsoleError, "轰炸转登陆"):
+            self.service.save_execution_settings(
+                settings_payload(campaign_bombardment_threshold=101)
+            )
+
     def test_reinforcement_permission_is_saved_per_fleet(self) -> None:
         self.service.fleet_payload = lambda: {"fleets": [{"fleet_id": 7}]}
         result = self.service.save_fleet_permission(
@@ -223,6 +260,8 @@ class ExecutionModeConsoleTests(unittest.TestCase):
                 "allow_upgrade": True,
                 "allow_automation": True,
                 "allow_build_starbase": True,
+                "allow_bombardment": True,
+                "allow_land_armies": True,
             }
         )
         self.assertTrue(result["saved"])
@@ -235,6 +274,8 @@ class ExecutionModeConsoleTests(unittest.TestCase):
         self.assertTrue(permissions["7"]["allow_upgrade"])
         self.assertTrue(permissions["7"]["allow_automation"])
         self.assertTrue(permissions["7"]["allow_build_starbase"])
+        self.assertTrue(permissions["7"]["allow_bombardment"])
+        self.assertTrue(permissions["7"]["allow_land_armies"])
 
     def test_research_reselection_requires_research_tools(self) -> None:
         with self.assertRaisesRegex(ConsoleError, "科研工具"):
@@ -262,6 +303,25 @@ class ExecutionModeConsoleTests(unittest.TestCase):
         )()
         with self.assertRaisesRegex(ConsoleError, "协议兼容性验收"):
             self.service.save_execution_settings(settings_payload())
+
+    def test_manual_flow_lock_delegates_confirmed_candidate(self) -> None:
+        with (
+            patch.object(self.service, "reload_config"),
+            patch(
+                "apps.control_center.web_console.SessionProxyController"
+            ) as controller_type,
+        ):
+            controller_type.return_value.lock_flow.return_value = {"accepted": True}
+            result = self.service.lock_session_proxy_flow(
+                candidate_id="a" * 24,
+                player_confirmed=True,
+            )
+
+        self.assertTrue(result["accepted"])
+        controller_type.return_value.lock_flow.assert_called_once_with(
+            candidate_id="a" * 24,
+            player_confirmed=True,
+        )
 
 
 if __name__ == "__main__":

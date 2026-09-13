@@ -20,6 +20,7 @@ import threading
 import time
 import traceback
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -36,11 +37,18 @@ from iag.applications.economy_governance.planner import (
     read_json,
 )
 from iag.applications.fleet_operations.agent_tools import (
+    FLEET_FULL_DELEGATION_KEY,
+    FLEET_PERMISSION_FIELDS,
     FLEET_PERMISSIONS_KEY,
     normalized_permissions,
 )
 from iag.applications.fleet_operations.conversation_agent import (
     FleetConversationAgent,
+)
+from iag.applications.joint_plan_review import (
+    JOINT_REVIEW_HISTORY_KEY,
+    JOINT_REVIEW_STATE_KEY,
+    JointPlanReviewer,
 )
 from iag.applications.registry import builtin_application_registry
 from iag.applications.research_strategy.conversation_agent import (
@@ -53,6 +61,11 @@ from iag.applications.save_continuations import (
 )
 from iag.applications.specialist_conversation_agent import (
     SpecialistConversationAgent,
+)
+from iag.core.application_plan import (
+    PLAN_AUDIT_PREFIX,
+    PLAN_INBOX_PREFIX,
+    PLAN_STATE_PREFIX,
 )
 from iag.core.autonomy import (
     autonomy_probe,
@@ -67,6 +80,7 @@ from iag.core.campaign_strategy import (
 )
 from iag.core.conversation_store import ConversationStore
 from iag.core.paths import economy_governance_root
+from iag.core.read_tasks import ReadTaskPool
 from iag.infrastructure.llm.application_model_profile import (
     ApplicationModelProfile,
 )
@@ -119,6 +133,8 @@ from iag.stellaris.execution.session_proxy_controller import (
     SessionProxyController,
     SessionProxyError,
 )
+from iag.stellaris.game_knowledge import detect_game_root
+from iag.stellaris.state.extract_game_state import load_save_metadata
 from iag.stellaris.state.fleet_profiles import extract_fleet_profiles
 from iag.stellaris.state.planet_profiles import load_gamestate
 from iag.stellaris.state.save_ingest import (
@@ -134,6 +150,7 @@ from iag.stellaris.state.save_ingest import (
 from iag.stellaris.state.save_ingest import (
     bearer_token_matches as upload_bearer_token_matches,
 )
+from iag.stellaris.state.world_snapshot import WorldSnapshot, WorldStateService
 
 ROOT = Path(__file__).resolve().parent
 RESOURCE_ROOT = Path(getattr(sys, "_MEIPASS", ROOT))
@@ -141,9 +158,7 @@ STATIC_ROOT = RESOURCE_ROOT / "web"
 CAPTURE_ID_RE = re.compile(r"^[0-9]{8}_[0-9]{6}_[a-f0-9]{8}$")
 
 DEFAULT_STRATEGIC_PROMPT_PATH = (
-    economy_governance_root()
-    / "prompts"
-    / "grey_tempest_conversation_zh.md"
+    economy_governance_root() / "prompts" / "grey_tempest_conversation_zh.md"
 )
 DEFAULT_STRATEGIC_PROMPT = DEFAULT_STRATEGIC_PROMPT_PATH.read_text(
     encoding="utf-8"
@@ -154,6 +169,7 @@ SPECIALIST_APPLICATION_IDS = (
     "research_strategy",
     "fleet_operations",
 )
+
 
 class ConsoleError(RuntimeError):
     """An operator-facing console error."""
@@ -211,11 +227,7 @@ def build_construction_catalog(
             continue
         action_type = str(action.get("type", ""))
         group = next(
-            (
-                item
-                for item in CATALOG_GROUPS
-                if item["action_type"] == action_type
-            ),
+            (item for item in CATALOG_GROUPS if item["action_type"] == action_type),
             None,
         )
         if group is None:
@@ -253,9 +265,7 @@ def build_construction_catalog(
                         "label_zh": value.get("label_zh") or str(object_id),
                         "role": value.get("role"),
                         "enabled": enabled,
-                        "planner_enabled": bool(
-                            value.get("planner_enabled", enabled)
-                        ),
+                        "planner_enabled": bool(value.get("planner_enabled", enabled)),
                         "legal_candidate_count": legal_count,
                         "selected": str(object_id) == selected_id,
                         "verified_transport": value.get("verified_transport"),
@@ -280,9 +290,7 @@ def build_construction_catalog(
                         "planner_enabled": enabled,
                         "legal_candidate_count": legal_count,
                         "selected": object_id == selected_id,
-                        "verified_transport": raw_value.get(
-                            "verified_transport"
-                        ),
+                        "verified_transport": raw_value.get("verified_transport"),
                     }
                 )
         entries.sort(
@@ -489,6 +497,7 @@ class ConsoleService:
         self.config_path = config_path.resolve()
         self._config_lock = threading.RLock()
         self.runtime_config = RuntimeConfig.load(self.config_path)
+        self.joint_plan_reviewer = JointPlanReviewer(self.runtime_config)
         runtime_snapshot = self.runtime_config.snapshot()
         self.application_registry = builtin_application_registry()
         self.config = runtime_snapshot.settings
@@ -502,9 +511,7 @@ class ConsoleService:
             *SPECIALIST_APPLICATION_IDS,
         ):
             try:
-                application_snapshot = self.runtime_config.snapshot(
-                    application_id
-                )
+                application_snapshot = self.runtime_config.snapshot(application_id)
             except KeyError:
                 application_snapshot = runtime_snapshot
             self.application_model_runtimes[application_id] = ModelPoolRuntime(
@@ -517,9 +524,7 @@ class ConsoleService:
         self.operator_root = self.runtime_root / "operator"
         self.state_root = self.runtime_root / "state"
         self.tls_certificate_path = (
-            tls_certificate_path.resolve()
-            if tls_certificate_path is not None
-            else None
+            tls_certificate_path.resolve() if tls_certificate_path is not None else None
         )
         self._host_bridge_pairing_lock = threading.Lock()
         self.visible_reply_broker = VisibleReplyBroker()
@@ -560,11 +565,8 @@ class ConsoleService:
                 "upgrade_building",
                 "replace_building",
             )
-            if (
-                path := carrier_navigation_profile_path(
-                    self.config, action_type
-                )
-            ) is not None
+            if (path := carrier_navigation_profile_path(self.config, action_type))
+            is not None
         }
         self.intermediate_profile_paths = {
             action_type: path
@@ -574,7 +576,8 @@ class ConsoleService:
                     self.config,
                     action_type,
                 )
-            ) is not None
+            )
+            is not None
         }
         self.telemetry_path = runtime_path(
             self.config,
@@ -603,14 +606,20 @@ class ConsoleService:
         )
         self.stop_path = self.state_root / "emergency_stop"
         self._conversation_lock = threading.RLock()
+        self._execution_lock = threading.RLock()
+        self.world_state_service = WorldStateService(retained_snapshots=1)
+        self.read_task_pool = ReadTaskPool(
+            max_workers=int(self.config.get("state_read_workers", 4)),
+            timeout_seconds=float(
+                self.config.get("read_task_timeout_seconds", 60.0)
+            ),
+        )
         self.conversation_db_path = runtime_path(
             self.config,
             "conversation_database",
             self.runtime_root / "conversation" / "campaign.sqlite3",
         )
-        self.conversation_store = ConversationStore(
-            self.conversation_db_path
-        )
+        self.conversation_store = ConversationStore(self.conversation_db_path)
         self._activate_conversation(
             self.conversation_store.active_conversation_id(),
             seed=False,
@@ -730,9 +739,7 @@ class ConsoleService:
         if application_runtimes:
             for application_id, runtime in application_runtimes.items():
                 try:
-                    application_snapshot = self.runtime_config.snapshot(
-                        application_id
-                    )
+                    application_snapshot = self.runtime_config.snapshot(application_id)
                 except KeyError:
                     application_snapshot = snapshot
                 runtime.replace_pool(
@@ -829,9 +836,10 @@ class ConsoleService:
         self.conversation_agent = ConversationAgent(
             self.runtime_config,
             action_store,
-            model_pool_runtime=self.application_model_runtimes[
-                ECONOMY_APPLICATION_ID
-            ],
+            model_pool_runtime=self.application_model_runtimes[ECONOMY_APPLICATION_ID],
+            execution_lock=self._execution_lock,
+            world_state_service=self.world_state_service,
+            read_task_pool=self.read_task_pool,
         )
         self.application_agents: dict[str, Any] = {
             ECONOMY_APPLICATION_ID: self.conversation_agent,
@@ -839,17 +847,19 @@ class ConsoleService:
                 self.runtime_config,
                 fleet_store,
                 action_store,
-                model_pool_runtime=self.application_model_runtimes[
-                    "fleet_operations"
-                ],
+                model_pool_runtime=self.application_model_runtimes["fleet_operations"],
+                execution_lock=self._execution_lock,
+                world_state_service=self.world_state_service,
+                read_task_pool=self.read_task_pool,
             ),
             "research_strategy": ResearchConversationAgent(
                 self.runtime_config,
                 research_store,
                 action_store,
-                model_pool_runtime=self.application_model_runtimes[
-                    "research_strategy"
-                ],
+                model_pool_runtime=self.application_model_runtimes["research_strategy"],
+                execution_lock=self._execution_lock,
+                world_state_service=self.world_state_service,
+                read_task_pool=self.read_task_pool,
             ),
         }
 
@@ -874,9 +884,7 @@ class ConsoleService:
     def _latest_run_dir_global(self) -> Path | None:
         if not self.runs_root.is_dir():
             return None
-        directories = [
-            path for path in self.runs_root.iterdir() if path.is_dir()
-        ]
+        directories = [path for path in self.runs_root.iterdir() if path.is_dir()]
         return (
             max(directories, key=lambda path: path.stat().st_mtime)
             if directories
@@ -911,9 +919,7 @@ class ConsoleService:
     def _ensure_no_running_job(self) -> None:
         with self._job_lock:
             if self._job.get("state") == "running":
-                raise ConsoleError(
-                    "代理任务运行期间不能切换、归档或重新绑定战役会话。"
-                )
+                raise ConsoleError("代理任务运行期间不能切换、归档或重新绑定战役会话。")
 
     def campaign_binding_status(
         self,
@@ -939,8 +945,7 @@ class ConsoleService:
             if (
                 campaign_id_holder is not None
                 and current_campaign_label is not None
-                and campaign_id_holder.get("campaign_label")
-                == current_campaign_label
+                and campaign_id_holder.get("campaign_label") == current_campaign_label
             )
             else None
         )
@@ -957,10 +962,7 @@ class ConsoleService:
                     "必须手动选择目标会话。"
                 )
             else:
-                message = (
-                    "当前上传存档尚未绑定任何会话。"
-                    "请选择目标会话后手动确认。"
-                )
+                message = "当前上传存档尚未绑定任何会话。请选择目标会话后手动确认。"
         elif current_holder["conversation_id"] == metadata["conversation_id"]:
             state = "ready"
             message = "会话与当前上传存档一致，可以规划和执行。"
@@ -983,17 +985,13 @@ class ConsoleService:
             "active_conversation_id": metadata["conversation_id"],
             "active_conversation_title": metadata["title"],
             "current_bound_conversation_id": (
-                current_holder.get("conversation_id")
-                if current_holder
-                else None
+                current_holder.get("conversation_id") if current_holder else None
             ),
             "current_bound_conversation_title": (
                 current_holder.get("title") if current_holder else None
             ),
             "matching_conversation_id": (
-                current_holder.get("conversation_id")
-                if current_holder
-                else None
+                current_holder.get("conversation_id") if current_holder else None
             ),
             "campaign_id_holder_conversation_id": (
                 campaign_id_holder.get("conversation_id")
@@ -1001,9 +999,7 @@ class ConsoleService:
                 else None
             ),
             "campaign_id_holder_conversation_title": (
-                campaign_id_holder.get("title")
-                if campaign_id_holder
-                else None
+                campaign_id_holder.get("title") if campaign_id_holder else None
             ),
         }
 
@@ -1045,15 +1041,12 @@ class ConsoleService:
                 manifest = None
             metadata = (manifest or {}).get("metadata") or {}
             item["last_game_date"] = metadata.get("date")
-            item["last_save_received_at"] = (
-                (manifest or {}).get("received_at")
-            )
+            item["last_save_received_at"] = (manifest or {}).get("received_at")
             item["active"] = item["conversation_id"] == active_id
             item["is_current_save"] = (
                 bool(campaign_id)
                 and campaign_id == binding.get("current_campaign_id")
-                and item.get("campaign_label")
-                == binding.get("current_campaign_label")
+                and item.get("campaign_label") == binding.get("current_campaign_label")
             )
         return {
             "schema": "iag.conversation_catalog.v1",
@@ -1074,21 +1067,17 @@ class ConsoleService:
             campaign_id = None
             campaign_label = None
             if bind_current:
-                campaign_id = str(
-                    manifest.get("campaign_id") or ""
-                ).strip().lower()
-                campaign_label = str(
-                    manifest.get("campaign_label") or ""
-                ).strip() or None
+                campaign_id = str(manifest.get("campaign_id") or "").strip().lower()
+                campaign_label = (
+                    str(manifest.get("campaign_label") or "").strip() or None
+                )
                 if not campaign_id:
                     raise ConsoleError("尚未收到可绑定的房主存档。")
                 existing = self.conversation_store.conversation_for_campaign(
                     campaign_id
                 )
                 if existing is not None:
-                    raise ConsoleError(
-                        "当前存档已有战役会话，请直接继续原会话。"
-                    )
+                    raise ConsoleError("当前存档已有战役会话，请直接继续原会话。")
             selected_title = str(title).strip()
             if not selected_title:
                 selected_title = (
@@ -1147,19 +1136,14 @@ class ConsoleService:
                         conversation_id,
                         False,
                     )
-                elif (
-                    conversation_id
-                    == self.conversation_store.conversation_id
-                ):
+                elif conversation_id == self.conversation_store.conversation_id:
                     replacements = [
                         item
                         for item in self.conversation_store.list_conversations()
                         if item["conversation_id"] != conversation_id
                     ]
                     if not replacements:
-                        raise ConsoleError(
-                            "至少需要保留一条未归档的战役会话。"
-                        )
+                        raise ConsoleError("至少需要保留一条未归档的战役会话。")
                     self.conversation_store.set_conversation_archived(
                         conversation_id,
                         True,
@@ -1184,28 +1168,20 @@ class ConsoleService:
         with self._conversation_lock:
             self._ensure_no_running_job()
             manifest = read_manifest(self.config) or {}
-            campaign_id = str(
-                manifest.get("campaign_id") or ""
-            ).strip().lower()
-            campaign_label = str(
-                manifest.get("campaign_label") or ""
-            ).strip() or None
+            campaign_id = str(manifest.get("campaign_id") or "").strip().lower()
+            campaign_label = str(manifest.get("campaign_label") or "").strip() or None
             if not campaign_id:
                 raise ConsoleError("尚未收到可绑定的房主存档。")
             selected_conversation = (
-                str(conversation_id).strip()
-                if conversation_id is not None
-                else None
+                str(conversation_id).strip() if conversation_id is not None else None
             )
             if selected_conversation == "":
                 raise ConsoleError("conversation_id 不能为空字符串。")
             try:
-                update = (
-                    self.conversation_store.assign_campaign_to_conversation(
-                        campaign_id,
-                        selected_conversation,
-                        campaign_label=campaign_label,
-                    )
+                update = self.conversation_store.assign_campaign_to_conversation(
+                    campaign_id,
+                    selected_conversation,
+                    campaign_label=campaign_label,
                 )
             except (KeyError, ValueError) as error:
                 raise ConsoleError(str(error)) from error
@@ -1249,6 +1225,7 @@ class ConsoleService:
                     "experimental_ship_design_tools_enabled",
                     "experimental_fleet_reinforcement_tools_enabled",
                     "experimental_new_fleet_tools_enabled",
+                    "experimental_invasion_tools_enabled",
                 )
             )
         return False
@@ -1262,20 +1239,21 @@ class ConsoleService:
             application_id = manifest.application_id
             try:
                 runtime = self.runtime_config.snapshot(application_id)
-                binding_mode = "dedicated"
+                source_application_id = (
+                    runtime.application_profile.inherit_model_from_application_id
+                )
+                binding_mode = "inherited" if source_application_id else "dedicated"
             except KeyError:
                 runtime = fallback
                 binding_mode = "inherited"
+                source_application_id = ECONOMY_APPLICATION_ID
             pool = runtime.model_pool
-            conversation_supported = (
-                any(
-                    endpoint.enabled
-                    and endpoint.provider in TOOL_CALL_PROTOCOLS
-                    and endpoint.supports_tools
-                    for endpoint in pool.endpoints
-                )
-                and bool(runtime.settings.get("tool_calling_enabled", True))
-            )
+            conversation_supported = any(
+                endpoint.enabled
+                and endpoint.provider in TOOL_CALL_PROTOCOLS
+                and endpoint.supports_tools
+                for endpoint in pool.endpoints
+            ) and bool(runtime.settings.get("tool_calling_enabled", True))
             routes.append(
                 {
                     "application_id": application_id,
@@ -1293,8 +1271,12 @@ class ConsoleService:
                     "binding_mode": binding_mode,
                     "profile_id": runtime.application_profile.profile_id,
                     "configured_profile_id": bindings.get(application_id),
-                    "pool_id": runtime.application_profile.pool_id,
-                    "model_id": runtime.application_profile.model_id,
+                    "model_source_application_id": (
+                        source_application_id or application_id
+                    ),
+                    "model_source_profile_id": (runtime.model_route_profile.profile_id),
+                    "pool_id": runtime.model_route_profile.pool_id,
+                    "model_id": runtime.model_route_profile.model_id,
                 }
             )
         return routes
@@ -1349,9 +1331,7 @@ class ConsoleService:
         active_public_pool = next(
             item for item in public_pools if item["pool_id"] == active_pool.pool_id
         )
-        active_endpoint_ids = {
-            item.endpoint_id for item in active_pool.endpoints
-        }
+        active_endpoint_ids = {item.endpoint_id for item in active_pool.endpoints}
         active_public_endpoints = [
             item
             for item in active_public_pool["endpoints"]
@@ -1383,14 +1363,16 @@ class ConsoleService:
                         if key != "crawl4ai_api_token_file"
                     },
                     "crawl4ai_api_token_configured": bool(
-                        profile.application_options.get(
-                            "crawl4ai_api_token_file"
-                        )
+                        profile.application_options.get("crawl4ai_api_token_file")
                     ),
                 }
                 for profile in runtime.application_model_profiles
             ],
             "application_model_bindings": runtime.application_model_bindings,
+            "fast_advisor_profile_id": str(config.get("fast_advisor_profile_id") or ""),
+            "fast_advisor_timeout_seconds": int(
+                config.get("fast_advisor_timeout_seconds", 60)
+            ),
             "active_application_id": runtime.application_id,
             "active_profile_id": active_profile.profile_id,
             "template_id": config.get("model_template_id", "custom"),
@@ -1415,9 +1397,7 @@ class ConsoleService:
             "timeout_seconds": endpoint.timeout_seconds,
             "probe_timeout_seconds": endpoint.probe_timeout_seconds,
             "models_path": endpoint.models_path,
-            "rate_limit_cooldown_seconds": (
-                endpoint.rate_limit_cooldown_seconds
-            ),
+            "rate_limit_cooldown_seconds": (endpoint.rate_limit_cooldown_seconds),
             "sdk_max_retries": endpoint.sdk_max_retries,
             "request_body_overrides": request_body_overrides(options),
             "model_context_window_tokens": endpoint.model_context_window_tokens,
@@ -1431,15 +1411,9 @@ class ConsoleService:
             "context_compression_target_percent": float(
                 config.get("context_compression_target_percent", 35)
             ),
-            "web_research_enabled": bool(
-                config.get("web_research_enabled", False)
-            ),
-            "searxng_url": config.get(
-                "searxng_url", "http://127.0.0.1:8080"
-            ),
-            "crawl4ai_url": config.get(
-                "crawl4ai_url", "http://127.0.0.1:11235"
-            ),
+            "web_research_enabled": bool(config.get("web_research_enabled", False)),
+            "searxng_url": config.get("searxng_url", "http://127.0.0.1:8080"),
+            "crawl4ai_url": config.get("crawl4ai_url", "http://127.0.0.1:11235"),
             "stellaris_wiki_api_url": config.get(
                 "stellaris_wiki_api_url",
                 "https://stellaris.paradoxwikis.com/api.php",
@@ -1458,9 +1432,8 @@ class ConsoleService:
                     self.runtime_root / "secrets" / "crawl4ai_api_token",
                 ).is_file()
             ),
-            "tool_calling_enabled": endpoint.supports_tools and bool(
-                config.get("tool_calling_enabled", True)
-            ),
+            "tool_calling_enabled": endpoint.supports_tools
+            and bool(config.get("tool_calling_enabled", True)),
             "conversation_supported": (
                 any(
                     item.enabled
@@ -1507,9 +1480,7 @@ class ConsoleService:
             )
         if bool(value.get("thinking_enabled", False)):
             updated["thinking"] = {"type": "enabled"}
-            updated["reasoning_effort"] = str(
-                value.get("reasoning_effort", "high")
-            )
+            updated["reasoning_effort"] = str(value.get("reasoning_effort", "high"))
         else:
             updated.pop("thinking", None)
             updated.pop("reasoning_effort", None)
@@ -1518,18 +1489,12 @@ class ConsoleService:
             temperature = float(value.get("temperature", 0.15))
             timeout_seconds = int(value.get("timeout_seconds", 120))
             sdk_max_retries = int(value.get("sdk_max_retries", 2))
-            context_maximum = int(
-                value.get("model_context_window_tokens", 128_000)
-            )
-            output_reserve = int(
-                value.get("context_output_reserve_tokens", 8_192)
-            )
+            context_maximum = int(value.get("model_context_window_tokens", 128_000))
+            output_reserve = int(value.get("context_output_reserve_tokens", 8_192))
             trigger_percent = float(
                 value.get("context_compression_trigger_percent", 80)
             )
-            target_percent = float(
-                value.get("context_compression_target_percent", 35)
-            )
+            target_percent = float(value.get("context_compression_target_percent", 35))
         except (TypeError, ValueError) as error:
             raise ConsoleError("模型高级参数必须是有效数字。") from error
         if not 0 <= temperature <= 2:
@@ -1558,9 +1523,7 @@ class ConsoleService:
             "request_body_overrides": raw_overrides,
         }
         try:
-            validated_overrides = request_body_overrides(
-                candidate_for_validation
-            )
+            validated_overrides = request_body_overrides(candidate_for_validation)
         except ValueError as error:
             raise ConsoleError(str(error)) from error
         updated.update(
@@ -1601,9 +1564,7 @@ class ConsoleService:
                 or parsed.password
             ):
                 raise ConsoleError(f"{label} 必须是无内嵌凭据的 HTTP(S) URL。")
-        raw_domains = value.get(
-            "web_search_allowed_domains", DEFAULT_ALLOWED_DOMAINS
-        )
+        raw_domains = value.get("web_search_allowed_domains", DEFAULT_ALLOWED_DOMAINS)
         if isinstance(raw_domains, str):
             raw_domains = re.split(r"[\s,;]+", raw_domains)
         if not isinstance(raw_domains, list):
@@ -1624,9 +1585,7 @@ class ConsoleService:
         updated.update(
             {
                 **service_fields,
-                "web_research_enabled": bool(
-                    value.get("web_research_enabled", False)
-                ),
+                "web_research_enabled": bool(value.get("web_research_enabled", False)),
                 "web_search_allowed_domains": allowed_domains,
                 "web_fetch_direct_fallback_enabled": bool(
                     value.get("web_fetch_direct_fallback_enabled", False)
@@ -1645,17 +1604,13 @@ class ConsoleService:
                 raise ConsoleError("模型池至少需要一个端点。")
             if len(raw_endpoints) > 32:
                 raise ConsoleError("一个模型池最多配置 32 个端点。")
-            existing = {
-                item.endpoint_id: item for item in runtime.model_pool.endpoints
-            }
+            existing = {item.endpoint_id: item for item in runtime.model_pool.endpoints}
             parsed_endpoints: list[ModelEndpoint] = []
             endpoint_fields = set(ModelEndpoint.model_fields)
             for raw_endpoint in raw_endpoints:
                 if not isinstance(raw_endpoint, dict):
                     raise ConsoleError("模型端点必须是 JSON 对象。")
-                endpoint_id = str(
-                    raw_endpoint.get("endpoint_id", "")
-                ).strip()
+                endpoint_id = str(raw_endpoint.get("endpoint_id", "")).strip()
                 if not endpoint_id:
                     raise ConsoleError("模型端点标识不能为空。")
                 previous = existing.get(endpoint_id)
@@ -1703,9 +1658,7 @@ class ConsoleService:
             except ValueError as error:
                 raise ConsoleError(f"模型池配置无效：{error}") from error
         else:
-            model_transport = str(
-                updated.get("model_transport", "openai_sdk")
-            ).strip()
+            model_transport = str(updated.get("model_transport", "openai_sdk")).strip()
             if model_transport not in {
                 "openai_sdk",
                 "anthropic_sdk",
@@ -1765,9 +1718,7 @@ class ConsoleService:
                     "max_output_tokens": output_reserve,
                     "timeout_seconds": timeout_seconds,
                     "sdk_max_retries": sdk_max_retries,
-                    "supports_tools": bool(
-                        updated.get("tool_calling_enabled", True)
-                    ),
+                    "supports_tools": bool(updated.get("tool_calling_enabled", True)),
                 }
             )
             api_key = str(value.get("api_key", "")).strip()
@@ -1792,27 +1743,21 @@ class ConsoleService:
         thinking = updated.get("thinking")
         if isinstance(thinking, dict):
             options["thinking"] = thinking
-            options["reasoning_effort"] = str(
-                updated.get("reasoning_effort", "high")
-            )
+            options["reasoning_effort"] = str(updated.get("reasoning_effort", "high"))
         else:
             options.pop("thinking", None)
             options.pop("reasoning_effort", None)
 
         application_changes = {
             "model_template_id": template_id,
-            "tool_calling_enabled": bool(
-                updated.get("tool_calling_enabled", True)
-            ),
+            "tool_calling_enabled": bool(updated.get("tool_calling_enabled", True)),
             "context_compression_enabled": bool(
                 updated.get("context_compression_enabled", True)
             ),
             "context_compression_trigger_percent": trigger_percent,
             "context_compression_target_percent": target_percent,
             **service_fields,
-            "web_research_enabled": bool(
-                updated.get("web_research_enabled", False)
-            ),
+            "web_research_enabled": bool(updated.get("web_research_enabled", False)),
             "web_search_allowed_domains": allowed_domains,
             "web_fetch_direct_fallback_enabled": bool(
                 updated.get("web_fetch_direct_fallback_enabled", False)
@@ -1898,9 +1843,67 @@ class ConsoleService:
         try:
             return ModelEndpoint.model_validate(endpoint_value)
         except ValueError as error:
-            raise ConsoleError(
-                f"端点 {endpoint_id} 配置无效：{error}"
-            ) from error
+            raise ConsoleError(f"端点 {endpoint_id} 配置无效：{error}") from error
+
+    @staticmethod
+    def _migrate_model_profile_references(
+        *,
+        previous_pools: tuple[ModelPool, ...],
+        next_pools: list[ModelPool],
+        profiles: tuple[ApplicationModelProfile, ...],
+    ) -> tuple[list[ApplicationModelProfile], list[dict[str, str]]]:
+        """Follow an edited endpoint when its logical model identifier changes."""
+        previous_by_id = {pool.pool_id: pool for pool in previous_pools}
+        next_by_id = {pool.pool_id: pool for pool in next_pools}
+        migrated: list[ApplicationModelProfile] = []
+        changes: list[dict[str, str]] = []
+        for profile in profiles:
+            next_pool = next_by_id.get(profile.pool_id)
+            if next_pool is None:
+                raise ConsoleError(
+                    f"模型池 {profile.pool_id!r} 仍被配置 "
+                    f"{profile.profile_id!r} 引用，不能删除。"
+                )
+            if profile.model_id in next_pool.model_ids():
+                migrated.append(profile.model_copy(deep=True))
+                continue
+
+            previous_pool = previous_by_id.get(profile.pool_id)
+            previous_endpoint_ids = {
+                endpoint.endpoint_id
+                for endpoint in (previous_pool.endpoints if previous_pool else [])
+                if endpoint.model_id == profile.model_id
+            }
+            replacement_model_ids = {
+                endpoint.model_id
+                for endpoint in next_pool.endpoints
+                if endpoint.endpoint_id in previous_endpoint_ids
+            }
+            if len(replacement_model_ids) == 1:
+                replacement_model_id = next(iter(replacement_model_ids))
+            elif len(next_pool.model_ids()) == 1:
+                replacement_model_id = next_pool.model_ids()[0]
+            else:
+                raise ConsoleError(
+                    f"配置 {profile.profile_id!r} 引用的逻辑模型 "
+                    f"{profile.model_id!r} 已不存在，且无法唯一判断替代模型。"
+                    "请保留原逻辑模型标识，或先在 Application 配置中切换模型。"
+                )
+            migrated.append(
+                profile.model_copy(
+                    update={"model_id": replacement_model_id},
+                    deep=True,
+                )
+            )
+            changes.append(
+                {
+                    "profile_id": profile.profile_id,
+                    "pool_id": profile.pool_id,
+                    "from_model_id": profile.model_id,
+                    "to_model_id": replacement_model_id,
+                }
+            )
+        return migrated, changes
 
     def save_model_pools(self, value: dict[str, Any]) -> dict[str, Any]:
         raw_pools = value.get("model_pools")
@@ -1952,14 +1955,24 @@ class ConsoleService:
                 raise ConsoleError(
                     f"模型池 {display_name} 配置无效：{error}"
                 ) from error
+        migrated_profiles, profile_migrations = self._migrate_model_profile_references(
+            previous_pools=snapshot.model_pools,
+            next_pools=parsed_pools,
+            profiles=snapshot.application_model_profiles,
+        )
         with self._config_lock:
             try:
-                self.runtime_config.update(model_pools=parsed_pools)
+                self.runtime_config.update(
+                    model_pools=parsed_pools,
+                    application_model_profiles=migrated_profiles,
+                )
             except ValueError as error:
                 raise ConsoleError(str(error)) from error
             self.runtime_config.save()
             self._sync_model_pool_runtimes(reset_health=True)
-            return self.public_model_config()
+            result = self.public_model_config()
+            result["profile_migrations"] = profile_migrations
+            return result
 
     def _profile_options(
         self,
@@ -1967,17 +1980,13 @@ class ConsoleService:
         previous: ApplicationModelProfile | None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         previous_request = dict(previous.request_options) if previous else {}
-        previous_application = (
-            dict(previous.application_options) if previous else {}
-        )
+        previous_application = dict(previous.application_options) if previous else {}
         try:
             temperature = float(value.get("temperature", 0.15))
             trigger_percent = float(
                 value.get("context_compression_trigger_percent", 80)
             )
-            target_percent = float(
-                value.get("context_compression_target_percent", 35)
-            )
+            target_percent = float(value.get("context_compression_target_percent", 35))
         except (TypeError, ValueError) as error:
             raise ConsoleError("Application 模型参数必须是有效数字。") from error
         if not 0 <= temperature <= 2:
@@ -2017,17 +2026,13 @@ class ConsoleService:
             "searxng_url": str(
                 value.get(
                     "searxng_url",
-                    previous_application.get(
-                        "searxng_url", "http://127.0.0.1:8080"
-                    ),
+                    previous_application.get("searxng_url", "http://127.0.0.1:8080"),
                 )
             ).strip(),
             "crawl4ai_url": str(
                 value.get(
                     "crawl4ai_url",
-                    previous_application.get(
-                        "crawl4ai_url", "http://127.0.0.1:11235"
-                    ),
+                    previous_application.get("crawl4ai_url", "http://127.0.0.1:11235"),
                 )
             ).strip(),
             "stellaris_wiki_api_url": str(
@@ -2048,9 +2053,7 @@ class ConsoleService:
                 or parsed.username
                 or parsed.password
             ):
-                raise ConsoleError(
-                    f"{label} 必须是无内嵌凭据的 HTTP(S) URL。"
-                )
+                raise ConsoleError(f"{label} 必须是无内嵌凭据的 HTTP(S) URL。")
         raw_domains = value.get(
             "web_search_allowed_domains",
             previous_application.get(
@@ -2082,9 +2085,7 @@ class ConsoleService:
             ),
             "context_compression_trigger_percent": trigger_percent,
             "context_compression_target_percent": target_percent,
-            "web_research_enabled": bool(
-                value.get("web_research_enabled", False)
-            ),
+            "web_research_enabled": bool(value.get("web_research_enabled", False)),
             "web_search_allowed_domains": allowed_domains,
             "web_fetch_direct_fallback_enabled": bool(
                 value.get("web_fetch_direct_fallback_enabled", False)
@@ -2110,8 +2111,16 @@ class ConsoleService:
         display_name = str(value.get("display_name", "")).strip()
         pool_id = str(value.get("pool_id", "")).strip()
         model_id = str(value.get("model_id", "")).strip()
+        inherit_model_from_application_id = (
+            str(value.get("inherit_model_from_application_id") or "").strip() or None
+        )
         if not all((profile_id, display_name, pool_id, model_id)):
             raise ConsoleError("配置名称、模型池和池内模型都不能为空。")
+        if inherit_model_from_application_id is not None:
+            try:
+                self.application_registry.get(inherit_model_from_application_id)
+            except KeyError as error:
+                raise ConsoleError(str(error)) from error
         snapshot = self.runtime_config.snapshot()
         previous = next(
             (
@@ -2132,6 +2141,7 @@ class ConsoleService:
                 application_id=application_id,
                 pool_id=pool_id,
                 model_id=model_id,
+                inherit_model_from_application_id=(inherit_model_from_application_id),
                 request_options=request_options,
                 application_options=application_options,
             )
@@ -2194,13 +2204,47 @@ class ConsoleService:
         if bindings.get(target.application_id) == profile_id:
             bindings[target.application_id] = fallback.profile_id
         with self._config_lock:
+            setting_changes = (
+                {"fast_advisor_profile_id": ""}
+                if str(self.config.get("fast_advisor_profile_id") or "") == profile_id
+                else None
+            )
             self.runtime_config.update(
                 application_model_profiles=remaining,
                 application_model_bindings=bindings,
+                settings=setting_changes,
             )
             self.runtime_config.save()
             self._sync_model_pool_runtimes(reset_health=False)
             return self.public_model_config()
+
+    def save_fast_advisor_profile(
+        self,
+        value: dict[str, Any],
+    ) -> dict[str, Any]:
+        profile_id = str(value.get("profile_id") or "").strip()
+        try:
+            timeout_seconds = int(value.get("timeout_seconds", 60))
+        except (TypeError, ValueError) as error:
+            raise ConsoleError("快速参谋超时必须是整数秒。") from error
+        if not 5 <= timeout_seconds <= 60:
+            raise ConsoleError("快速参谋超时必须在 5 到 60 秒之间。")
+        snapshot = self.runtime_config.snapshot()
+        known_ids = {
+            profile.profile_id for profile in snapshot.application_model_profiles
+        }
+        if profile_id and profile_id not in known_ids:
+            raise ConsoleError("所选快速参谋模型配置不存在。")
+        with self._config_lock:
+            self.runtime_config.update(
+                settings={
+                    "fast_advisor_profile_id": profile_id,
+                    "fast_advisor_timeout_seconds": timeout_seconds,
+                }
+            )
+            self.runtime_config.save()
+            self.reload_config()
+        return self.public_model_config()
 
     def save_model_config(self, value: dict[str, Any]) -> dict[str, Any]:
         """Compatibility route retained for pre-catalog web clients."""
@@ -2236,11 +2280,7 @@ class ConsoleService:
         }
 
     def public_execution_settings(self) -> dict[str, Any]:
-        policy = str(
-            self.config.get(
-                "inconclusive_rewrite_policy", "block_until_save"
-            )
-        )
+        policy = str(self.config.get("inconclusive_rewrite_policy", "block_until_save"))
         if policy not in {
             "block_until_save",
             "allow_serial_provisional",
@@ -2256,9 +2296,7 @@ class ConsoleService:
         else:
             pending_count = 0
         return {
-            "execution_mode": str(
-                self.config.get("execution_mode", "session_proxy")
-            ),
+            "execution_mode": str(self.config.get("execution_mode", "session_proxy")),
             "fixed_click_guard_enabled": bool(
                 self.config.get("fixed_click_guard_enabled", True)
             ),
@@ -2279,9 +2317,7 @@ class ConsoleService:
             "session_proxy_local_ip": str(
                 self.config.get("session_proxy_local_ip", "")
             ),
-            "session_proxy_host_ip": str(
-                self.config.get("session_proxy_host_ip", "")
-            ),
+            "session_proxy_host_ip": str(self.config.get("session_proxy_host_ip", "")),
             "session_proxy_source_actor": int(
                 self.config.get("session_proxy_source_actor", 0)
             ),
@@ -2357,6 +2393,27 @@ class ConsoleService:
                     False,
                 )
             ),
+            "experimental_invasion_tools_enabled": bool(
+                self.config.get("experimental_invasion_tools_enabled", False)
+            ),
+            "maximum_army_recruitment_batch": int(
+                self.config.get("maximum_army_recruitment_batch", 5)
+            ),
+            "auto_authorize_recruited_transport_fleets": bool(
+                self.config.get(
+                    "auto_authorize_recruited_transport_fleets",
+                    False,
+                )
+            ),
+            "campaign_ground_force_ratio": float(
+                self.config.get("campaign_ground_force_ratio", 1.25)
+            ),
+            "campaign_space_force_ratio": float(
+                self.config.get("campaign_space_force_ratio", 1.20)
+            ),
+            "campaign_bombardment_threshold": float(
+                self.config.get("campaign_bombardment_threshold", 50.0)
+            ),
             "experimental_research_tools_enabled": bool(
                 self.config.get("experimental_research_tools_enabled", False)
             ),
@@ -2372,22 +2429,26 @@ class ConsoleService:
         self._require_protocol_compatibility_idle()
         try:
             manual_age = int(value.get("require_fresh_save_seconds", 900))
-            autonomy_age = int(
-                value.get("autonomy_require_fresh_save_seconds", 900)
-            )
+            autonomy_age = int(value.get("autonomy_require_fresh_save_seconds", 900))
             maximum = int(value.get("maximum_constructions_per_turn", 3))
             maximum_lag = int(value.get("maximum_source_save_lag_versions", 2))
-            coordinate_limit = float(
-                value.get("fleet_coordinate_max_abs", 1000.0)
-            )
+            coordinate_limit = float(value.get("fleet_coordinate_max_abs", 1000.0))
             reinforcement_limit = int(
                 value.get("maximum_fleet_reinforcement_increase", 5)
             )
-            new_fleet_limit = int(
-                value.get("maximum_new_fleet_initial_ships", 5)
-            )
+            new_fleet_limit = int(value.get("maximum_new_fleet_initial_ships", 5))
             minimum_habitability = float(
                 value.get("minimum_colonization_habitability", 0.30)
+            )
+            army_recruitment_limit = int(value.get("maximum_army_recruitment_batch", 5))
+            campaign_ground_force_ratio = float(
+                value.get("campaign_ground_force_ratio", 1.25)
+            )
+            campaign_space_force_ratio = float(
+                value.get("campaign_space_force_ratio", 1.20)
+            )
+            campaign_bombardment_threshold = float(
+                value.get("campaign_bombardment_threshold", 50.0)
             )
         except (TypeError, ValueError) as error:
             raise ConsoleError("执行门限必须是有效数值。") from error
@@ -2412,9 +2473,7 @@ class ConsoleService:
         execution_mode = str(value.get("execution_mode", "session_proxy"))
         if execution_mode not in {"carrier_click", "session_proxy"}:
             raise ConsoleError("执行模式必须是点击载体或会话代理。")
-        fleet_tools_enabled = bool(
-            value.get("experimental_fleet_tools_enabled", False)
-        )
+        fleet_tools_enabled = bool(value.get("experimental_fleet_tools_enabled", False))
         fleet_attack_enabled = bool(
             value.get("experimental_fleet_attack_enabled", False)
         )
@@ -2445,11 +2504,12 @@ class ConsoleService:
         colonization_enabled = bool(
             value.get("experimental_colonization_tools_enabled", False)
         )
-        starbase_enabled = bool(
-            value.get("experimental_starbase_tools_enabled", False)
-        )
+        starbase_enabled = bool(value.get("experimental_starbase_tools_enabled", False))
         starbase_replacement_enabled = bool(
             value.get("experimental_starbase_replacement_enabled", False)
+        )
+        invasion_tools_enabled = bool(
+            value.get("experimental_invasion_tools_enabled", False)
         )
         research_tools_enabled = bool(
             value.get("experimental_research_tools_enabled", False)
@@ -2479,16 +2539,29 @@ class ConsoleService:
             raise ConsoleError("实验性恒星基地工具只能在会话代理模式下启用。")
         if starbase_replacement_enabled and not starbase_enabled:
             raise ConsoleError("允许恒星基地替换前必须先启用恒星基地工具。")
+        if invasion_tools_enabled and execution_mode != "session_proxy":
+            raise ConsoleError("实验性入侵与陆军工具只能在会话代理模式下启用。")
         if not 0 <= minimum_habitability <= 1:
             raise ConsoleError("最低殖民宜居度必须在 0 到 1 之间。")
         if not 1 <= reinforcement_limit <= 20:
             raise ConsoleError("单次舰队目标编制增量上限必须在 1 到 20 之间。")
         if not 1 <= new_fleet_limit <= 20:
             raise ConsoleError("新舰队初始舰数上限必须在 1 到 20 之间。")
-        if (
-            not math.isfinite(coordinate_limit)
-            or not 10 <= coordinate_limit <= 100_000
+        if not 1 <= army_recruitment_limit <= 5:
+            raise ConsoleError("单次陆军招募上限必须在 1 到 5 之间。")
+        if not math.isfinite(campaign_ground_force_ratio) or not (
+            1 <= campaign_ground_force_ratio <= 5
         ):
+            raise ConsoleError("战役登陆兵力安全系数必须在 1 到 5 之间。")
+        if not math.isfinite(campaign_space_force_ratio) or not (
+            1 <= campaign_space_force_ratio <= 5
+        ):
+            raise ConsoleError("战役空间军力安全系数必须在 1 到 5 之间。")
+        if not math.isfinite(campaign_bombardment_threshold) or not (
+            0 <= campaign_bombardment_threshold <= 100
+        ):
+            raise ConsoleError("战役轰炸转登陆阈值必须在 0% 到 100% 之间。")
+        if not math.isfinite(coordinate_limit) or not 10 <= coordinate_limit <= 100_000:
             raise ConsoleError("舰队星系内坐标边界必须在 10 到 100000 之间。")
         if research_tools_enabled and execution_mode != "session_proxy":
             raise ConsoleError("实验性科研工具只能在会话代理模式下启用。")
@@ -2526,12 +2599,8 @@ class ConsoleService:
             ),
             "experimental_fleet_tools_enabled": fleet_tools_enabled,
             "experimental_fleet_attack_enabled": fleet_attack_enabled,
-            "experimental_fleet_maintenance_tools_enabled": (
-                fleet_maintenance_enabled
-            ),
-            "experimental_fleet_coordinate_tools_enabled": (
-                fleet_coordinate_enabled
-            ),
+            "experimental_fleet_maintenance_tools_enabled": (fleet_maintenance_enabled),
+            "experimental_fleet_coordinate_tools_enabled": (fleet_coordinate_enabled),
             "fleet_coordinate_max_abs": coordinate_limit,
             "experimental_ship_design_tools_enabled": ship_design_enabled,
             "experimental_fleet_reinforcement_tools_enabled": (
@@ -2540,19 +2609,21 @@ class ConsoleService:
             "maximum_fleet_reinforcement_increase": reinforcement_limit,
             "experimental_new_fleet_tools_enabled": new_fleet_enabled,
             "maximum_new_fleet_initial_ships": new_fleet_limit,
-            "experimental_civilian_ship_tools_enabled": (
-                civilian_ship_enabled
-            ),
+            "experimental_civilian_ship_tools_enabled": (civilian_ship_enabled),
             "experimental_colonization_tools_enabled": colonization_enabled,
             "minimum_colonization_habitability": minimum_habitability,
             "experimental_starbase_tools_enabled": starbase_enabled,
-            "experimental_starbase_replacement_enabled": (
-                starbase_replacement_enabled
+            "experimental_starbase_replacement_enabled": (starbase_replacement_enabled),
+            "experimental_invasion_tools_enabled": invasion_tools_enabled,
+            "maximum_army_recruitment_batch": army_recruitment_limit,
+            "auto_authorize_recruited_transport_fleets": bool(
+                value.get("auto_authorize_recruited_transport_fleets", False)
             ),
+            "campaign_ground_force_ratio": campaign_ground_force_ratio,
+            "campaign_space_force_ratio": campaign_space_force_ratio,
+            "campaign_bombardment_threshold": campaign_bombardment_threshold,
             "experimental_research_tools_enabled": research_tools_enabled,
-            "experimental_research_reselection_enabled": (
-                research_reselection_enabled
-            ),
+            "experimental_research_reselection_enabled": (research_reselection_enabled),
         }
         with self._config_lock:
             self.runtime_config.update(settings=changes)
@@ -2583,15 +2654,29 @@ class ConsoleService:
         except SessionProxyError as error:
             raise ConsoleError(str(error)) from error
 
+    def lock_session_proxy_flow(
+        self,
+        *,
+        candidate_id: str,
+        player_confirmed: bool,
+    ) -> dict[str, Any]:
+        self._require_protocol_compatibility_idle()
+        self.reload_config()
+        try:
+            return SessionProxyController(self.config).lock_flow(
+                candidate_id=candidate_id,
+                player_confirmed=player_confirmed,
+            )
+        except SessionProxyError as error:
+            raise ConsoleError(str(error)) from error
+
     def _protocol_compatibility_live_active(self) -> bool:
         suite = getattr(self, "protocol_compatibility", None)
         return bool(suite is not None and suite.live_active())
 
     def _require_protocol_compatibility_idle(self) -> None:
         if self._protocol_compatibility_live_active():
-            raise ConsoleError(
-                "协议兼容性验收正在接管会话代理；请先退房并结束验收。"
-            )
+            raise ConsoleError("协议兼容性验收正在接管会话代理；请先退房并结束验收。")
 
     def protocol_compatibility_payload(self) -> dict[str, Any]:
         return self.protocol_compatibility.payload()
@@ -2636,9 +2721,7 @@ class ConsoleService:
                     )
             self.reload_config()
             if self._active_autonomy_mode() != "paused":
-                raise ConsoleError(
-                    "开始协议验收前请把自主巡检切换为暂停。"
-                )
+                raise ConsoleError("开始协议验收前请把自主巡检切换为暂停。")
             try:
                 return self.protocol_compatibility.start_live(
                     disposable_authorized=disposable_authorized,
@@ -2699,6 +2782,13 @@ class ConsoleService:
 
     def fleet_payload(self) -> dict[str, Any]:
         """Return a cached save-backed fleet list with player permissions."""
+        full_delegation = (
+            self.conversation_store.get_state(
+                FLEET_FULL_DELEGATION_KEY,
+                False,
+            )
+            is True
+        )
         try:
             campaign_id = self.conversation_store.conversation_metadata().get(
                 "campaign_id"
@@ -2713,9 +2803,7 @@ class ConsoleService:
             cache_key = (str(path.resolve()), stat.st_mtime_ns, stat.st_size)
             with self._fleet_cache_lock:
                 if cache_key != self._fleet_cache_key:
-                    self._fleet_cache = extract_fleet_profiles(
-                        load_gamestate(path)
-                    )
+                    self._fleet_cache = extract_fleet_profiles(load_gamestate(path))
                     self._fleet_cache_key = cache_key
                 profile = dict(self._fleet_cache or {})
         except Exception as error:
@@ -2724,6 +2812,7 @@ class ConsoleService:
                 "available": False,
                 "error": str(error),
                 "fleets": [],
+                "full_delegation": full_delegation,
             }
 
         permissions = normalized_permissions(
@@ -2740,27 +2829,8 @@ class ConsoleService:
                 {
                     **item,
                     "permission": {
-                        "allow_move": bool(
-                            permission.get("allow_move", False)
-                        ),
-                        "allow_attack": bool(
-                            permission.get("allow_attack", False)
-                        ),
-                        "allow_reinforce": bool(
-                            permission.get("allow_reinforce", False)
-                        ),
-                        "allow_repair": bool(
-                            permission.get("allow_repair", False)
-                        ),
-                        "allow_upgrade": bool(
-                            permission.get("allow_upgrade", False)
-                        ),
-                        "allow_automation": bool(
-                            permission.get("allow_automation", False)
-                        ),
-                        "allow_build_starbase": bool(
-                            permission.get("allow_build_starbase", False)
-                        ),
+                        field: full_delegation or bool(permission.get(field, False))
+                        for field in FLEET_PERMISSION_FIELDS
                     },
                 }
             )
@@ -2770,6 +2840,7 @@ class ConsoleService:
             "game_date": profile.get("game_date"),
             "owner_country_id": profile.get("owner_country_id"),
             "fleet_count": len(fleets),
+            "full_delegation": full_delegation,
             "total_military_power": sum(
                 float(item.get("military_power") or 0)
                 for item in fleets
@@ -2805,12 +2876,27 @@ class ConsoleService:
             "allow_repair": bool(value.get("allow_repair", False)),
             "allow_upgrade": bool(value.get("allow_upgrade", False)),
             "allow_automation": bool(value.get("allow_automation", False)),
-            "allow_build_starbase": bool(
-                value.get("allow_build_starbase", False)
-            ),
+            "allow_build_starbase": bool(value.get("allow_build_starbase", False)),
+            "allow_bombardment": bool(value.get("allow_bombardment", False)),
+            "allow_land_armies": bool(value.get("allow_land_armies", False)),
         }
         self.conversation_store.set_state(FLEET_PERMISSIONS_KEY, permissions)
         return {"saved": True, "fleet_state": self.fleet_payload()}
+
+    def save_fleet_full_delegation(
+        self,
+        value: dict[str, Any],
+    ) -> dict[str, Any]:
+        enabled = value.get("enabled") is True
+        self.conversation_store.set_state(
+            FLEET_FULL_DELEGATION_KEY,
+            enabled,
+        )
+        return {
+            "saved": True,
+            "full_delegation": enabled,
+            "fleet_state": self.fleet_payload(),
+        }
 
     def _strategy_game_date(
         self,
@@ -2856,9 +2942,7 @@ class ConsoleService:
                     game_date=self._strategy_game_date(),
                     target=target,
                     renewal_lead_months=int(
-                        self.config.get(
-                            "decade_plan_renewal_lead_months", 12
-                        )
+                        self.config.get("decade_plan_renewal_lead_months", 12)
                     ),
                 )
             except ValueError as error:
@@ -2981,7 +3065,9 @@ class ConsoleService:
             "modified_at": datetime.fromtimestamp(
                 path.stat().st_mtime,
                 tz=timezone.utc,
-            ).astimezone().isoformat(timespec="seconds"),
+            )
+            .astimezone()
+            .isoformat(timespec="seconds"),
             "size": path.stat().st_size,
         }
         if manifest:
@@ -3004,7 +3090,9 @@ class ConsoleService:
         token = optional_text(self.save_upload_token_path).strip()
         client = optional_json(self.save_client_status_path) or {}
         last_seen_epoch = float(client.get("last_seen_epoch", 0) or 0)
-        heartbeat_age = max(time.time() - last_seen_epoch, 0) if last_seen_epoch else None
+        heartbeat_age = (
+            max(time.time() - last_seen_epoch, 0) if last_seen_epoch else None
+        )
         connected = bool(
             client.get("state") == "running"
             and heartbeat_age is not None
@@ -3023,14 +3111,13 @@ class ConsoleService:
             "capabilities": client.get("capabilities", []),
             "host_executor_ready": (
                 HOST_EXECUTOR_CAPABILITY in client.get("capabilities", [])
-                and client.get("app_version")
-                == REQUIRED_HOST_EXECUTOR_APP_VERSION
+                and client.get("app_version") == REQUIRED_HOST_EXECUTOR_APP_VERSION
             ),
-            "required_host_executor_app_version": (
-                REQUIRED_HOST_EXECUTOR_APP_VERSION
-            ),
+            "required_host_executor_app_version": (REQUIRED_HOST_EXECUTOR_APP_VERSION),
             "last_seen_at": client.get("last_seen_at"),
-            "heartbeat_age_seconds": round(heartbeat_age, 1) if heartbeat_age is not None else None,
+            "heartbeat_age_seconds": round(heartbeat_age, 1)
+            if heartbeat_age is not None
+            else None,
         }
         return {
             "source_mode": self.config.get("save_source_mode", "host_upload"),
@@ -3115,9 +3202,7 @@ class ConsoleService:
         """Resolve the conversation explicitly bound to the latest host save."""
         manifest = read_manifest(self.config) or {}
         campaign_id = str(manifest.get("campaign_id") or "").strip().lower()
-        campaign_label = str(
-            manifest.get("campaign_label") or ""
-        ).strip()
+        campaign_label = str(manifest.get("campaign_label") or "").strip()
         if not campaign_id:
             return None
         holder = self.conversation_store.conversation_for_campaign(campaign_id)
@@ -3144,8 +3229,7 @@ class ConsoleService:
             kind="save_continuation",
             visible=True,
             metadata={
-                "success": result.get("state")
-                not in {"failed", "needs_review"},
+                "success": result.get("state") not in {"failed", "needs_review"},
                 "trigger": "save_continuation",
             },
         )
@@ -3189,9 +3273,7 @@ class ConsoleService:
         with self._conversation_lock:
             active = self.conversation_store.conversation_id
             if selected and selected != active:
-                raise ConsoleError(
-                    "叠加层连接的战役会话已经切换，请等待界面自动刷新。"
-                )
+                raise ConsoleError("叠加层连接的战役会话已经切换，请等待界面自动刷新。")
         return self.start_chat(text)
 
     def paired_host_bridge_archive(self, server_url: str) -> Path:
@@ -3237,9 +3319,7 @@ class ConsoleService:
         return destination
 
     def calibration_steps_payload(self) -> dict[str, Any]:
-        navigation_enabled = bool(
-            self.config.get("carrier_navigation_enabled", False)
-        )
+        navigation_enabled = bool(self.config.get("carrier_navigation_enabled", False))
         value: dict[str, Any] = {}
         for action_type, command_path in self.profile_paths.items():
             command_profile = optional_json(command_path)
@@ -3247,9 +3327,7 @@ class ConsoleService:
             open_required = navigation_enabled and open_path is not None
             open_profile = optional_json(open_path) if open_path is not None else None
             intermediate_path = self.intermediate_profile_paths.get(action_type)
-            intermediate_required = (
-                navigation_enabled and intermediate_path is not None
-            )
+            intermediate_required = navigation_enabled and intermediate_path is not None
             intermediate_profile = (
                 optional_json(intermediate_path)
                 if intermediate_path is not None
@@ -3276,9 +3354,7 @@ class ConsoleService:
                     "path": str(intermediate_path),
                     "profile": intermediate_profile,
                 }
-            required_step_count = (
-                1 + int(open_required) + int(intermediate_required)
-            )
+            required_step_count = 1 + int(open_required) + int(intermediate_required)
             calibrated_step_count = int(bool(command_profile))
             if open_required:
                 calibrated_step_count += int(bool(open_profile))
@@ -3290,10 +3366,7 @@ class ConsoleService:
                 "calibrated_step_count": calibrated_step_count,
                 "sequence_ready": bool(command_profile)
                 and (not open_required or bool(open_profile))
-                and (
-                    not intermediate_required
-                    or bool(intermediate_profile)
-                ),
+                and (not intermediate_required or bool(intermediate_profile)),
             }
         return value
 
@@ -3347,6 +3420,8 @@ class ConsoleService:
             "execution_settings": self.public_execution_settings(),
             "session_proxy": self.session_proxy_status(),
             "fleet_state": self.fleet_payload(),
+            "state_reads": self.read_task_pool.status(),
+            "application_plans": self.application_plan_payload(),
             "strategy": self.strategy_payload(),
             "conversation": conversation_state,
             "conversations": conversation_catalog,
@@ -3360,23 +3435,131 @@ class ConsoleService:
             "emergency_stop_requested": self.stop_path.is_file(),
         }
 
+    def application_plan_payload(self) -> dict[str, Any]:
+        plans: dict[str, Any] = {}
+        for application_id, store in self.application_stores.items():
+            history = store.get_state(PLAN_AUDIT_PREFIX + application_id, [])
+            plans[application_id] = {
+                "plan": store.get_state(PLAN_STATE_PREFIX + application_id, None),
+                "recent_audit": (
+                    list(history[-100:]) if isinstance(history, list) else []
+                ),
+                "pending_external_reviews": store.get_state(
+                    PLAN_INBOX_PREFIX + application_id,
+                    [],
+                ),
+            }
+        joint_history = self.conversation_store.get_state(
+            JOINT_REVIEW_HISTORY_KEY,
+            [],
+        )
+        return {
+            "schema": "iag.console_application_plans.v1",
+            "applications": plans,
+            "joint_review": {
+                "schedule": self.conversation_store.get_state(
+                    JOINT_REVIEW_STATE_KEY,
+                    None,
+                ),
+                "recent_history": (
+                    list(joint_history[-20:]) if isinstance(joint_history, list) else []
+                ),
+            },
+        }
+
     def conversation_payload(
         self,
         *,
         after_id: int = 0,
         limit: int = 250,
+        application_id: str = ECONOMY_APPLICATION_ID,
     ) -> dict[str, Any]:
         with self._conversation_lock:
-            store = self.conversation_store
+            selected = str(application_id or ECONOMY_APPLICATION_ID).strip()
+            try:
+                manifest = self.application_registry.get(selected)
+                store = self.application_stores[selected]
+            except KeyError as error:
+                raise ConsoleError(f"未知 Application：{selected}") from error
+            contacts: list[dict[str, Any]] = []
+            routes = {
+                str(item["application_id"]): item
+                for item in self.application_agent_routes()
+            }
+            with self._job_lock:
+                job = dict(self._job)
+            for item in self.application_registry.all():
+                contact_id = item.application_id
+                contact_store = self.application_stores.get(contact_id)
+                if contact_store is None:
+                    continue
+                scope = (
+                    ECONOMY_APPLICATION_ID
+                    if contact_id == ECONOMY_APPLICATION_ID
+                    else None
+                )
+                summary = contact_store.public_message_summary(
+                    application_id=scope,
+                )
+                route = routes.get(contact_id, {})
+                job_kind = str(job.get("kind") or "")
+                contacts.append(
+                    {
+                        "application_id": contact_id,
+                        "display_name": item.display_name_zh,
+                        "agent_role": (
+                            item.agent_roles[0]
+                            if item.agent_roles
+                            else contact_id
+                        ),
+                        "tools_enabled": route.get("tools_enabled", False),
+                        "conversation_supported": route.get(
+                            "conversation_supported",
+                            False,
+                        ),
+                        "binding_mode": route.get("binding_mode"),
+                        "running": bool(
+                            job.get("state") == "running"
+                            and (
+                                job_kind.endswith(f":{contact_id}")
+                                or (
+                                    job_kind == "autonomous"
+                                    and (
+                                        contact_id == ECONOMY_APPLICATION_ID
+                                        or bool(route.get("tools_enabled"))
+                                    )
+                                )
+                            )
+                        ),
+                        **summary,
+                    }
+                )
+            contacts.sort(
+                key=lambda item: (
+                    str(item.get("last_message_at") or ""),
+                    str(item.get("application_id") or ""),
+                ),
+                reverse=True,
+            )
+            message_scope = (
+                ECONOMY_APPLICATION_ID
+                if selected == ECONOMY_APPLICATION_ID
+                else None
+            )
             return {
-                "schema": "iag.conversation.v2",
+                "schema": "iag.conversation.v3",
                 "conversation_id": store.conversation_id,
+                "application_id": selected,
+                "application_display_name": manifest.display_name_zh,
+                "applications": contacts,
                 "messages": store.public_messages(
                     after_id=after_id,
                     limit=limit,
+                    application_id=message_scope,
                 ),
-                "state": store.public_state(),
-                "binding": self.campaign_binding_status(store),
+                "state": self.conversation_store.public_state(),
+                "application_state": store.public_state(),
+                "binding": self.campaign_binding_status(self.conversation_store),
             }
 
     def save_autonomy_settings(
@@ -3447,7 +3630,18 @@ class ConsoleService:
         mode: str,
         source_identity: dict[str, Any] | None = None,
         coalesce: bool = True,
+        world_snapshot: WorldSnapshot | None = None,
     ) -> dict[str, Any]:
+        if world_snapshot is None:
+            campaign_id = store.conversation_metadata().get("campaign_id")
+            if campaign_id:
+                try:
+                    world_snapshot = self.world_state_service.pin(
+                        self.config,
+                        expected_campaign_id=str(campaign_id),
+                    )
+                except (FileNotFoundError, OSError, SaveIngestError, ValueError):
+                    world_snapshot = None
         previous_next_review = store.get_state("next_review", None)
         conversation_id = store.conversation_id
         self.visible_reply_broker.publish(
@@ -3469,6 +3663,7 @@ class ConsoleService:
                 user_content=user_content,
                 autonomy_mode=mode,
                 visible_event_callback=publish_visible,
+                world_snapshot=world_snapshot,
             )
         except Exception as error:
             store.append(
@@ -3502,7 +3697,18 @@ class ConsoleService:
         mode: str,
         source_identity: dict[str, Any] | None = None,
         coalesce: bool = True,
+        world_snapshot: WorldSnapshot | None = None,
     ) -> dict[str, Any]:
+        if world_snapshot is None:
+            campaign_id = store.conversation_metadata().get("campaign_id")
+            if campaign_id:
+                try:
+                    world_snapshot = self.world_state_service.pin(
+                        self.config,
+                        expected_campaign_id=str(campaign_id),
+                    )
+                except (FileNotFoundError, OSError, SaveIngestError, ValueError):
+                    world_snapshot = None
         previous_next_review = store.get_state("next_review", None)
         conversation_id = store.conversation_id
         application_id = agent.application_id
@@ -3512,93 +3718,32 @@ class ConsoleService:
             "application_display_name": display_name,
             "trigger": trigger,
         }
+        stream_metadata = {
+            "application_id": application_id,
+            "application_display_name": display_name,
+        }
         self.visible_reply_broker.publish(
             conversation_id,
             "turn_started",
-            {"trigger": trigger},
+            {**stream_metadata, "trigger": trigger},
         )
-
-        if trigger == "chat":
-            text = str(user_content or "").strip()
-            message_id = store.append(
-                "user",
-                text,
-                kind="operator_message",
-                visible=True,
-                metadata=metadata,
-            )
-            self.visible_reply_broker.publish(
-                conversation_id,
-                "user_message",
-                {
-                    "id": message_id,
-                    "role": "user",
-                    "kind": "operator_message",
-                    "content": text,
-                },
-            )
-        else:
-            label = (
-                "玩家要求立即巡检"
-                if trigger == "manual_review"
-                else "后台自主巡检"
-            )
-            store.append(
-                "user",
-                f"[{label} · {display_name}] 请完成本领域审计。",
-                kind="autonomy_trigger",
-                visible=True,
-                metadata=metadata,
-            )
-
-        mirrored_assistant_contents: list[str] = []
+        emitted_assistant_contents: list[str] = []
 
         def publish_visible(event_type: str, payload: dict[str, Any]) -> None:
-            if event_type == "user_message":
-                return
-            if event_type != "assistant_final":
-                self.visible_reply_broker.publish(
-                    conversation_id,
-                    event_type,
-                    payload,
-                )
-                return
             content = str(payload.get("content") or "")
-            if not content:
-                return
-            main_id = store.append(
-                "assistant",
-                content,
-                kind=str(payload.get("kind") or "assistant_message"),
-                visible=True,
-                metadata=metadata,
-            )
-            mirrored_assistant_contents.append(content)
+            if event_type == "assistant_final" and content:
+                emitted_assistant_contents.append(content)
             self.visible_reply_broker.publish(
                 conversation_id,
-                "assistant_final",
-                {
-                    **payload,
-                    "id": main_id,
-                    "role": "assistant",
-                    "content": content,
-                },
+                event_type,
+                {**payload, **stream_metadata},
             )
 
         def publish_audit(event: dict[str, Any]) -> None:
-            store.append(
-                "tool",
-                json.dumps(event, ensure_ascii=False, separators=(",", ":")),
-                tool_name=str(event.get("tool") or "unknown"),
-                kind="tool_result",
-                visible=True,
-                metadata={
-                    **metadata,
-                    "public_summary": str(event.get("summary") or ""),
-                    "success": bool(event.get("success")),
-                    "run_id": event.get("run_id"),
-                },
-            )
+            # The durable tool row already lives in the Application-private
+            # store. Polling that thread exposes it without contaminating the
+            # campaign-wide overlay event stream.
+            return None
 
         try:
             result = agent.run_turn(
@@ -3607,11 +3752,12 @@ class ConsoleService:
                 autonomy_mode=mode,
                 visible_event_callback=publish_visible,
                 audit_event_callback=publish_audit,
+                world_snapshot=world_snapshot,
             )
             final_content = str(result.get("final_content") or "")
             if final_content and (
-                not mirrored_assistant_contents
-                or mirrored_assistant_contents[-1] != final_content
+                not emitted_assistant_contents
+                or emitted_assistant_contents[-1] != final_content
             ):
                 publish_visible(
                     "assistant_final",
@@ -3627,7 +3773,7 @@ class ConsoleService:
             confirmed = facts.get("confirmed")
             provisional = facts.get("provisional")
             if confirmed or provisional:
-                store.append(
+                agent.store.append(
                     "system",
                     (
                         f"{display_name}机器事实：确认 "
@@ -3643,7 +3789,7 @@ class ConsoleService:
                 )
             return result
         except Exception as error:
-            store.append(
+            agent.store.append(
                 "system",
                 f"{display_name}：{type(error).__name__}: {error}",
                 kind="error",
@@ -3655,7 +3801,7 @@ class ConsoleService:
             self.visible_reply_broker.publish(
                 conversation_id,
                 "turn_finished",
-                {"trigger": trigger},
+                {**stream_metadata, "trigger": trigger},
             )
             if coalesce:
                 self._record_turn_completion(
@@ -3749,28 +3895,60 @@ class ConsoleService:
         store: ConversationStore,
         mode: str,
         source_identity: dict[str, Any] | None,
+        game_date: Any = None,
     ) -> dict[str, Any]:
-        """Run enabled domain agents sequentially against one save trigger."""
+        """Run independent domain reasoning concurrently for one save trigger."""
         previous_next_review = store.get_state("next_review", None)
-        results: list[dict[str, Any]] = []
+        selected: list[str] = []
         for application_id in (
             "research_strategy",
             "fleet_operations",
             ECONOMY_APPLICATION_ID,
         ):
-            agent = self.application_agents[application_id]
             if application_id != ECONOMY_APPLICATION_ID:
                 try:
                     runtime = self.runtime_config.snapshot(application_id)
                 except KeyError:
-                    runtime = self.runtime_config.snapshot(
-                        ECONOMY_APPLICATION_ID
-                    )
+                    runtime = self.runtime_config.snapshot(ECONOMY_APPLICATION_ID)
                 if not self._application_tools_enabled(
                     application_id,
                     runtime.settings,
                 ):
                     continue
+            selected.append(application_id)
+
+        campaign_id = store.conversation_metadata().get("campaign_id")
+        world_snapshot = self.world_state_service.pin(
+            self.config,
+            expected_campaign_id=(str(campaign_id) if campaign_id else None),
+        )
+        round_source_identity = world_snapshot.source_identity()
+        try:
+            round_game_date = load_save_metadata(world_snapshot.path).get("date")
+        except (FileNotFoundError, OSError, ValueError):
+            round_game_date = game_date
+        warmup = world_snapshot.warm_for_applications(
+            selected,
+            game_root=detect_game_root(self.config),
+            maximum_recruitment_count=int(
+                self.config.get("maximum_army_recruitment_batch", 5)
+            ),
+            minimum_habitability=float(
+                self.config.get("minimum_colonization_habitability", 0.30)
+            ),
+            minimum_space_force_ratio=float(
+                self.config.get("campaign_space_force_ratio", 1.20)
+            ),
+        )
+        warmup["game_date"] = round_game_date
+        warmup["trigger_source_changed_before_pin"] = bool(
+            source_identity is not None
+            and source_identity != round_source_identity
+        )
+        store.set_state("last_world_snapshot_warmup", warmup)
+
+        def run_application(application_id: str) -> dict[str, Any]:
+            agent = self.application_agents[application_id]
             try:
                 if application_id == ECONOMY_APPLICATION_ID:
                     result = self._conversation_action(
@@ -3780,6 +3958,7 @@ class ConsoleService:
                         user_content=None,
                         mode=mode,
                         coalesce=False,
+                        world_snapshot=world_snapshot,
                     )
                 else:
                     result = self._specialist_conversation_action(
@@ -3789,26 +3968,41 @@ class ConsoleService:
                         user_content=None,
                         mode=mode,
                         coalesce=False,
+                        world_snapshot=world_snapshot,
                     )
-                results.append(
-                    {
-                        "application_id": application_id,
-                        "success": True,
-                        "result": result,
-                    }
-                )
+                return {
+                    "application_id": application_id,
+                    "success": True,
+                    "result": result,
+                }
             except Exception as error:
-                results.append(
-                    {
-                        "application_id": application_id,
-                        "success": False,
-                        "error": f"{type(error).__name__}: {error}",
-                    }
-                )
+                return {
+                    "application_id": application_id,
+                    "success": False,
+                    "error": f"{type(error).__name__}: {error}",
+                }
+
+        if selected:
+            with ThreadPoolExecutor(
+                max_workers=min(4, len(selected)),
+                thread_name_prefix="iag-application",
+            ) as executor:
+                futures = [
+                    executor.submit(run_application, application_id)
+                    for application_id in selected
+                ]
+                results = [future.result() for future in futures]
+        else:
+            results = []
+        joint_review = self.joint_plan_reviewer.run_if_due(
+            game_date=round_game_date,
+            main_store=store,
+            application_stores=self.application_stores,
+        )
         self._record_turn_completion(
             store,
             previous_next_review,
-            source_identity,
+            round_source_identity,
         )
         successful = sum(item["success"] is True for item in results)
         return {
@@ -3817,6 +4011,8 @@ class ConsoleService:
                 f"已完成 {successful}/{len(results)} 个 Application 巡检。"
             ),
             "applications": results,
+            "world_snapshot": warmup,
+            "joint_review": joint_review,
         }
 
     def _autonomy_loop(self) -> None:
@@ -3871,16 +4067,13 @@ class ConsoleService:
                         source_identity = save_identity(source_path)
                         self._start_job(
                             "save_continuation",
-                            lambda store=continuation_store,
-                            source_identity=source_identity: (
+                            lambda store=continuation_store, source_identity=source_identity: (
                                 self._run_save_continuation_job(
                                     store,
                                     source_identity,
                                 )
                             ),
-                            conversation_id=(
-                                continuation_store.conversation_id
-                            ),
+                            conversation_id=(continuation_store.conversation_id),
                         )
                         continue
                     if continuation_probe.get("blocks_autonomy"):
@@ -3903,13 +4096,13 @@ class ConsoleService:
                     source_identity = probe.get("save")
                     self._start_job(
                         "autonomous",
-                        lambda store=store,
-                        mode=mode,
-                        source_identity=source_identity: (
+                        lambda store=store, mode=mode, source_identity=source_identity,
+                        game_date=probe.get("game_date"): (
                             self._run_autonomous_suite(
                                 store,
                                 mode,
                                 source_identity=source_identity,
+                                game_date=game_date,
                             )
                         ),
                         conversation_id=store.conversation_id,
@@ -3930,6 +4123,7 @@ class ConsoleService:
         self._autonomy_stop.set()
         self._scheduler_wakeup.set()
         self._scheduler_thread.join(timeout=3)
+        self.read_task_pool.close()
 
     def capture(self) -> dict[str, Any]:
         return capture_calibration(
@@ -4170,6 +4364,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             401,
             {"WWW-Authenticate": 'Basic realm="IAG Console", charset="UTF-8"'},
         )
+
     def send_upload_unauthorized(self) -> None:
         self.send_bytes(
             b'{"error":"upload_authentication_required"}',
@@ -4380,9 +4575,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     after_sequence = int(query.get("after", ["0"])[0])
                 except ValueError as error:
                     raise ConsoleError("无效的叠加层事件游标。") from error
-                conversation_id = str(
-                    query.get("conversation_id", [""])[0]
-                ).strip()
+                conversation_id = str(query.get("conversation_id", [""])[0]).strip()
                 if not conversation_id:
                     raise ConsoleError("叠加层事件请求缺少 conversation_id。")
                 self.send_overlay_events(conversation_id, after_sequence)
@@ -4407,9 +4600,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 self.send_json(self.service.strategy_payload())
                 return
             if path == "/api/protocol-compatibility":
-                self.send_json(
-                    self.service.protocol_compatibility_payload()
-                )
+                self.send_json(self.service.protocol_compatibility_payload())
                 return
             if path == "/api/protocol-compatibility/report":
                 format_name = str(query.get("format", ["json"])[0])
@@ -4425,10 +4616,11 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 )
                 return
             if path == "/api/conversations":
-                include_archived = (
-                    query.get("include_archived", ["0"])[0]
-                    in {"1", "true", "yes"}
-                )
+                include_archived = query.get("include_archived", ["0"])[0] in {
+                    "1",
+                    "true",
+                    "yes",
+                }
                 self.send_json(
                     self.service.conversation_catalog_payload(
                         include_archived=include_archived
@@ -4445,6 +4637,10 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     self.service.conversation_payload(
                         after_id=after_id,
                         limit=limit,
+                        application_id=query.get(
+                            "application_id",
+                            [ECONOMY_APPLICATION_ID],
+                        )[0],
                     )
                 )
                 return
@@ -4491,9 +4687,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             "/api/host-executor/ready",
             "/api/host-executor/result",
         }:
-            if not self.service.upload_is_authorized(
-                self.headers.get("Authorization")
-            ):
+            if not self.service.upload_is_authorized(self.headers.get("Authorization")):
                 self.send_upload_unauthorized()
                 return
             try:
@@ -4520,9 +4714,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/save/client-heartbeat":
-            if not self.service.upload_is_authorized(
-                self.headers.get("Authorization")
-            ):
+            if not self.service.upload_is_authorized(self.headers.get("Authorization")):
                 self.send_upload_unauthorized()
                 return
             try:
@@ -4543,9 +4735,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/save/upload":
-            if not self.service.upload_is_authorized(
-                self.headers.get("Authorization")
-            ):
+            if not self.service.upload_is_authorized(self.headers.get("Authorization")):
                 self.send_upload_unauthorized()
                 return
             try:
@@ -4589,6 +4779,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 result = self.service.save_application_model_profile(value)
             elif path == "/api/model/application-profile/delete":
                 result = self.service.delete_application_model_profile(value)
+            elif path == "/api/model/fast-advisor":
+                result = self.service.save_fast_advisor_profile(value)
             elif path == "/api/model/probe":
                 result = self.service.probe_model_pool(value)
             elif path == "/api/execution-settings":
@@ -4598,6 +4790,11 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             elif path == "/api/session-proxy/stop":
                 result = self.service.stop_session_proxy(
                     room_exited=bool(value.get("room_exited", False))
+                )
+            elif path == "/api/session-proxy/flow/lock":
+                result = self.service.lock_session_proxy_flow(
+                    candidate_id=str(value.get("candidate_id", "")),
+                    player_confirmed=value.get("player_confirmed") is True,
                 )
             elif path == "/api/protocol-compatibility/plan/new":
                 result = self.service.new_protocol_compatibility_plan(value)
@@ -4629,6 +4826,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 result = self.service.reset_protocol_compatibility()
             elif path == "/api/fleet-permission":
                 result = self.service.save_fleet_permission(value)
+            elif path == "/api/fleet-full-delegation":
+                result = self.service.save_fleet_full_delegation(value)
             elif path == "/api/strategy/decade":
                 result = self.service.save_decade_plan_text(
                     str(value.get("text", "")),
@@ -4665,16 +4864,10 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 )
             elif path == "/api/conversations/bind-current":
                 if "conversation_id" not in value:
-                    raise ConsoleError(
-                        "必须明确指定目标会话；使用 null 表示解除绑定。"
-                    )
+                    raise ConsoleError("必须明确指定目标会话；使用 null 表示解除绑定。")
                 raw_conversation_id = value.get("conversation_id")
                 result = self.service.set_current_campaign_binding(
-                    (
-                        None
-                        if raw_conversation_id is None
-                        else str(raw_conversation_id)
-                    )
+                    (None if raw_conversation_id is None else str(raw_conversation_id))
                 )
             elif path == "/api/conversation/message":
                 result = self.service.start_chat(

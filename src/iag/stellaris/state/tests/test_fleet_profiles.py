@@ -3,13 +3,18 @@ from __future__ import annotations
 import unittest
 
 from iag.stellaris.state.fleet_profiles import (
+    attack_target_routes,
+    country_relation_profiles,
     extract_fleet_profiles,
+    fleet_availability,
+    hostile_fleet_targets,
+    military_fleet_callability,
     resolve_created_fleet_template,
     selected_attack,
     selected_construction_ship_starbase,
     selected_coordinate_move,
-    selected_fleet_repair,
     selected_fleet_reinforcement,
+    selected_fleet_repair,
     selected_fleet_upgrade,
     selected_move,
     selected_new_fleet_reinforcement,
@@ -332,7 +337,360 @@ starbase_mgr=
 """
 
 
+WAR_ROUTE_FIXTURE = """
+date="2405.07.01"
+player={ { name="Player" country=0 } }
+country=
+{
+ 0=
+ {
+  fleets_manager={ owned_fleets={ { fleet=1 } } }
+  terra_incognita={ systems={ 10 11 12 } }
+  relations_manager=
+  {
+   relation=
+   {
+    owner=0
+    country=2
+    contact=yes
+    communications=yes
+    hostile=yes
+    wars={ 42 }
+   }
+   relation=
+   {
+    owner=0
+    country=3
+    contact=yes
+    communications=yes
+    hostile=yes
+    truce=7
+   }
+   wars={ 42 }
+  }
+  intel=
+  {
+   {
+    object=12
+    hostile=
+    {
+     {
+      owner=2
+      name={ key="DEEP_STARBASE" }
+      coordinate={ x=2 y=2 origin=12 }
+      military_power=200
+     }
+    }
+   }
+   {
+    object=10
+    hostile=
+    {
+     {
+      owner=3
+      name={ key="TRUCED_FLEET" }
+      coordinate={ x=9 y=9 origin=10 }
+      military_power=50
+     }
+    }
+   }
+  }
+ }
+ 2={ fleets_manager={ owned_fleets={ { fleet=90 } { fleet=91 } } } }
+ 3={ fleets_manager={ owned_fleets={ { fleet=92 } } } }
+}
+war=
+{
+ 42=
+ {
+  attackers={ { country=0 } }
+  defenders={ { country=2 } }
+ }
+}
+fleet=
+{
+ 1=
+ {
+  name={ key="PLAYER_FLEET" }
+  military_power=500
+  ships={ 1 }
+  ship_class=shipclass_military
+  movement_manager={ coordinate={ x=0 y=0 origin=10 } state=move_idle }
+  settings={ mobile=yes valid_for_combat=yes }
+ }
+ 90=
+ {
+  name={ key="FRONTIER_STARBASE" }
+  military_power=100
+  ships={ 90 }
+  ship_class=shipclass_starbase
+  movement_manager={ coordinate={ x=1 y=1 origin=11 } state=move_idle }
+  settings={ mobile=no station=yes valid_for_combat=yes }
+ }
+ 91=
+ {
+  name={ key="DEEP_STARBASE" }
+  military_power=200
+  ships={ 91 }
+  ship_class=shipclass_starbase
+  movement_manager={ coordinate={ x=2 y=2 origin=12 } state=move_idle }
+  settings={ mobile=no station=yes valid_for_combat=yes }
+ }
+ 92=
+ {
+  name={ key="TRUCED_FLEET" }
+  military_power=50
+  ships={ 92 }
+  ship_class=shipclass_military
+  movement_manager={ coordinate={ x=9 y=9 origin=10 } state=move_idle }
+  settings={ mobile=yes valid_for_combat=yes }
+ }
+}
+ships=
+{
+ 1={ ship_design_implementation={ design=1 upgrade=4294967295 growth_stage=0 } }
+ 90={ ship_design_implementation={ design=90 upgrade=4294967295 growth_stage=0 } }
+ 91={ ship_design_implementation={ design=91 upgrade=4294967295 growth_stage=0 } }
+ 92={ ship_design_implementation={ design=92 upgrade=4294967295 growth_stage=0 } }
+}
+fleet_template=
+{
+}
+galactic_object=
+{
+ 10=
+ {
+  name={ key="START" }
+  planet=10
+  discovery={ 0 }
+  hyperlane={ { to=11 length=10 } }
+ }
+ 11=
+ {
+  name={ key="FRONTIER" }
+  planet=11
+  discovery={ 0 }
+  hyperlane={ { to=10 length=10 } { to=12 length=10 } }
+  ftl_inhibitor_presence={ 90 }
+  inhibitor_owners={ 2 }
+ }
+ 12=
+ {
+  name={ key="BEHIND_INHIBITOR" }
+  planet=12
+  discovery={ 0 }
+  hyperlane={ { to=11 length=10 } }
+ }
+}
+planets=
+{
+ 10={ planet_class="pc_g_star" name={ key="START" } coordinate={ x=0 y=0 origin=10 } }
+ 11={ planet_class="pc_g_star" name={ key="FRONTIER" } coordinate={ x=0 y=0 origin=11 } }
+ 12={ planet_class="pc_g_star" name={ key="BEHIND_INHIBITOR" } coordinate={ x=0 y=0 origin=12 } }
+}
+starbase_mgr=
+{
+ starbases=
+ {
+ }
+}
+"""
+
+
 class ExtractFleetProfilesTests(unittest.TestCase):
+    def test_sensor_visible_enemy_military_fleet_becomes_attack_target(self) -> None:
+        country_block = """
+            sensor_range_fleets={ 99 }
+            relations_manager=
+            {
+              relation=
+              {
+                country=2
+                contact=yes
+                communications=yes
+                hostile=yes
+                wars={ 42 }
+              }
+            }
+        """
+        targets = hostile_fleet_targets(
+            owner=0,
+            country_block=country_block,
+            countries={
+                0: """
+                    fleets_manager=
+                    {
+                      owned_fleets={ { fleet=1 } }
+                    }
+                """,
+                2: """
+                    fleets_manager=
+                    {
+                      owned_fleets={ { fleet=99 } { fleet=100 } }
+                    }
+                """,
+            },
+            fleets={
+                1: """
+                    ships={ 1 }
+                    ship_class=shipclass_military
+                    movement_manager={ coordinate={ x=0 y=0 origin=10 } }
+                    settings={ mobile=yes valid_for_combat=yes }
+                """,
+                99: """
+                    name={ key="VISIBLE_ENEMY" }
+                    military_power=250
+                    ships={ 99 }
+                    ship_class=shipclass_military
+                    movement_manager={ coordinate={ x=1 y=2 origin=11 } }
+                    settings={ mobile=yes valid_for_combat=yes }
+                """,
+                100: """
+                    name={ key="HIDDEN_ENEMY" }
+                    military_power=500
+                    ships={ 100 }
+                    ship_class=shipclass_military
+                    movement_manager={ coordinate={ x=3 y=4 origin=12 } }
+                    settings={ mobile=yes valid_for_combat=yes }
+                """,
+            },
+            systems={
+                11: 'name={ key="VISIBLE_SYSTEM" }',
+                12: 'name={ key="HIDDEN_SYSTEM" }',
+            },
+            known_systems={10, 11, 12},
+            active_war_opponent_ids={2},
+            relations=country_relation_profiles(country_block),
+        )
+
+        self.assertEqual([target["fleet_id"] for target in targets], [99])
+        self.assertEqual(
+            targets[0]["target_authority"],
+            "player_sensor_range_fleet_exact_object",
+        )
+        self.assertTrue(targets[0]["current_sensor_contact"])
+        self.assertEqual(targets[0]["intel_military_power"], 250.0)
+
+    def test_closed_third_party_borders_block_attack_route(self) -> None:
+        country_block = """
+        relations_manager={
+          relation={
+            country=3
+            contact=yes
+            communications=yes
+            borders=yes
+          }
+          relation={
+            country=4
+            contact=yes
+            communications=yes
+            borders=yes
+            forced_open_borders= "2406.01.01"
+          }
+        }
+        """
+        relations = country_relation_profiles(country_block)
+
+        self.assertTrue(relations[3]["closed_borders"])
+        self.assertFalse(relations[3]["forced_open_borders"])
+        self.assertTrue(relations[4]["closed_borders"])
+        self.assertTrue(relations[4]["forced_open_borders"])
+
+        reachable, blocked = attack_target_routes(
+            owner=0,
+            country_block=country_block,
+            countries={
+                0: """
+                    fleets_manager=
+                    {
+                      owned_fleets={ { fleet=1 } }
+                    }
+                """,
+                2: """
+                    fleets_manager=
+                    {
+                      owned_fleets={ { fleet=91 } }
+                    }
+                """,
+                3: """
+                    fleets_manager=
+                    {
+                      owned_fleets={ { fleet=90 } }
+                    }
+                """,
+            },
+            fleets={
+                1: """
+                    ship_class=shipclass_military
+                    movement_manager=
+                    {
+                      coordinate={ x=0 y=0 origin=10 }
+                    }
+                """,
+                90: """
+                    ship_class=shipclass_starbase
+                    movement_manager=
+                    {
+                      coordinate={ x=0 y=0 origin=11 }
+                    }
+                """,
+                91: """
+                    ship_class=shipclass_starbase
+                    movement_manager=
+                    {
+                      coordinate={ x=0 y=0 origin=12 }
+                    }
+                """,
+            },
+            systems={
+                10: """
+                    name={ key="START" }
+                    hyperlane=
+                    {
+                      { to=11 length=10 }
+                    }
+                """,
+                11: (
+                    """
+                    name={ key="CLOSED_BORDER" }
+                    hyperlane=
+                    {
+                      { to=10 length=10 }
+                      { to=12 length=10 }
+                    }
+                    """
+                ),
+                12: (
+                    """
+                    name={ key="ENEMY_TARGET" }
+                    hyperlane=
+                    {
+                      { to=11 length=10 }
+                    }
+                    """
+                ),
+            },
+            known_systems={10, 11, 12},
+            relations=relations,
+            active_war_opponent_ids={2},
+            owned_fleets=[
+                {
+                    "fleet_id": 1,
+                    "attack_verified_family": True,
+                    "movement": {"current_system_id": 10},
+                }
+            ],
+            targets=[{"fleet_id": 91, "system_id": 12}],
+        )
+
+        self.assertEqual(reachable, [])
+        self.assertEqual([target["fleet_id"] for target in blocked], [91])
+        route = blocked[0]["route_evidence"][0]
+        self.assertEqual(route["status"], "blocked_by_border_access_or_restriction")
+        self.assertEqual(route["blocking_system_ids"], [11])
+        self.assertEqual(route["blocking_system_names"], ["CLOSED_BORDER"])
+        self.assertEqual(route["blocking_country_ids"], [3])
+
     def test_extracts_verified_destination_object_types(self) -> None:
         result = extract_fleet_profiles(FIXTURE)
         systems = {item["system_id"]: item for item in result["systems"]}
@@ -380,7 +738,12 @@ class ExtractFleetProfilesTests(unittest.TestCase):
             fleets[3]["movement"]["current_coordinate"],
             {"x": -44.2711, "y": 8.92758, "origin": 486},
         )
-        self.assertEqual(fleets[3]["availability"], "BUSY")
+        self.assertEqual(fleets[3]["availability"], "AVAILABLE")
+        self.assertEqual(fleets[3]["current_order_state"], "move_system")
+        self.assertTrue(fleets[3]["move_callable_now"])
+        self.assertTrue(fleets[3]["attack_callable_now"])
+        self.assertFalse(fleets[3]["reinforcement_callable_now"])
+        self.assertFalse(fleets[3]["maintenance_callable_now"])
         self.assertEqual(fleets[16777283]["availability"], "AVAILABLE")
         self.assertTrue(fleets[16777283]["needs_repair"])
         self.assertEqual(fleets[16777283]["upgradeable_ship_count"], 1)
@@ -446,6 +809,8 @@ class ExtractFleetProfilesTests(unittest.TestCase):
         )
         self.assertTrue(move["destination_system"]["adjacent_to_source"])
         self.assertTrue(move["destination_system"]["owned_by_owner"])
+        redirected = selected_move(result, 3, 375)
+        self.assertEqual(redirected["source_fleet"]["fleet_id"], 3)
 
     def test_selects_bounded_same_system_coordinate(self) -> None:
         result = extract_fleet_profiles(FIXTURE)
@@ -473,6 +838,85 @@ class ExtractFleetProfilesTests(unittest.TestCase):
             attack["target"],
             {"source_fleet_object": 16777283, "target_fleet_object": 99},
         )
+        redirected = selected_attack(result, 3, 99)
+        self.assertEqual(redirected["target"]["source_fleet_object"], 3)
+
+    def test_limits_war_targets_to_known_reachable_side_of_inhibitor(self) -> None:
+        result = extract_fleet_profiles(WAR_ROUTE_FIXTURE)
+
+        self.assertEqual(result["active_war_ids"], [42])
+        self.assertEqual(result["active_war_opponent_country_ids"], [2])
+        self.assertEqual(
+            result["attack_target_summary"],
+            {
+                "reachable": 1,
+                "blocked": 1,
+                "current_sensor_contacts": 1,
+                "known_active_war_starbases": 2,
+            },
+        )
+        self.assertEqual(
+            [target["fleet_id"] for target in result["hostile_targets"]],
+            [90],
+        )
+        frontier = result["hostile_targets"][0]
+        self.assertEqual(
+            frontier["target_authority"],
+            "active_war_known_starbase_save_mapping",
+        )
+        self.assertEqual(frontier["reachable_from_fleet_ids"], [1])
+        self.assertIsNone(frontier["military_power"])
+
+        self.assertEqual(
+            [target["fleet_id"] for target in result["blocked_hostile_targets"]],
+            [91],
+        )
+        blocked_route = result["blocked_hostile_targets"][0]["route_evidence"][0]
+        self.assertEqual(
+            blocked_route["status"],
+            "blocked_by_hostile_ftl_inhibitor",
+        )
+        self.assertEqual(blocked_route["blocking_system_ids"], [11])
+        self.assertEqual(selected_attack(result, 1, 90)["action"], "attack_fleet")
+        with self.assertRaisesRegex(ValueError, "not a uniquely resolved"):
+            selected_attack(result, 1, 91)
+
+    def test_military_callability_separates_orders_from_operational_state(
+        self,
+    ) -> None:
+        for movement_state in ("move_system", "move_wind_up"):
+            movement = {"state": movement_state}
+            availability, reasons = fleet_availability(
+                ship_class="shipclass_military",
+                ship_ids=[1],
+                mobile=True,
+                valid_for_combat=True,
+                movement=movement,
+                mia_origin=None,
+                combat_fleet_ids=[],
+            )
+            callability = military_fleet_callability(
+                availability=availability,
+                movement=movement,
+                has_current_order=True,
+            )
+            self.assertEqual(availability, "AVAILABLE")
+            self.assertEqual(reasons, [])
+            self.assertTrue(callability["move_callable_now"])
+            self.assertTrue(callability["attack_callable_now"])
+            self.assertFalse(callability["maintenance_callable_now"])
+
+        availability, reasons = fleet_availability(
+            ship_class="shipclass_military",
+            ship_ids=[1],
+            mobile=True,
+            valid_for_combat=True,
+            movement={"state": "move_unverified"},
+            mia_origin=None,
+            combat_fleet_ids=[],
+        )
+        self.assertEqual(availability, "BUSY")
+        self.assertEqual(reasons, ["movement_state:move_unverified"])
 
     def test_selects_verified_civilian_ship_actions(self) -> None:
         result = extract_fleet_profiles(FIXTURE)

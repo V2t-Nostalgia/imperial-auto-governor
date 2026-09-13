@@ -10,6 +10,8 @@ let conversationLastId = 0;
 const renderedConversationMessageIds = new Set();
 let activeConversationId = null;
 let loadedConversationId = null;
+let loadedConversationApplicationId = null;
+let conversationApplications = [];
 let campaignCatalog = null;
 let campaignEditorMode = "create";
 let campaignEditorConversationId = null;
@@ -354,6 +356,14 @@ function selectedApplicationProfile() {
   ) || null;
 }
 
+function activeApplicationProfile(applicationId) {
+  const profileId = applicationModelBindings[applicationId];
+  return applicationModelProfiles.find(
+    (item) => item.profile_id === profileId &&
+      item.application_id === applicationId,
+  ) || null;
+}
+
 function logicalModels(pool) {
   const values = [];
   for (const endpoint of pool?.endpoints || []) {
@@ -382,6 +392,22 @@ const endpointHealthLabels = {
   unknown: "尚未检测",
 };
 
+function endpointProbeSummary(result) {
+  const status = endpointHealthLabels[result?.status] ||
+    result?.status || "未知结果";
+  const details = [];
+  if (result?.probe_url) details.push(result.probe_url);
+  if (result?.http_status) details.push("HTTP " + result.http_status);
+  if (result?.model_found === true) details.push("已找到配置模型");
+  if (result?.model_found === false) {
+    details.push("未在 " + Number(result.discovered_model_count || 0) +
+      " 个返回模型中找到配置模型");
+  }
+  if (result?.detail) details.push(result.detail);
+  return (result?.endpoint_id || "端点") + "：" + status +
+    (details.length ? " · " + details.join(" · ") : "");
+}
+
 function renderModelEndpointHealth(endpoint = endpointEditorDraft) {
   const box = $("model-endpoint-health");
   const health = endpoint?.health || {status: "unknown"};
@@ -390,6 +416,7 @@ function renderModelEndpointHealth(endpoint = endpointEditorDraft) {
     endpointHealthLabels[health.status] || health.status;
   const details = [];
   if (health.detail) details.push(health.detail);
+  if (health.probe_url) details.push(health.probe_url);
   if (health.http_status) details.push("HTTP " + health.http_status);
   if (health.cooldown_until) details.push("冷却至 " + health.cooldown_until);
   if (health.last_checked_at) details.push("检测 " + health.last_checked_at);
@@ -726,7 +753,12 @@ async function saveModelPools(announce = true) {
   const result = await post("/api/model/pools", modelPoolsPayload());
   $("api-key").value = "";
   initializeModel(result);
-  if (announce) message("模型池与端点已经保存。");
+  if (announce) {
+    const migrations = result.profile_migrations || [];
+    message("模型池与端点已经保存。" + (migrations.length
+      ? " 同步迁移了 " + migrations.length + " 份 Application 模型引用。"
+      : ""));
+  }
   return result;
 }
 
@@ -802,6 +834,7 @@ function renderApplicationModelSelect(preferredModelId) {
 function renderApplicationModelRoute() {
   const route = $("application-model-route");
   const application = selectedApplication();
+  const inheritedFrom = $("application-model-route-mode").value;
   const pool = modelPoolById($("application-pool-select").value);
   const modelId = $("application-model-select").value;
   const endpoints = (pool?.endpoints || [])
@@ -816,34 +849,69 @@ function renderApplicationModelRoute() {
   }
   route.dataset.state = "ready";
   $("application-model-route-title").textContent =
-    application.display_name_zh + " → " + pool.display_name + " / " + modelId;
+    application.display_name_zh + " → " +
+    (inheritedFrom === "dedicated" ? "独立模型" : "沿用经济治理") +
+    " → " + pool.display_name + " / " + modelId;
   $("application-model-route-detail").textContent = endpoints.map(
     (item) => "P" + item.priority + " " + (item.display_name || item.endpoint_id),
   ).join(" → ") + "；按顺序执行保守换源。";
+}
+
+function writeApplicationModelRoute(profile, requestedMode = undefined) {
+  const routeMode = $("application-model-route-mode");
+  const canInherit = selectedApplicationId !== "economy_governance";
+  const configuredMode = profile.inherit_model_from_application_id || "dedicated";
+  const selectedMode = requestedMode === undefined
+    ? configuredMode
+    : requestedMode;
+  const inheritedFrom = canInherit && selectedMode !== "dedicated"
+    ? selectedMode
+    : null;
+  routeMode.value = inheritedFrom || "dedicated";
+  routeMode.disabled = !canInherit;
+
+  const routeProfile = inheritedFrom
+    ? activeApplicationProfile(inheritedFrom)
+    : profile;
+  const effectiveProfile = routeProfile || profile;
+  renderApplicationPoolSelect(effectiveProfile.pool_id);
+  renderApplicationModelSelect(effectiveProfile.model_id);
+
+  const request = effectiveProfile.request_options || {};
+  $("thinking-enabled").checked = request.thinking?.type === "enabled";
+  $("reasoning-effort").value = request.reasoning_effort || "high";
+  $("temperature").value = request.temperature ?? 0.15;
+  $("request-body-overrides").value = JSON.stringify(
+    request.request_body_overrides || {},
+    null,
+    2,
+  );
+  const inherited = Boolean(inheritedFrom);
+  for (const id of [
+    "application-pool-select",
+    "application-model-select",
+    "thinking-enabled",
+    "reasoning-effort",
+    "temperature",
+    "request-body-overrides",
+  ]) {
+    $(id).disabled = inherited;
+  }
+  renderApplicationModelRoute();
 }
 
 function writeApplicationProfileForm(profile) {
   if (!profile) return;
   applicationProfileDraft = Boolean(profile._draft);
   $("application-profile-name").value = profile.display_name || "";
-  renderApplicationPoolSelect(profile.pool_id);
-  renderApplicationModelSelect(profile.model_id);
-  const request = profile.request_options || {};
+  writeApplicationModelRoute(profile);
   const options = profile.application_options || {};
-  $("thinking-enabled").checked = request.thinking?.type === "enabled";
-  $("reasoning-effort").value = request.reasoning_effort || "high";
-  $("temperature").value = request.temperature ?? 0.15;
   $("context-compression-enabled").checked =
     options.context_compression_enabled !== false;
   $("context-compression-trigger").value =
     options.context_compression_trigger_percent ?? 80;
   $("context-compression-target").value =
     options.context_compression_target_percent ?? 35;
-  $("request-body-overrides").value = JSON.stringify(
-    request.request_body_overrides || {},
-    null,
-    2,
-  );
   $("web-research-enabled").checked = Boolean(options.web_research_enabled);
   $("searxng-url").value = options.searxng_url || "http://127.0.0.1:8080";
   $("crawl4ai-url").value = options.crawl4ai_url || "http://127.0.0.1:11235";
@@ -869,6 +937,29 @@ function renderApplicationConfiguration() {
   writeApplicationProfileForm(selectedApplicationProfile());
 }
 
+function renderFastAdvisorConfiguration(model = {}) {
+  const select = $("fast-advisor-profile");
+  select.replaceChildren();
+  const disabled = document.createElement("option");
+  disabled.value = "";
+  disabled.textContent = "不配置，异常直接交给主模型";
+  select.append(disabled);
+  for (const profile of applicationModelProfiles.filter((item) => !item._draft)) {
+    const application = registeredApplications.find(
+      (item) => item.application_id === profile.application_id,
+    );
+    const option = document.createElement("option");
+    option.value = profile.profile_id;
+    option.textContent = (application?.display_name || profile.application_id) +
+      " · " + profile.display_name;
+    select.append(option);
+  }
+  select.value = model.fast_advisor_profile_id || "";
+  $("fast-advisor-timeout").value = Number(
+    model.fast_advisor_timeout_seconds || 60,
+  );
+}
+
 function applicationProfilePayload() {
   const profile = selectedApplicationProfile();
   if (!profile) throw new Error("尚未选择 Application 模型配置。");
@@ -884,6 +975,11 @@ function applicationProfilePayload() {
     application_id: selectedApplicationId,
     pool_id: poolId,
     model_id: modelId,
+    inherit_model_from_application_id: (
+      $("application-model-route-mode").value === "dedicated"
+        ? null
+        : $("application-model-route-mode").value
+    ),
     thinking_enabled: $("thinking-enabled").checked,
     reasoning_effort: $("reasoning-effort").value,
     temperature: Number($("temperature").value),
@@ -938,6 +1034,7 @@ function initializeModel(model) {
   }
   templateSelect.value = "custom";
   renderApplicationConfiguration();
+  renderFastAdvisorConfiguration(model);
   renderModelPoolSidebar();
   if (selectedCatalogPool()) showModelPoolOverview();
 }
@@ -1042,6 +1139,85 @@ function updateExecutionModeVisibility() {
   $("fixed-click-guard-enabled").disabled = proxyMode;
 }
 
+function sessionProxyLockMethodLabel(method) {
+  return {
+    automatic_direct_reliable: "自动锁定（直连可靠帧）",
+    automatic_direct_owned_bidirectional: "自动锁定（进程归属双向流）",
+    automatic_direct_owned_reliable: "自动锁定（进程归属可靠流）",
+    automatic_unique_reliable: "自动锁定（唯一可靠流）",
+    manual_player_confirmed: "玩家确认锁定",
+  }[method] || "锁定方式未知";
+}
+
+function renderSessionProxyFlowCandidates(
+  proxy,
+  flowCandidates,
+) {
+  const panel = $("session-proxy-flow-candidates");
+  const list = $("session-proxy-flow-candidate-list");
+  list.replaceChildren();
+  panel.hidden = proxy.running !== true || Boolean(proxy.flow) ||
+    flowCandidates.length === 0;
+  if (panel.hidden) return;
+
+  const candidates = [...flowCandidates].sort((left, right) => {
+    const leftRank = Number(left.bidirectional === true) * 2 +
+      Number(left.reliable_observed === true);
+    const rightRank = Number(right.bidirectional === true) * 2 +
+      Number(right.reliable_observed === true);
+    return rightRank - leftRank;
+  });
+  for (const candidate of candidates) {
+    const row = document.createElement("article");
+    row.className = "proxy-flow-candidate";
+    const identity = document.createElement("div");
+    const tuple = document.createElement("strong");
+    tuple.textContent = (candidate.local_ip || "--") + ":" +
+      (candidate.local_port || "--") + " ↔ " +
+      (candidate.host_ip || "--") + ":" + (candidate.host_port || "--");
+    const detail = document.createElement("small");
+    const reliableCount = Number(candidate.reliable_outbound_packets || 0) +
+      Number(candidate.reliable_inbound_packets || 0);
+    detail.textContent = (candidate.route || "未知路径") +
+      " · 帧 出/入 " + Number(candidate.outbound_packets || 0) + "/" +
+      Number(candidate.inbound_packets || 0) +
+      " · 可靠帧 " + reliableCount +
+      " · 最近 " + Number(candidate.last_seen_age_seconds || 0).toFixed(1) + " 秒";
+    identity.append(tuple, detail);
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = candidate.reliable_observed === true
+      ? "确认并锁定"
+      : "确认并强制锁定";
+    button.disabled = proxy.manual_flow_lock_pending === true;
+    button.title = "玩家可直接锁定任意已观察候选；方向、可靠帧和时间不构成限制";
+    button.addEventListener("click", async () => {
+      const markerWarning = candidate.reliable_observed === true
+        ? "该候选已观察到 Stellaris 可靠帧。"
+        : "该候选尚未观察到可靠帧；这将绕过自动可靠帧门槛。";
+      if (!window.confirm(
+        "确认把以下四元组锁定为本局游戏流量？\n\n" +
+        tuple.textContent + "\n" + markerWarning +
+        "\n\n选错流可能导致命令失败或多人同步异常。",
+      )) return;
+      try {
+        await post("/api/session-proxy/flow/lock", {
+          candidate_id: candidate.candidate_id,
+          player_confirmed: true,
+        });
+        message("人工锁定请求已发送；代理将在下一帧切换到该流。 ");
+        await refresh();
+      } catch (error) {
+        message(error.message, true);
+        await refresh();
+      }
+    });
+    row.append(identity, button);
+    list.append(row);
+  }
+}
+
 function renderExecutionSettings(settings, proxy = {}, running = false) {
   if (!executionSettingsInitialized) {
     $("execution-mode").value = settings.execution_mode || "session_proxy";
@@ -1097,6 +1273,18 @@ function renderExecutionSettings(settings, proxy = {}, running = false) {
       settings.experimental_starbase_tools_enabled === true;
     $("experimental-starbase-replacement-enabled").checked =
       settings.experimental_starbase_replacement_enabled === true;
+    $("experimental-invasion-tools-enabled").checked =
+      settings.experimental_invasion_tools_enabled === true;
+    $("maximum-army-recruitment-batch").value =
+      settings.maximum_army_recruitment_batch ?? 5;
+    $("auto-authorize-recruited-transport-fleets").checked =
+      settings.auto_authorize_recruited_transport_fleets === true;
+    $("campaign-ground-force-ratio").value =
+      settings.campaign_ground_force_ratio ?? 1.25;
+    $("campaign-space-force-ratio").value =
+      settings.campaign_space_force_ratio ?? 1.20;
+    $("campaign-bombardment-threshold").value =
+      settings.campaign_bombardment_threshold ?? 50;
     $("experimental-research-tools-enabled").checked =
       settings.experimental_research_tools_enabled === true;
     $("experimental-research-reselection-enabled").checked =
@@ -1122,19 +1310,22 @@ function renderExecutionSettings(settings, proxy = {}, running = false) {
     candidate.bidirectional === true ||
     (Number(candidate.outbound_packets || 0) > 0 &&
       Number(candidate.inbound_packets || 0) > 0));
-  const oneWayReliableCandidates = flowCandidates.filter((candidate) =>
+  const reliableCandidates = flowCandidates.filter((candidate) =>
     Number(candidate.reliable_outbound_packets || 0) +
-      Number(candidate.reliable_inbound_packets || 0) > 0 &&
-    !(candidate.bidirectional === true ||
-      (Number(candidate.outbound_packets || 0) > 0 &&
-        Number(candidate.inbound_packets || 0) > 0)));
+      Number(candidate.reliable_inbound_packets || 0) > 0);
+  const flowLockResult = proxy.last_flow_lock_request || {};
+  const flowLockRejected = flowLockResult.outcome === "rejected";
   $("session-proxy-state").textContent = !proxyRunning
     ? "未启动"
     : (proxy.flow
       ? "可靠流已锁定"
-      : (flowCandidates.length
-        ? "已启动 · 正在确认双向流"
-        : "已启动 · 等待游戏流量"));
+      : (proxy.manual_flow_lock_pending === true
+        ? "已启动 · 正在执行人工锁定"
+        : (flowLockRejected
+          ? "已启动 · 人工锁定被拒绝"
+          : (flowCandidates.length
+        ? "已启动 · 等待玩家确认候选流"
+        : "已启动 · 等待游戏流量"))));
   $("session-proxy-state").className =
     "status-tag " + (!proxyRunning ? "" : (proxy.flow ? "good" : "warn"));
   $("session-proxy-detail").textContent = proxyRunning
@@ -1143,14 +1334,21 @@ function renderExecutionSettings(settings, proxy = {}, running = false) {
         " · " + (flow.local_ip || "--") + ":" + (flow.local_port || "--") +
         " → " + (flow.host_ip || "--") + ":" + (flow.host_port || "--") +
         " · " + (flow.route || "未知路径") +
+        " · " + sessionProxyLockMethodLabel(proxy.flow_lock_method) +
         " · actor " + (proxy.source_actor || "等待自然命令") +
         " · 已注入 " + Number(proxy.insertion_count || 0) + " 条"
       : "PID " + (proxy.pid || "--") +
         " · 双向候选 " + bidirectionalCandidates.length +
-        " · 单向可靠 " + oneWayReliableCandidates.length +
+        " · 含可靠帧候选 " + reliableCandidates.length +
         " · 游戏/Steam UDP 端口 " +
-        Number((proxy.stellaris_udp_ports || []).length || 0))
+        Number((proxy.stellaris_udp_ports || []).length || 0) +
+        (flowLockRejected ? " · 上次人工锁定失败：" +
+          (flowLockResult.error || "候选状态已变化") : ""))
     : "尚未建立代理进程。";
+  renderSessionProxyFlowCandidates(
+    proxy,
+    flowCandidates,
+  );
   $("start-session-proxy").disabled =
     running || proxyRunning || protocolSuiteActive;
   $("stop-session-proxy").disabled =
@@ -1162,6 +1360,10 @@ function renderFleetState(fleetState = {}, running = false) {
   const list = $("fleet-permission-list");
   list.replaceChildren();
   const fleets = Array.isArray(fleetState.fleets) ? fleetState.fleets : [];
+  const fullDelegation = fleetState.full_delegation === true;
+  const fullDelegationInput = $("fleet-full-delegation");
+  fullDelegationInput.checked = fullDelegation;
+  fullDelegationInput.disabled = running;
   $("fleet-summary-state").textContent = fleetState.available
     ? fleets.length + " 支 · 总军力 " + Math.round(Number(fleetState.total_military_power || 0))
     : "等待存档";
@@ -1185,10 +1387,27 @@ function renderFleetState(fleetState = {}, running = false) {
     const detail = document.createElement("small");
     const availability = fleet.civilian_role
       ? fleet.civilian_availability
-      : fleet.availability;
+      : (fleet.ship_class === "shipclass_transport"
+        ? fleet.landing_availability
+        : fleet.availability);
+    const callableLabels = fleet.civilian_role
+      ? (fleet.civilian_callable_now === true ? ["民用船命令"] : [])
+      : [
+        ["移动", fleet.move_callable_now],
+        ["攻击", fleet.attack_callable_now],
+        ["轰炸", fleet.attack_callable_now && fleet.bombardment_verified_family],
+        ["登陆", fleet.landing_callable_now],
+        ["增援", fleet.reinforcement_callable_now],
+        ["维修/升级", fleet.maintenance_callable_now],
+      ].filter((item) => item[1] === true).map((item) => item[0]);
+    const orderState = fleet.current_order_state &&
+      fleet.current_order_state !== "none"
+      ? " · 当前命令 " + fleet.current_order_state
+      : "";
     detail.textContent = "ID " + fleet.fleet_id + " · 军力 " +
       Math.round(Number(fleet.military_power || 0)) + " · " +
-      (availability || "UNKNOWN");
+      (availability || "UNKNOWN") + orderState +
+      " · 可调用 " + (callableLabels.join("/") || "无");
     identity.append(title, detail);
     const controls = document.createElement("div");
     controls.className = "fleet-permission-controls";
@@ -1200,6 +1419,8 @@ function renderFleetState(fleetState = {}, running = false) {
       ["allow_upgrade", "舰队升级"],
       ["allow_automation", "自动化"],
       ["allow_build_starbase", "工程船建站"],
+      ["allow_bombardment", "轨道轰炸"],
+      ["allow_land_armies", "陆军登陆"],
     ]) {
       const label = document.createElement("label");
       label.className = "check-line";
@@ -1215,13 +1436,18 @@ function renderFleetState(fleetState = {}, running = false) {
         allow_upgrade: fleet.upgrade_verified_family === true,
         allow_automation: fleet.automation_verified_family === true,
         allow_build_starbase: fleet.build_starbase_verified_family === true,
+        allow_bombardment: fleet.bombardment_verified_family === true,
+        allow_land_armies: fleet.landing_verified_family === true,
       }[field] === true;
       const hasFleetTemplate = fleet.fleet_template_id !== null &&
         fleet.fleet_template_id !== undefined;
-      input.disabled = running || !supported;
+      input.disabled = running || fullDelegation || !supported;
+      if (fullDelegation) {
+        input.title = "当前由舰队全权托管统一授权";
+      }
       if (field === "allow_reinforce" && !hasFleetTemplate) {
         input.title = "最新存档中没有找到该舰队的 Fleet Manager 模板";
-      } else if (!supported) {
+      } else if (!supported && !fullDelegation) {
         input.title = "该船队不属于此操作当前已验证的命令族";
       }
       input.addEventListener("change", async () => {
@@ -1232,6 +1458,8 @@ function renderFleetState(fleetState = {}, running = false) {
         const upgradeInput = controls.querySelector('[data-permission="allow_upgrade"]');
         const automationInput = controls.querySelector('[data-permission="allow_automation"]');
         const buildStarbaseInput = controls.querySelector('[data-permission="allow_build_starbase"]');
+        const bombardmentInput = controls.querySelector('[data-permission="allow_bombardment"]');
+        const landingInput = controls.querySelector('[data-permission="allow_land_armies"]');
         try {
           await post("/api/fleet-permission", {
             fleet_id: fleet.fleet_id,
@@ -1242,6 +1470,8 @@ function renderFleetState(fleetState = {}, running = false) {
             allow_upgrade: upgradeInput.checked,
             allow_automation: automationInput.checked,
             allow_build_starbase: buildStarbaseInput.checked,
+            allow_bombardment: bombardmentInput.checked,
+            allow_land_armies: landingInput.checked,
           });
           message("舰队 " + fleet.fleet_id + " 的调用权限已保存");
           await refresh();
@@ -1258,6 +1488,19 @@ function renderFleetState(fleetState = {}, running = false) {
     list.append(row);
   }
 }
+
+$("fleet-full-delegation").addEventListener("change", async (event) => {
+  const input = event.currentTarget;
+  input.disabled = true;
+  try {
+    await post("/api/fleet-full-delegation", {enabled: input.checked});
+    message(input.checked ? "舰队全权托管已开启" : "舰队全权托管已关闭");
+    await refresh();
+  } catch (error) {
+    message(error.message, true);
+    await refresh();
+  }
+});
 
 function activeCampaignItem(catalog = campaignCatalog) {
   return (catalog?.conversations || []).find(
@@ -1290,6 +1533,7 @@ async function switchCampaignConversation(conversationId) {
   });
   renderCampaignCatalog(value, false);
   loadedConversationId = null;
+  loadedConversationApplicationId = null;
   await Promise.all([loadConversation(true), refresh()]);
   message("已切换战役会话");
 }
@@ -1420,6 +1664,7 @@ function renderCampaignCatalog(catalog, running = currentJobRunning) {
         });
         renderCampaignCatalog(value, false);
         loadedConversationId = null;
+        loadedConversationApplicationId = null;
         await Promise.all([loadConversation(true), refresh()]);
         message(item.archived ? "战役会话已恢复" : "战役会话已归档");
       } catch (error) {
@@ -1649,8 +1894,7 @@ function renderConversationApplicationSelector(model, running) {
     select.appendChild(option);
   }
   const preferred = routes.find(
-    (route) => route.application_id === previous &&
-      route.tools_enabled && route.conversation_supported,
+    (route) => route.application_id === previous,
   );
   const fallback = routes.find(
     (route) => route.application_id === "economy_governance",
@@ -1666,6 +1910,18 @@ function renderConversationApplicationSelector(model, running) {
     ? "向" + selected.display_name + "下达要求或询问本领域状态。Enter 发送，Shift+Enter 换行。"
     : "告诉灰风新的要求。Enter 发送，Shift+Enter 换行。";
   return selected;
+}
+
+function updateConversationActionAvailability(selected) {
+  const available = Boolean(
+    selected?.tools_enabled && selected?.conversation_supported,
+  );
+  const executionAllowed = Boolean(
+    latestStatus?.campaign_binding?.execution_allowed,
+  );
+  $("send-message").disabled = currentJobRunning || !available;
+  $("review-button").disabled =
+    currentJobRunning || !executionAllowed || !available;
 }
 
 function renderStatus(status) {
@@ -1792,12 +2048,8 @@ function renderStatus(status) {
   for (const id of ["plan-button", "send-message", "review-button", "save-autonomy"]) {
     $(id).disabled = running;
   }
-  if (!selectedConversationRoute?.conversation_supported) {
-    $("send-message").disabled = true;
-    $("review-button").disabled = true;
-  }
+  updateConversationActionAvailability(selectedConversationRoute);
   $("plan-button").disabled = running || !executionAllowed;
-  $("review-button").disabled = running || !executionAllowed;
   $("execute-button").disabled = running || !executionAllowed ||
     !run.manifest || manifest.action?.type === "noop";
   const emergencyStopRequested = Boolean(status.emergency_stop_requested);
@@ -1889,8 +2141,110 @@ function conversationRoleLabel(item) {
   return "系统";
 }
 
+function applicationReadMarkerKey(applicationId) {
+  return [
+    "iag.application.read",
+    activeConversationId || loadedConversationId || "campaign",
+    applicationId,
+  ].join(":");
+}
+
+function applicationReadMarker(applicationId) {
+  return Number(localStorage.getItem(applicationReadMarkerKey(applicationId)) || 0);
+}
+
+function markApplicationRead(applicationId, messageId) {
+  const value = Math.max(applicationReadMarker(applicationId), Number(messageId) || 0);
+  localStorage.setItem(applicationReadMarkerKey(applicationId), String(value));
+}
+
+function applicationActivityTime(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  const today = new Date();
+  if (date.toDateString() === today.toDateString()) {
+    return date.toLocaleTimeString("zh-CN", {hour: "2-digit", minute: "2-digit"});
+  }
+  return date.toLocaleDateString("zh-CN", {month: "2-digit", day: "2-digit"});
+}
+
+function selectConversationApplication(applicationId) {
+  if (!applicationId || applicationId === selectedConversationApplicationId) return;
+  selectedConversationApplicationId = applicationId;
+  $("conversation-application").value = applicationId;
+  conversationLastId = 0;
+  loadedConversationApplicationId = null;
+  renderedConversationMessageIds.clear();
+  $("conversation-log").replaceChildren();
+  renderApplicationContacts(conversationApplications);
+  loadConversation(true).catch((error) => message(error.message, true));
+}
+
+function renderApplicationContacts(applications) {
+  conversationApplications = Array.isArray(applications) ? applications : [];
+  const list = $("application-contact-list");
+  list.replaceChildren();
+  for (const application of conversationApplications) {
+    const applicationId = application.application_id;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "application-contact" +
+      (applicationId === selectedConversationApplicationId ? " selected" : "") +
+      (application.running ? " running" : "");
+    button.dataset.applicationId = applicationId;
+
+    const presence = document.createElement("span");
+    presence.className = "application-contact-presence";
+    const copy = document.createElement("span");
+    copy.className = "application-contact-copy";
+    const name = document.createElement("strong");
+    name.className = "application-contact-name";
+    name.textContent = application.display_name || applicationId;
+    const preview = document.createElement("span");
+    preview.className = "application-contact-preview";
+    preview.textContent = application.last_message_preview || "尚无消息";
+    copy.append(name, preview);
+
+    const meta = document.createElement("span");
+    meta.className = "application-contact-meta";
+    const time = document.createElement("time");
+    time.textContent = applicationActivityTime(application.last_message_at);
+    meta.appendChild(time);
+    const unread = Number(application.last_message_id || 0) >
+      applicationReadMarker(applicationId);
+    if (unread && applicationId !== selectedConversationApplicationId) {
+      const badge = document.createElement("span");
+      badge.className = "application-unread";
+      badge.textContent = "新";
+      meta.appendChild(badge);
+    }
+    button.append(presence, copy, meta);
+    button.addEventListener("click", () => selectConversationApplication(applicationId));
+    list.appendChild(button);
+  }
+
+  const selected = conversationApplications.find(
+    (item) => item.application_id === selectedConversationApplicationId,
+  );
+  updateConversationActionAvailability(selected);
+  if (selected) {
+    $("application-thread-title").textContent = selected.display_name;
+    $("application-thread-state").textContent = selected.running
+      ? "正在处理"
+      : (selected.tools_enabled ? "私有上下文" : "功能未启用");
+    $("application-thread-state").className =
+      "status-tag " + (selected.running ? "warn" : "good");
+    $("conversation-count").textContent = selected.message_count ?? 0;
+  }
+}
+
 function appendConversationMessage(item) {
-  const messageKey = String(loadedConversationId || "unknown") + ":" + item.id;
+  const messageKey = [
+    loadedConversationId || "unknown",
+    loadedConversationApplicationId || selectedConversationApplicationId,
+    item.id,
+  ].join(":");
   if (renderedConversationMessageIds.has(messageKey)) return false;
   renderedConversationMessageIds.add(messageKey);
   const log = $("conversation-log");
@@ -1919,9 +2273,11 @@ function appendConversationMessage(item) {
 }
 
 async function loadConversation(reset = false) {
+  const requestedApplicationId = selectedConversationApplicationId;
   if (
     reset ||
-    (activeConversationId && loadedConversationId !== activeConversationId)
+    (activeConversationId && loadedConversationId !== activeConversationId) ||
+    loadedConversationApplicationId !== requestedApplicationId
   ) {
     conversationLastId = 0;
     renderedConversationMessageIds.clear();
@@ -1929,20 +2285,28 @@ async function loadConversation(reset = false) {
   }
   const requestedAfterId = conversationLastId;
   const value = await api(
-    "/api/conversation?after_id=" + requestedAfterId + "&limit=500",
+    "/api/conversation?after_id=" + requestedAfterId + "&limit=500" +
+    "&application_id=" + encodeURIComponent(requestedApplicationId),
   );
+  if (requestedApplicationId !== selectedConversationApplicationId) return;
   if (
     loadedConversationId !== null &&
-    value.conversation_id !== loadedConversationId
+    (value.conversation_id !== loadedConversationId ||
+      value.application_id !== loadedConversationApplicationId)
   ) {
     loadedConversationId = value.conversation_id;
+    loadedConversationApplicationId = value.application_id;
     conversationLastId = 0;
     renderedConversationMessageIds.clear();
     $("conversation-log").replaceChildren();
     if (requestedAfterId !== 0) return loadConversation(false);
   } else {
     loadedConversationId = value.conversation_id;
+    loadedConversationApplicationId = value.application_id;
   }
+  renderApplicationContacts(value.applications || []);
+  $("application-thread-title").textContent =
+    value.application_display_name || requestedApplicationId;
   const entries = value.messages || [];
   if (entries.length) $("conversation-empty")?.remove();
   if (!entries.length && conversationLastId === 0 && !$("conversation-empty")) {
@@ -1956,6 +2320,14 @@ async function loadConversation(reset = false) {
     appendConversationMessage(item);
     conversationLastId = Math.max(conversationLastId, Number(item.id) || 0);
   }
+  const selected = (value.applications || []).find(
+    (item) => item.application_id === requestedApplicationId,
+  );
+  markApplicationRead(
+    requestedApplicationId,
+    Math.max(conversationLastId, Number(selected?.last_message_id || 0)),
+  );
+  renderApplicationContacts(value.applications || []);
 }
 
 function protocolScenarioById(scenarioId, payload = protocolSuitePayload) {
@@ -2259,6 +2631,7 @@ $("campaign-editor").addEventListener("submit", async (event) => {
         bind_current: $("campaign-bind-current").checked,
       });
       loadedConversationId = null;
+      loadedConversationApplicationId = null;
     }
     closeCampaignEditor();
     renderCampaignCatalog(value, false);
@@ -2304,7 +2677,12 @@ $("show-archived-campaigns").addEventListener("change", () => {
 });
 
 $("conversation-application").addEventListener("change", (event) => {
-  selectedConversationApplicationId = event.currentTarget.value;
+  const nextApplicationId = event.currentTarget.value;
+  selectedConversationApplicationId = nextApplicationId;
+  loadedConversationApplicationId = null;
+  conversationLastId = 0;
+  renderedConversationMessageIds.clear();
+  $("conversation-log").replaceChildren();
   const route = (latestStatus?.model?.application_agents || []).find(
     (item) => item.application_id === selectedConversationApplicationId,
   );
@@ -2313,6 +2691,8 @@ $("conversation-application").addEventListener("change", (event) => {
       "向" + route.display_name + "下达要求或询问本领域状态。" +
       "Enter 发送，Shift+Enter 换行。";
   }
+  renderApplicationContacts(conversationApplications);
+  loadConversation(true).catch((error) => message(error.message, true));
 });
 
 $("send-message").addEventListener("click", async () => {
@@ -2719,7 +3099,11 @@ $("probe-selected-pool").addEventListener("click", async () => {
     await saveModelPools(false);
     const result = await post("/api/model/probe", {pool_id: poolId});
     applyModelPoolHealth(poolId, result.model_pool_health);
-    message("模型池端点检测完成。");
+    message((result.results || []).map(endpointProbeSummary).join("；") ||
+      "没有启用的端点可供检测。", !(result.results || []).some(
+        (item) => ["available", "reachable_unconfirmed", "probe_unsupported"]
+          .includes(item.status),
+      ));
   } catch (error) {
     message(error.message, true);
   }
@@ -2737,7 +3121,11 @@ $("save-and-probe-model-endpoint").addEventListener("click", async () => {
       endpoint_id: endpointId,
     });
     applyModelPoolHealth(poolId, result.model_pool_health);
-    message("端点已经保存并完成检测。");
+    openModelEndpointEditor(endpointId);
+    const probeResult = (result.results || [])[0];
+    message(endpointProbeSummary(probeResult), ![
+      "available", "reachable_unconfirmed", "probe_unsupported",
+    ].includes(probeResult?.status));
   } catch (error) {
     message(error.message, true);
   }
@@ -2759,6 +3147,20 @@ $("application-pool-select").addEventListener("change", () => {
   renderApplicationModelSelect(null);
 });
 
+$("application-model-route-mode").addEventListener("change", () => {
+  const profile = selectedApplicationProfile();
+  if (!profile) return;
+  let sourceApplicationId = $("application-model-route-mode").value;
+  const routeProfile = sourceApplicationId === "dedicated"
+    ? profile
+    : activeApplicationProfile(sourceApplicationId);
+  if (!routeProfile) {
+    message("经济治理尚未绑定可沿用的模型配置。", true);
+    sourceApplicationId = "dedicated";
+  }
+  writeApplicationModelRoute(profile, sourceApplicationId);
+});
+
 $("application-model-select").addEventListener("change", () => {
   renderApplicationModelRoute();
 });
@@ -2778,6 +3180,9 @@ $("new-application-profile").addEventListener("click", () => {
     application_id: selectedApplicationId,
     pool_id: pool?.pool_id || "",
     model_id: modelId,
+    inherit_model_from_application_id: (
+      current?.inherit_model_from_application_id || null
+    ),
     request_options: cloneValue(current?.request_options || {temperature: 0.15}),
     application_options: cloneValue(current?.application_options || {}),
     _draft: true,
@@ -2804,6 +3209,24 @@ $("save-application-profile").addEventListener("click", async () => {
     initialized = true;
     message("Application 模型配置已经保存并启用。");
     await refresh();
+  } catch (error) {
+    message(error.message, true);
+  }
+});
+
+$("save-fast-advisor").addEventListener("click", async () => {
+  try {
+    const result = await post("/api/model/fast-advisor", {
+      profile_id: $("fast-advisor-profile").value,
+      timeout_seconds: Number($("fast-advisor-timeout").value),
+    });
+    initializeModel(result);
+    initialized = true;
+    message(
+      $("fast-advisor-profile").value
+        ? "快速参谋模型配置已保存。"
+        : "快速参谋已关闭，局部异常将交给主模型。",
+    );
   } catch (error) {
     message(error.message, true);
   }
@@ -2887,6 +3310,22 @@ $("save-execution-settings").addEventListener("click", async () => {
         $("experimental-starbase-tools-enabled").checked,
       experimental_starbase_replacement_enabled:
         $("experimental-starbase-replacement-enabled").checked,
+      experimental_invasion_tools_enabled:
+        $("experimental-invasion-tools-enabled").checked,
+      maximum_army_recruitment_batch: Number(
+        $("maximum-army-recruitment-batch").value || 5,
+      ),
+      auto_authorize_recruited_transport_fleets:
+        $("auto-authorize-recruited-transport-fleets").checked,
+      campaign_ground_force_ratio: Number(
+        $("campaign-ground-force-ratio").value || 1.25,
+      ),
+      campaign_space_force_ratio: Number(
+        $("campaign-space-force-ratio").value || 1.20,
+      ),
+      campaign_bombardment_threshold: Number(
+        $("campaign-bombardment-threshold").value || 50,
+      ),
       experimental_research_tools_enabled:
         $("experimental-research-tools-enabled").checked,
       experimental_research_reselection_enabled:

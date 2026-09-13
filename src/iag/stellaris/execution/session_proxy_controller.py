@@ -17,6 +17,8 @@ import psutil
 
 from iag.stellaris.execution.host_executor_protocol import local_ipv4_for_remote
 
+_SESSION_PROXY_ACTION_LOCK = threading.RLock()
+
 
 class SessionProxyError(RuntimeError):
     """Raised when the experimental proxy cannot be used safely."""
@@ -73,6 +75,7 @@ class SessionProxyController:
         self.root = runtime_root / "state" / "session_proxy"
         self.ready_path = self.root / "ready.json"
         self.status_path = self.root / "status.json"
+        self.flow_lock_path = self.root / "flow_lock.json"
         self.arm_path = self.root / "arm.json"
         self.log_path = self.root / "session_proxy.jsonl"
         self.stdout_path = self.root / "stdout.log"
@@ -82,9 +85,7 @@ class SessionProxyController:
 
     def _configured_ips(self) -> tuple[str, str]:
         host_ip = str(
-            self.config.get("session_proxy_host_ip")
-            or self.config.get("host_ip")
-            or ""
+            self.config.get("session_proxy_host_ip") or self.config.get("host_ip") or ""
         ).strip()
         if not host_ip:
             raise SessionProxyError(
@@ -102,25 +103,26 @@ class SessionProxyController:
         running = bool(pid and ready and psutil.pid_exists(pid))
         if not running and self.ready_path.exists():
             self.ready_path.unlink(missing_ok=True)
+        pending_flow_lock = _read_json(self.flow_lock_path) or {}
         return {
             "schema": "iag.session_proxy_status.v1",
             "running": running,
             "pid": pid or None,
             "ready": bool(running and ready),
             "process_elevated": windows_process_is_elevated(),
+            "manual_flow_lock_pending": bool(
+                running
+                and pending_flow_lock.get("session_id") == telemetry.get("session_id")
+            ),
             **telemetry,
         }
 
     def start(self) -> dict[str, Any]:
         with self._lock:
             if os.name != "nt":
-                raise SessionProxyError(
-                    "当前会话代理只实现了 Windows WinDivert 后端。"
-                )
+                raise SessionProxyError("当前会话代理只实现了 Windows WinDivert 后端。")
             if not bool(self.config.get("session_proxy_acknowledged", False)):
-                raise SessionProxyError(
-                    "请先在前端确认代理模式仍属于实验功能。"
-                )
+                raise SessionProxyError("请先在前端确认代理模式仍属于实验功能。")
             if not windows_process_is_elevated():
                 raise SessionProxyError(
                     "会话代理需要管理员权限打开 WinDivert。请关闭 Windows "
@@ -131,7 +133,12 @@ class SessionProxyController:
                 return current
             local_ip, host_ip = self._configured_ips()
             self.root.mkdir(parents=True, exist_ok=True)
-            for path in (self.ready_path, self.status_path, self.arm_path):
+            for path in (
+                self.ready_path,
+                self.status_path,
+                self.flow_lock_path,
+                self.arm_path,
+            ):
                 path.unlink(missing_ok=True)
             worker_arguments = [
                 "--local-ip",
@@ -144,6 +151,8 @@ class SessionProxyController:
                 str(self.ready_path),
                 "--status-file",
                 str(self.status_path),
+                "--flow-lock-file",
+                str(self.flow_lock_path),
                 "--arm-file",
                 str(self.arm_path),
                 "--session-seconds",
@@ -171,9 +180,7 @@ class SessionProxyController:
             for process_name in configured_transport_names:
                 normalized = str(process_name).strip()
                 if normalized:
-                    worker_arguments.extend(
-                        ["--transport-process-name", normalized]
-                    )
+                    worker_arguments.extend(["--transport-process-name", normalized])
             command = session_proxy_worker_command(worker_arguments)
             creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             stdout_handle = self.stdout_path.open("w", encoding="utf-8")
@@ -233,7 +240,53 @@ class SessionProxyController:
             while time.monotonic() < deadline and psutil.pid_exists(pid):
                 time.sleep(0.1)
             self.ready_path.unlink(missing_ok=True)
+            self.flow_lock_path.unlink(missing_ok=True)
             return self.status()
+
+    def lock_flow(
+        self,
+        *,
+        candidate_id: str,
+        player_confirmed: bool,
+    ) -> dict[str, Any]:
+        """Ask the live worker to lock one player-selected observed tuple."""
+        with self._lock:
+            current = self.status()
+            if not current["running"] or not current.get("ready"):
+                raise SessionProxyError("会话代理尚未启动。")
+            if current.get("flow"):
+                return {"accepted": True, **current}
+            if player_confirmed is not True:
+                raise SessionProxyError("必须明确确认当前候选就是本局游戏流量。")
+            candidate_id = str(candidate_id).strip().casefold()
+            candidate = next(
+                (
+                    item
+                    for item in current.get("flow_candidates", [])
+                    if isinstance(item, dict)
+                    and item.get("candidate_id") == candidate_id
+                ),
+                None,
+            )
+            if candidate is None:
+                raise SessionProxyError("所选候选流已经消失，请刷新后重试。")
+            request = {
+                "request_id": uuid.uuid4().hex,
+                "session_id": str(current["session_id"]),
+                "candidate_id": candidate_id,
+                "player_confirmed": True,
+                "requested_at": time.time(),
+            }
+            _atomic_write_json(self.flow_lock_path, request)
+            result = self.status()
+            result.update(
+                {
+                    "accepted": True,
+                    "manual_flow_lock_pending": True,
+                    "flow_lock_request_id": request["request_id"],
+                }
+            )
+            return result
 
     def arm_and_wait(
         self,
@@ -245,6 +298,24 @@ class SessionProxyController:
         template_record_hex: str | None = None,
     ) -> dict[str, Any]:
         """Submit one action and wait for its correlated host result."""
+        with _SESSION_PROXY_ACTION_LOCK:
+            return self._arm_and_wait_locked(
+                action=action,
+                target=target,
+                request_id=request_id,
+                timeout_seconds=timeout_seconds,
+                template_record_hex=template_record_hex,
+            )
+
+    def _arm_and_wait_locked(
+        self,
+        *,
+        action: str,
+        target: dict[str, Any],
+        request_id: str | None = None,
+        timeout_seconds: int | None = None,
+        template_record_hex: str | None = None,
+    ) -> dict[str, Any]:
         with self._lock:
             current = self.status()
             if not current["running"] or not current.get("ready"):
@@ -275,9 +346,10 @@ class SessionProxyController:
                 request["template_record_hex"] = template_record_hex
             _atomic_write_json(self.arm_path, request)
 
-        timeout = timeout_seconds or int(
-            self.config.get("session_proxy_response_timeout_seconds", 30)
-        ) + 10
+        timeout = (
+            timeout_seconds
+            or int(self.config.get("session_proxy_response_timeout_seconds", 30)) + 10
+        )
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             current = self.status()
@@ -288,3 +360,49 @@ class SessionProxyController:
                 return result
             time.sleep(0.1)
         raise SessionProxyError("等待会话代理动作结果超时。")
+
+    def arm_sequence_and_wait(
+        self,
+        *,
+        steps: list[dict[str, Any]],
+        request_id: str | None = None,
+        timeout_seconds: int | None = None,
+    ) -> dict[str, Any]:
+        """Submit an ordered action batch without allowing another agent between steps."""
+        if not steps:
+            raise SessionProxyError("协议动作序列不能为空。")
+        base_id = request_id or uuid.uuid4().hex
+        results: list[dict[str, Any]] = []
+        with _SESSION_PROXY_ACTION_LOCK:
+            for index, step in enumerate(steps, start=1):
+                action = str(step.get("action") or "")
+                target = step.get("target")
+                if not action or not isinstance(target, dict):
+                    raise SessionProxyError(f"协议动作序列第 {index} 项无效。")
+                result = self._arm_and_wait_locked(
+                    action=action,
+                    target=dict(target),
+                    request_id=f"{base_id}:{index}",
+                    timeout_seconds=timeout_seconds,
+                )
+                results.append(result)
+                if result.get("outcome") != "confirmed":
+                    break
+        confirmed = sum(result.get("outcome") == "confirmed" for result in results)
+        return {
+            "schema": "iag.session_proxy_sequence_result.v1",
+            "request_id": base_id,
+            "outcome": "confirmed" if confirmed == len(steps) else "partial",
+            "requested_steps": len(steps),
+            "attempted_steps": len(results),
+            "confirmed_steps": confirmed,
+            "results": results,
+            "error": next(
+                (
+                    str(result.get("error") or "命令未获房主权威确认。")
+                    for result in results
+                    if result.get("outcome") != "confirmed"
+                ),
+                None,
+            ),
+        }

@@ -5,9 +5,9 @@
 - `model_client.py` 保留上层使用的同步入口，同时提供异步入口，负责 Responses、Chat Completions 和 Anthropic Messages 的请求分流与统一回包。
 - `anthropic_adapter.py` 将 IAG 的通用工具会话历史、JSON Schema 和工具结果转换为 Anthropic 原生 content blocks，再将 `tool_use` 还原为现有 Agent 循环能够消费的结构。
 - `model_pool.py` 定义玩家命名的模型池和供应端点。端点通过 `model_id` 声明自己服务的逻辑模型，因此不同供应商可以使用不同的请求模型名、Base URL、密钥和传输，同时仍参与同一条回退链。
-- `application_model_profile.py` 定义玩家命名的 Application 模型配置，将一个第一方 Application 绑定到模型池中的某个逻辑模型，并保存该 Application 的请求、上下文压缩和联网研究参数。
+- `application_model_profile.py` 定义玩家命名的 Application 模型配置。每个 Application 可以独立绑定模型池中的逻辑模型，也可以显式沿用另一个已绑定 Application 的模型路由与请求参数；上下文压缩、联网研究等 Application 设置仍归自己所有。
 - `model_pool_runtime.py` 按玩家设置的 `priority` 从小到大选择端点，记录本进程健康与冷却状态，并只对明确可安全换源的错误执行回退。
-- `endpoint_probe.py` 使用端点配置的 Models 路径做无聊天费用的可达性检查，兼容返回 `data[].id` 的 OpenAI 和 Anthropic 形状。
+- `endpoint_probe.py` 使用端点配置的 Models 路径做无聊天费用的可达性检查，兼容 `data[]`、`models[]` 与顶层数组响应，并把实际探测 URL、HTTP 状态和模型匹配结果返回控制台。
 - `providers.py` 实现传输层。`openai_sdk` 使用官方 `AsyncOpenAI`，`anthropic_sdk` 使用官方 `AsyncAnthropic`；`raw_http` 保留精确 URL 行为，只用于兼容特殊服务或诊断。
 - `model_templates.py` 与 `model_templates.json` 提供玩家可切换的模型模板，不保存密钥。
 
@@ -28,4 +28,4 @@ python -m unittest discover -s src/iag/infrastructure/llm/tests -p "test_*.py" -
 
 `RuntimeConfig` 只在程序组合边界读取本地 JSON。运行代码使用相互隔离的一致快照；每份快照包含完整模型资产目录、Application 配置目录、当前 Application 绑定，以及只含所选逻辑模型端点的运行池。网页端修改会立即更新内存，只有显式调用 `save()` 才写回磁盘。
 
-持久化配置将连接信息放在 `model_pools[].endpoints`，将玩家命名的运行方案放在 `application_model_profiles`，并通过 `application_model_bindings` 指定每个 Application 当前启用的方案。旧版 `endpoint`、`model_pool`、根级 `request_options`，以及 v0.5.8 的根级 `base_url`/`model`/API Key 文件配置仍可读取，并在下一次显式保存时迁移。API Key 保存在玩家本机未跟踪的 `agent_config.json` 中，进入内存后由 `SecretStr` 包装，且不会通过控制台公开接口返回。该文件必须保持在 Git 跟踪范围之外并限制为当前用户可读。
+持久化配置将连接信息放在 `model_pools[].endpoints`，将玩家命名的运行方案放在 `application_model_profiles`，并通过 `application_model_bindings` 指定每个 Application 当前启用的方案。现有端点的 `endpoint_id` 是稳定身份；编辑端点并替换其 `model_id` 时，保存事务会同步迁移所有因该替换而失效的 Profile 引用，避免产生半新半旧配置。若一个旧逻辑模型被拆成多个新模型而无法唯一判断，保存会要求玩家先明确切换。配置中的 `inherit_model_from_application_id` 会动态解析来源 Application 当前启用的模型池、逻辑模型和请求参数，但保留本 Application 自己的功能与上下文设置；循环或未绑定的继承会在加载时失败。旧版 `endpoint`、`model_pool`、根级 `request_options`，以及 v0.5.8 的根级 `base_url`/`model`/API Key 文件配置仍可读取，并在下一次显式保存时迁移。API Key 保存在玩家本机未跟踪的 `agent_config.json` 中，进入内存后由 `SecretStr` 包装，且不会通过控制台公开接口返回。该文件必须保持在 Git 跟踪范围之外并限制为当前用户可读。

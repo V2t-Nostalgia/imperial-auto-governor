@@ -16,8 +16,7 @@ import zipfile
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
-
+from typing import TYPE_CHECKING, Any
 
 from iag.stellaris.state.planet_profiles import (
     extract_profiles,
@@ -29,6 +28,9 @@ from iag.stellaris.state.planet_profiles import (
     scalar,
 )
 from iag.stellaris.state.research_profiles import extract_research_profile
+
+if TYPE_CHECKING:
+    from iag.stellaris.state.state_index import WorldStateIndex
 
 
 RESOURCE_LINE_RE = re.compile(
@@ -191,8 +193,16 @@ def aggregate_resource_values(block: str) -> dict[str, float]:
     return dict(sorted(totals.items()))
 
 
-def player_identity(text: str) -> dict[str, Any]:
-    player_block = find_braced_section(text, "player")
+def player_identity(
+    text: str,
+    *,
+    state_index: WorldStateIndex | None = None,
+) -> dict[str, Any]:
+    player_block = (
+        state_index.section("player")
+        if state_index is not None
+        else find_braced_section(text, "player")
+    )
     country_match = re.search(r"(?m)^\s*country=(\d+)\s*$", player_block)
     name_match = re.search(r'(?m)^\s*name="([^"]*)"\s*$', player_block)
     if not country_match:
@@ -206,8 +216,14 @@ def player_identity(text: str) -> dict[str, Any]:
 def extract_country_state(
     text: str,
     country_id: int,
+    *,
+    state_index: WorldStateIndex | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    countries = parse_numeric_map(find_braced_section(text, "country").strip())
+    countries = (
+        state_index.numeric_map("country")
+        if state_index is not None
+        else parse_numeric_map(find_braced_section(text, "country").strip())
+    )
     country_block = countries.get(country_id)
     if not country_block:
         raise ValueError(f"Country {country_id} was not found in the save.")
@@ -222,7 +238,11 @@ def extract_country_state(
     economy_module = optional_section(modules, "standard_economy_module")
     stockpile = resource_values(optional_section(economy_module, "resources"))
 
-    research = extract_research_profile(text, owner=country_id)
+    research = extract_research_profile(
+        text,
+        owner=country_id,
+        state_index=state_index,
+    )
     wars = integer_list(country_block, "wars")
     last_war = loose_quoted_scalar(country_block, "last_date_at_war")
 
@@ -272,14 +292,26 @@ def extract_country_state(
     return country_state, research
 
 
-def construction_queues(text: str) -> dict[int, str | None]:
+def construction_queues(
+    text: str,
+    *,
+    state_index: WorldStateIndex | None = None,
+) -> dict[int, str | None]:
+    if state_index is not None:
+        return state_index.construction_queues()
     construction = optional_section(text, "construction")
     queue_manager = optional_section(construction, "queue_mgr")
     queues = optional_section(queue_manager, "queues")
     return parse_numeric_map(queues.strip()) if queues else {}
 
 
-def construction_items(text: str) -> dict[int, str | None]:
+def construction_items(
+    text: str,
+    *,
+    state_index: WorldStateIndex | None = None,
+) -> dict[int, str | None]:
+    if state_index is not None:
+        return state_index.construction_items()
     construction = optional_section(text, "construction")
     item_manager = optional_section(construction, "item_mgr")
     items = optional_section(item_manager, "items")
@@ -463,24 +495,33 @@ def extract_game_state(
     *,
     save_path: Path | None = None,
     owner: int | None = None,
+    state_index: WorldStateIndex | None = None,
 ) -> dict[str, Any]:
-    identity = player_identity(text)
+    identity = player_identity(text, state_index=state_index)
     owner_id = identity["country_id"] if owner is None else owner
-    country_state, research = extract_country_state(text, owner_id)
-
-    profiles = extract_profiles(text, owner_id)
-    colonies = parse_numeric_map(find_braced_section(text, "colony").strip())
-    pop_jobs = parse_numeric_map(find_braced_section(text, "pop_jobs").strip())
-    queues = construction_queues(text)
-    items = construction_items(text)
-
-    planet_blocks = parse_numeric_map(
-        find_braced_section(
-            find_braced_section(text, "planets"),
-            "planet",
-            allow_indent=True,
-        ).strip()
+    country_state, research = extract_country_state(
+        text,
+        owner_id,
+        state_index=state_index,
     )
+
+    profiles = extract_profiles(text, owner_id, state_index=state_index)
+    if state_index is None:
+        colonies = parse_numeric_map(find_braced_section(text, "colony").strip())
+        pop_jobs = parse_numeric_map(find_braced_section(text, "pop_jobs").strip())
+        planet_blocks = parse_numeric_map(
+            find_braced_section(
+                find_braced_section(text, "planets"),
+                "planet",
+                allow_indent=True,
+            ).strip()
+        )
+    else:
+        colonies = state_index.numeric_map("colony")
+        pop_jobs = state_index.numeric_map("pop_jobs")
+        planet_blocks = state_index.planets()
+    queues = construction_queues(text, state_index=state_index)
+    items = construction_items(text, state_index=state_index)
 
     planets: list[dict[str, Any]] = []
     for profile in profiles["planets"]:

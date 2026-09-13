@@ -237,6 +237,28 @@ button:disabled { opacity: .35; cursor: not-allowed; }
   color: var(--muted);
   font: 12px Consolas, monospace;
 }
+.proxy-flow-candidates {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid rgba(95, 196, 181, .16);
+  background: rgba(5, 24, 28, .45);
+}
+.proxy-flow-candidates .subpanel-heading .hint { margin: 0; }
+.proxy-flow-candidate-list { display: grid; gap: 8px; margin-top: 10px; }
+.proxy-flow-candidate {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 10px;
+  border: 1px solid rgba(95, 196, 181, .16);
+  background: rgba(3, 14, 17, .72);
+}
+.proxy-flow-candidate strong,
+.proxy-flow-candidate small { display: block; overflow-wrap: anywhere; }
+.proxy-flow-candidate strong { color: var(--teal); font: 12px Consolas, monospace; }
+.proxy-flow-candidate small { margin-top: 4px; color: var(--muted); font: 11px Consolas, monospace; }
+.proxy-flow-candidate button { white-space: nowrap; }
 .fleet-permission-list { display: grid; gap: 8px; }
 .fleet-permission-row {
   display: flex;
@@ -299,5 +321,6 @@ footer {
   .metric-row { grid-template-columns: 1fr; }
   .resource-grid { grid-template-columns: 1fr; }
   .proxy-address-grid { grid-template-columns: 1fr; }
+  .proxy-flow-candidate { grid-template-columns: 1fr; }
   .fleet-permission-row { align-items: flex-start; flex-direction: column; }
 }

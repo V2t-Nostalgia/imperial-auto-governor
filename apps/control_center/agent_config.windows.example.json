@@ -71,6 +71,7 @@
       "application_id": "research_strategy",
       "pool_id": "primary",
       "model_id": "primary-model",
+      "inherit_model_from_application_id": "economy_governance",
       "request_options": {
         "temperature": 0.15,
         "request_body_overrides": {}
@@ -89,6 +90,7 @@
       "application_id": "fleet_operations",
       "pool_id": "primary",
       "model_id": "primary-model",
+      "inherit_model_from_application_id": "economy_governance",
       "request_options": {
         "temperature": 0.15,
         "request_body_overrides": {}
@@ -168,6 +170,12 @@
   "fleet_coordinate_max_abs": 1000,
   "experimental_ship_design_tools_enabled": false,
   "experimental_fleet_reinforcement_tools_enabled": false,
+  "experimental_invasion_tools_enabled": false,
+  "maximum_army_recruitment_batch": 5,
+  "auto_authorize_recruited_transport_fleets": false,
+  "campaign_ground_force_ratio": 1.25,
+  "campaign_space_force_ratio": 1.2,
+  "campaign_bombardment_threshold": 50.0,
   "maximum_fleet_reinforcement_increase": 5,
   "experimental_new_fleet_tools_enabled": false,
   "maximum_new_fleet_initial_ships": 5,
@@ -199,6 +207,13 @@
   "inconclusive_rewrite_policy": "block_until_save",
   "autonomy_mode": "paused",
   "autonomy_poll_seconds": 15,
+  "state_read_workers": 4,
+  "read_task_timeout_seconds": 60,
+  "fast_advisor_profile_id": "",
+  "fast_advisor_timeout_seconds": 60,
+  "joint_plan_review_enabled": true,
+  "joint_plan_review_months": 12,
+  "joint_plan_review_max_chars": 24000,
   "autonomy_require_fresh_save_seconds": 900,
   "save_source_mode": "host_upload",
   "uploaded_save_root": "state/uploaded_saves",

@@ -11,7 +11,6 @@ from typing import Any, Callable
 from iag.core.conversation_store import ConversationStore, now_iso
 from iag.infrastructure.llm.model_pool import ModelEndpoint
 
-
 CJK_RE = re.compile(
     r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]"
 )
@@ -103,6 +102,7 @@ def build_context_messages(
     system_prompt: str,
     tool_schemas: list[dict[str, Any]],
     completion_fn: Callable[..., dict[str, Any]],
+    application_id: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Build one bounded model context, compacting only the replayed copy."""
     maximum = endpoint.model_context_window_tokens
@@ -118,12 +118,20 @@ def build_context_messages(
     )
     enabled = bool(config.get("context_compression_enabled", True))
     minimum_recent = max(2, min(int(config.get("context_compression_min_recent_segments", 8)), 64))
-    summary_state = store.get_state("context_summary", {})
+    summary_key = (
+        f"context_summary:{application_id}"
+        if application_id
+        else "context_summary"
+    )
+    summary_state = store.get_state(summary_key, {})
     if not isinstance(summary_state, dict):
         summary_state = {}
     through_id = int(summary_state.get("through_message_id") or 0)
     summary_text = str(summary_state.get("content") or "").strip()
-    segments = store.protocol_segments(after_id=through_id)
+    segments = store.protocol_segments(
+        after_id=through_id,
+        application_id=application_id,
+    )
     system_tokens = estimate_text_tokens(system_prompt) + estimate_text_tokens(tool_schemas) + 24
 
     def segment_tokens(segment: dict[str, Any]) -> int:
@@ -187,7 +195,7 @@ def build_context_messages(
                     "estimated_summary_tokens": estimate_text_tokens(summary_text),
                     "target_percent": target_percent,
                 }
-                store.set_state("context_summary", summary_state)
+                store.set_state(summary_key, summary_state)
                 segments = recent
                 compacted_now = True
             except Exception as error:  # A failed summary must not erase history.

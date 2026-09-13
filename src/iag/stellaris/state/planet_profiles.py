@@ -8,10 +8,15 @@ import json
 import re
 import zipfile
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from iag.stellaris.state.state_index import WorldStateIndex
 
 
 ENTRY_RE = re.compile(r"^\s*(\d+)=\s*$")
 INLINE_ENTRY_RE = re.compile(r"^\s*(\d+)=\s*\{(.*)\}\s*$")
+STRUCTURAL_TOKEN_RE = re.compile(r'"(?:\\.|[^"\\])*"|[{}]')
 
 
 def find_braced_section(
@@ -19,32 +24,37 @@ def find_braced_section(
     name: str,
     allow_indent: bool = False,
 ) -> str:
-    indent = r"\s*" if allow_indent else ""
-    match = re.search(rf"(?m)^{indent}{re.escape(name)}=\s*\n\s*\{{", text)
-    if not match:
+    needle = f"{name}="
+    search_from = 0
+    open_brace = -1
+    while True:
+        match_start = text.find(needle, search_from)
+        if match_start < 0:
+            break
+        line_start = text.rfind("\n", 0, match_start) + 1
+        prefix = text[line_start:match_start]
+        line_aligned = not prefix or (allow_indent and prefix.isspace())
+        if line_aligned:
+            cursor = match_start + len(needle)
+            while cursor < len(text) and text[cursor].isspace():
+                cursor += 1
+            if cursor < len(text) and text[cursor] == "{":
+                open_brace = cursor
+                break
+        search_from = match_start + len(needle)
+    if open_brace < 0:
         raise ValueError(f"Section not found: {name}")
-    open_brace = text.find("{", match.start())
     depth = 0
-    quoted = False
-    escaped = False
-    for index in range(open_brace, len(text)):
-        char = text[index]
-        if quoted:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == '"':
-                quoted = False
-            continue
-        if char == '"':
-            quoted = True
-        elif char == "{":
+    # Let the regex engine skip complete quoted strings in C instead of
+    # walking every character of a multi-megabyte save in Python.
+    for token in STRUCTURAL_TOKEN_RE.finditer(text, open_brace):
+        value = token.group(0)
+        if value == "{":
             depth += 1
-        elif char == "}":
+        elif value == "}":
             depth -= 1
             if depth == 0:
-                return text[open_brace + 1 : index]
+                return text[open_brace + 1 : token.start()]
     raise ValueError(f"Unclosed section: {name}")
 
 
@@ -183,21 +193,34 @@ def load_gamestate(save_path: Path) -> str:
         return archive.read("gamestate").decode("utf-8-sig", errors="replace")
 
 
-def extract_profiles(text: str, owner: int | None) -> dict[str, object]:
-    planets = parse_numeric_map(find_braced_section(text, "planets").strip())
-    # The planet collection wraps its numeric entries in planet={...}.
-    if not planets:
-        planet_collection = find_braced_section(
-            find_braced_section(text, "planets"),
-            "planet",
-            allow_indent=True,
-        )
-        planets = parse_numeric_map(planet_collection.strip())
-    colonies = optional_numeric_map(text, "colony")
-    districts = parse_numeric_map(find_braced_section(text, "districts").strip())
-    zones = parse_numeric_map(find_braced_section(text, "zones").strip())
-    buildings = parse_numeric_map(find_braced_section(text, "buildings").strip())
-    deposits = optional_numeric_map(text, "deposit")
+def extract_profiles(
+    text: str,
+    owner: int | None,
+    *,
+    state_index: WorldStateIndex | None = None,
+) -> dict[str, object]:
+    if state_index is None:
+        planets = parse_numeric_map(find_braced_section(text, "planets").strip())
+        # The planet collection wraps its numeric entries in planet={...}.
+        if not planets:
+            planet_collection = find_braced_section(
+                find_braced_section(text, "planets"),
+                "planet",
+                allow_indent=True,
+            )
+            planets = parse_numeric_map(planet_collection.strip())
+        colonies = optional_numeric_map(text, "colony")
+        districts = parse_numeric_map(find_braced_section(text, "districts").strip())
+        zones = parse_numeric_map(find_braced_section(text, "zones").strip())
+        buildings = parse_numeric_map(find_braced_section(text, "buildings").strip())
+        deposits = optional_numeric_map(text, "deposit")
+    else:
+        planets = state_index.planets()
+        colonies = state_index.optional_numeric_map("colony")
+        districts = state_index.numeric_map("districts")
+        zones = state_index.numeric_map("zones")
+        buildings = state_index.numeric_map("buildings")
+        deposits = state_index.optional_numeric_map("deposit")
 
     output: list[dict[str, object]] = []
     for planet_id, block in planets.items():

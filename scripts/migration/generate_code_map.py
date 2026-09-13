@@ -42,7 +42,12 @@ IGNORED_FILES = {OUTPUT.relative_to(ROOT).as_posix(), "ENGINEERING_MANIFEST.json
 FILE_NOTES = {
     "src/iag/core/contracts.py": "定义跨 Agent、Mandate 与执行审计边界；未知字段会被拒绝。",
     "src/iag/core/application_registry.py": "显式 Application 注册表；阻止目录扫描加载未知代码。",
+    "src/iag/core/application_plan.py": "维护分层可执行计划、稳定事实条件、局部失效传播、存档确认、归档和审计。",
+    "src/iag/core/resource_ledger.py": "按战役与存档哈希原子预留资源，阻止多个 Application 重复消费同一份陈旧库存。",
     "src/iag/applications/registry.py": "平台内置 Application 的唯一登记入口。",
+    "src/iag/applications/plan_advisor.py": "使用可选快速模型处理局部计划异常，并限制补丁只能修改受影响分支。",
+    "src/iag/applications/joint_plan_review.py": "按游戏月份运行压缩的跨领域计划审查，并把建议投递给计划所有者。",
+    "src/iag/applications/specialist_conversation_agent.py": "运行舰队与科研的隔离会话、计划优先自主循环和局部异常升级。",
     "src/iag/applications/economy_governance/planner.py": "把存档事实与 Content Pack 映射转换为合法建设候选。",
     "src/iag/applications/economy_governance/agent_tools.py": "向模型暴露受控工具，并维护准备、执行与事实账本。",
     "src/iag/applications/economy_governance/conversation_agent.py": "运行带工具调用的持续战役会话与自主巡检。",
@@ -55,7 +60,9 @@ FILE_NOTES = {
     "src/iag/stellaris/state/extract_game_state.py": "解包 Stellaris 存档并生成标准化帝国状态。",
     "src/iag/stellaris/state/planet_profiles.py": "解析殖民地、区域、槽位、容量、拥有者和建设队列。",
     "src/iag/stellaris/state/fleet_profiles.py": "解析玩家舰队、军力、聚合耐久、位置、模板编制、增援队列和已验证动作目标。",
+    "src/iag/stellaris/state/campaign_routes.py": "搜索多目标 Pareto 战役路线，汇总阻断代价，并只为达到军力门槛的原子任务编组分配进攻。",
     "src/iag/stellaris/state/expansion_profiles.py": "解析物种宜居度、殖民来源、可殖民行星与恒星基地操作候选。",
+    "src/iag/stellaris/state/invasion_profiles.py": "解析敌对殖民地、轰炸进度、守军、运输军团和行星超空间抑制器。",
     "src/iag/stellaris/state/ship_profiles.py": "解析玩家舰船设计、部件槽和直接船坞协议证据。",
     "src/iag/stellaris/state/research_profiles.py": "分离已完成科技、当前研究、合法候选和储存研究点。",
     "src/iag/stellaris/execution/iag_supervisor.py": "在载体点击与会话代理之间编排准备、执行、确认和失败保护。",
@@ -68,6 +75,7 @@ FILE_NOTES = {
     "src/iag/stellaris/execution/packet/expansion_commands.py": "精确解析并构造殖民、恒星基地升级、模块和建筑设置记录。",
     "src/iag/stellaris/execution/packet/fleet_operation_commands.py": "精确解析并构造舰队攻击、舰船自动化和工程船建造恒星基地记录。",
     "src/iag/stellaris/execution/packet/fleet_reinforcement_commands.py": "精确解析并构造 Fleet Manager 编制增减与两阶段增援记录。",
+    "src/iag/stellaris/execution/packet/ground_warfare_commands.py": "精确解析并构造轰炸姿态、陆军登陆和空间站陆军招募记录。",
     "src/iag/stellaris/execution/packet/ship_commands.py": "精确解析并构造舰船设计与直接船坞记录。",
     "apps/control_center/web_console.py": "战役会话、模型配置、巡检、研究和执行状态的 HTTPS 控制面。",
     "apps/control_center/windows_agent_gui.py": "Windows Agent 一键启动、运行目录、证书和健康检查界面。",
@@ -86,11 +94,23 @@ FILE_NOTES = {
 PREFIX_NOTES = (
     ("src/iag/core/", "平台无关核心：政策、会话、上下文和稳定契约。"),
     ("src/iag/stellaris/state/", "Stellaris 存档事实读取与规范化。"),
-    ("src/iag/stellaris/execution/packet/", "协作命令的离线解析、精确构造与受约束改写。"),
+    (
+        "src/iag/stellaris/execution/packet/",
+        "协作命令的离线解析、精确构造与受约束改写。",
+    ),
     ("src/iag/stellaris/execution/", "游戏侧点击、网络发现、执行监督和确认。"),
-    ("src/iag/applications/economy_governance/", "经济治理 Application 的规则、工具和提示词。"),
-    ("src/iag/applications/fleet_operations/", "实验性舰队、民用船、扩张、设计与编制工具。"),
-    ("src/iag/applications/research_strategy/", "实验性科研状态、合法候选与科技选择工具。"),
+    (
+        "src/iag/applications/economy_governance/",
+        "经济治理 Application 的规则、工具和提示词。",
+    ),
+    (
+        "src/iag/applications/fleet_operations/",
+        "实验性舰队、民用船、扩张、设计与编制工具。",
+    ),
+    (
+        "src/iag/applications/research_strategy/",
+        "实验性科研状态、合法候选与科技选择工具。",
+    ),
     ("src/iag/applications/", "平台原生 Application 注册、跨域调度与确定性续接。"),
     ("src/iag/infrastructure/llm/", "模型供应商协议和请求模板适配。"),
     ("src/iag/infrastructure/research/", "不可信网页资料的检索与正文提取适配。"),
@@ -120,10 +140,7 @@ def migration_sources() -> dict[str, str]:
     if not path.is_file():
         return {}
     data = json.loads(path.read_text(encoding="utf-8"))
-    return {
-        str(item["target"]): str(item["source"])
-        for item in data.get("files", [])
-    }
+    return {str(item["target"]): str(item["source"]) for item in data.get("files", [])}
 
 
 def maintained_files() -> list[Path]:

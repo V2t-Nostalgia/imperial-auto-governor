@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from iag.stellaris.game_knowledge import (
     planet_class_rule,
@@ -43,6 +43,9 @@ from iag.stellaris.state.planet_profiles import (
 )
 from iag.stellaris.state.research_profiles import extract_research_profile
 from iag.stellaris.state.ship_profiles import extract_ship_profiles
+
+if TYPE_CHECKING:
+    from iag.stellaris.state.state_index import WorldStateIndex
 
 INVALID_OBJECT_ID = 0xFFFFFFFF
 VERIFIED_COLONY_DESIGNATIONS = ("col_city", "col_mining")
@@ -271,13 +274,16 @@ def extract_expansion_profiles(
     *,
     game_root: Path | None,
     minimum_habitability: float = 0.30,
+    research_profile: dict[str, Any] | None = None,
+    ship_profile: dict[str, Any] | None = None,
+    state_index: WorldStateIndex | None = None,
 ) -> dict[str, Any]:
     """Return deterministic colonization and starbase candidates."""
     if game_root is None:
         raise ValueError("Installed Stellaris rules are required for expansion tools.")
     if not 0 <= minimum_habitability <= 1:
         raise ValueError("minimum_habitability must be between 0 and 1.")
-    players = player_countries(text)
+    players = player_countries(text, state_index=state_index)
     if owner is None:
         if len(players) != 1:
             raise ValueError(
@@ -285,20 +291,38 @@ def extract_expansion_profiles(
             )
         owner = players[0]
 
-    countries = parse_numeric_map(find_braced_section(text, "country").strip())
+    countries = (
+        state_index.numeric_map("country")
+        if state_index is not None
+        else parse_numeric_map(find_braced_section(text, "country").strip())
+    )
     country = countries.get(owner)
     if not country:
         raise ValueError(f"Country {owner} does not exist in this save.")
-    planets = planet_map(text)
-    systems_raw = parse_numeric_map(
-        find_braced_section(text, "galactic_object").strip()
+    planets = planet_map(text, state_index=state_index)
+    systems_raw = (
+        state_index.numeric_map("galactic_object")
+        if state_index is not None
+        else parse_numeric_map(
+            find_braced_section(text, "galactic_object").strip()
+        )
     )
     planet_to_system, systems = _planet_system_index(systems_raw)
-    starbases = starbase_map(text)
-    queues = construction_queues(text)
-    research = extract_research_profile(text, owner=owner)
+    starbases = starbase_map(text, state_index=state_index)
+    queues = construction_queues(text, state_index=state_index)
+    research = research_profile or extract_research_profile(
+        text,
+        owner=owner,
+        state_index=state_index,
+    )
     known_technologies = set(research["known_technologies"])
-    ship_profile = extract_ship_profiles(text, owner=owner, game_root=game_root)
+    ship_profile = ship_profile or extract_ship_profiles(
+        text,
+        owner=owner,
+        game_root=game_root,
+        research_profile=research,
+        state_index=state_index,
+    )
 
     starbase_profiles = _owned_starbase_profiles(
         owner=owner,
@@ -316,8 +340,10 @@ def extract_expansion_profiles(
     }
 
     species_id = integer_scalar(country, "founder_species_ref")
-    species_blocks = parse_numeric_map(
-        find_braced_section(text, "species_db").strip()
+    species_blocks = (
+        state_index.numeric_map("species_db")
+        if state_index is not None
+        else parse_numeric_map(find_braced_section(text, "species_db").strip())
     )
     species_block = species_blocks.get(species_id) if species_id is not None else None
     species_traits = tuple(

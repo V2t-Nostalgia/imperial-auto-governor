@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "imperial-auto-governor-platform"
-version = "0.5.9"
+version = "0.5.10"
 description = "A multi-agent Stellaris governance platform built from Imperial Auto Governor."
 readme = "README.md"
 requires-python = ">=3.11"

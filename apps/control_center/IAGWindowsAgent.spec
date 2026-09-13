@@ -9,6 +9,8 @@ PROJECT_ROOT = SPEC_ROOT.parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
 APP_ROOT = PROJECT_ROOT / "apps" / "control_center"
 ECONOMY_ROOT = SRC_ROOT / "iag" / "applications" / "economy_governance"
+FLEET_ROOT = SRC_ROOT / "iag" / "applications" / "fleet_operations"
+RESEARCH_ROOT = SRC_ROOT / "iag" / "applications" / "research_strategy"
 LLM_ROOT = SRC_ROOT / "iag" / "infrastructure" / "llm"
 CONTENT_ROOT = PROJECT_ROOT / "content_packs" / "vanilla_4_4"
 pydivert_datas, pydivert_binaries, pydivert_hidden = collect_all("pydivert")
@@ -28,6 +30,8 @@ datas = [
     (str(APP_ROOT / "schemas"), "schemas"),
     (str(ECONOMY_ROOT / "prompts"), "iag/applications/economy_governance/prompts"),
     (str(ECONOMY_ROOT / "schemas"), "iag/applications/economy_governance/schemas"),
+    (str(FLEET_ROOT / "prompts"), "iag/applications/fleet_operations/prompts"),
+    (str(RESEARCH_ROOT / "prompts"), "iag/applications/research_strategy/prompts"),
     (str(LLM_ROOT / "model_templates.json"), "iag/infrastructure/llm"),
     (str(CONTENT_ROOT), "content_packs/vanilla_4_4"),
 ]

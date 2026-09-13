@@ -175,9 +175,7 @@ class RuntimeConfigTests(unittest.TestCase):
         self.runtime.save()
         persisted = json.loads(self.path.read_text(encoding="utf-8"))
         persisted_pool = next(
-            item
-            for item in persisted["model_pools"]
-            if item["pool_id"] == "deepseek"
+            item for item in persisted["model_pools"] if item["pool_id"] == "deepseek"
         )
         self.assertEqual(
             persisted_pool["endpoints"][1]["api_key"],
@@ -186,13 +184,107 @@ class RuntimeConfigTests(unittest.TestCase):
 
     def test_invalid_endpoint_does_not_change_runtime(self) -> None:
         before = self.runtime.snapshot()
-        invalid = before.endpoint.model_copy(
-            update={"max_output_tokens": 100_000}
-        )
+        invalid = before.endpoint.model_copy(update={"max_output_tokens": 100_000})
         with self.assertRaises(ValidationError):
             self.runtime.update(endpoint=invalid)
 
         self.assertEqual(self.runtime.snapshot(), before)
+
+    def test_application_route_can_be_dedicated_or_follow_economy(self) -> None:
+        document = {
+            "model_pools": [
+                {
+                    "pool_id": "economy-pool",
+                    "display_name": "Economy",
+                    "endpoints": [
+                        endpoint_document(
+                            "economy-endpoint",
+                            model="economy-provider-model",
+                            model_id="economy-model",
+                        )
+                    ],
+                },
+                {
+                    "pool_id": "fleet-pool",
+                    "display_name": "Fleet",
+                    "endpoints": [
+                        endpoint_document(
+                            "fleet-endpoint",
+                            model="fleet-provider-model",
+                            model_id="fleet-model",
+                        )
+                    ],
+                },
+            ],
+            "application_model_profiles": [
+                {
+                    "profile_id": "economy-profile",
+                    "display_name": "Economy model",
+                    "application_id": "economy_governance",
+                    "pool_id": "economy-pool",
+                    "model_id": "economy-model",
+                    "request_options": {"temperature": 0.2},
+                    "application_options": {"context_compression_trigger_percent": 81},
+                },
+                {
+                    "profile_id": "fleet-profile",
+                    "display_name": "Fleet model",
+                    "application_id": "fleet_operations",
+                    "pool_id": "fleet-pool",
+                    "model_id": "fleet-model",
+                    "request_options": {"temperature": 0.7},
+                    "application_options": {"context_compression_trigger_percent": 63},
+                },
+            ],
+            "application_model_bindings": {
+                "economy_governance": "economy-profile",
+                "fleet_operations": "fleet-profile",
+            },
+            "runtime_root": "runtime",
+        }
+        self.path.write_text(json.dumps(document), encoding="utf-8")
+        runtime = RuntimeConfig.load(self.path)
+
+        dedicated = runtime.snapshot("fleet_operations")
+        self.assertEqual(dedicated.endpoint.model, "fleet-provider-model")
+        self.assertEqual(dedicated.request_options["temperature"], 0.7)
+        self.assertEqual(
+            dedicated.settings["context_compression_trigger_percent"],
+            63,
+        )
+
+        profiles = list(dedicated.application_model_profiles)
+        fleet_index = next(
+            index
+            for index, profile in enumerate(profiles)
+            if profile.profile_id == "fleet-profile"
+        )
+        profiles[fleet_index] = profiles[fleet_index].model_copy(
+            update={"inherit_model_from_application_id": "economy_governance"}
+        )
+        runtime.update(application_model_profiles=profiles)
+
+        inherited = runtime.snapshot("fleet_operations")
+        self.assertEqual(inherited.application_profile.profile_id, "fleet-profile")
+        self.assertEqual(
+            inherited.model_route_profile.profile_id,
+            "economy-profile",
+        )
+        self.assertEqual(inherited.endpoint.model, "economy-provider-model")
+        self.assertEqual(inherited.request_options["temperature"], 0.2)
+        self.assertEqual(
+            inherited.settings["context_compression_trigger_percent"],
+            63,
+        )
+
+        explicit = runtime.snapshot_profile("fleet-profile")
+        self.assertEqual(explicit.application_id, "fleet_operations")
+        self.assertEqual(explicit.endpoint.model, "economy-provider-model")
+        self.assertEqual(explicit.request_options["temperature"], 0.2)
+        self.assertEqual(
+            explicit.settings["context_compression_trigger_percent"],
+            63,
+        )
 
 
 if __name__ == "__main__":

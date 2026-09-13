@@ -19,18 +19,21 @@ import argparse
 import json
 import math
 import re
-from collections import Counter
+from collections import Counter, deque
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from statistics import fmean, median
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from iag.stellaris.state.extract_game_state import construction_queues
+from iag.stellaris.state.extract_game_state import construction_queues, resource_values
 from iag.stellaris.state.planet_profiles import (
     find_braced_section,
     load_gamestate,
     parse_numeric_map,
 )
+
+if TYPE_CHECKING:
+    from iag.stellaris.state.state_index import WorldStateIndex
 
 INVALID_OBJECT_ID = 0xFFFFFFFF
 STARBASE_DESTINATION_TAG_HEX = "0c3a01001400"
@@ -40,6 +43,25 @@ MILITARY_SHIP_CLASS = "shipclass_military"
 SCIENCE_SHIP_CLASS = "shipclass_science_ship"
 CONSTRUCTION_SHIP_CLASS = "shipclass_constructor"
 COLONY_SHIP_CLASS = "shipclass_colonizer"
+TRANSPORT_SHIP_CLASS = "shipclass_transport"
+REDIRECTABLE_MILITARY_MOVEMENT_STATES = frozenset(
+    {
+        "",
+        "move_idle",
+        "move_orbit",
+        "move_formation",
+        "move_system",
+        "move_wind_up",
+    }
+)
+MAINTENANCE_READY_MOVEMENT_STATES = frozenset(
+    {
+        "",
+        "move_idle",
+        "move_orbit",
+        "move_formation",
+    }
+)
 
 SCIENCE_AUTOMATION_OPTIONS = frozenset(
     {
@@ -209,12 +231,24 @@ def coordinate_to_fixed(value: float | str, field: str) -> int:
     return fixed
 
 
-def player_countries(text: str) -> list[int]:
+def player_countries(
+    text: str,
+    *,
+    state_index: WorldStateIndex | None = None,
+) -> list[int]:
+    if state_index is not None:
+        return state_index.player_countries()
     players = optional_section(text, "player")
     return sorted({int(value) for value in re.findall(r"\bcountry=(\d+)", players)})
 
 
-def planet_map(text: str) -> dict[int, str | None]:
+def planet_map(
+    text: str,
+    *,
+    state_index: WorldStateIndex | None = None,
+) -> dict[int, str | None]:
+    if state_index is not None:
+        return state_index.planets()
     collection = find_braced_section(text, "planets")
     planets = parse_numeric_map(collection.strip())
     if planets:
@@ -224,7 +258,13 @@ def planet_map(text: str) -> dict[int, str | None]:
     )
 
 
-def starbase_map(text: str) -> dict[int, str | None]:
+def starbase_map(
+    text: str,
+    *,
+    state_index: WorldStateIndex | None = None,
+) -> dict[int, str | None]:
+    if state_index is not None:
+        return state_index.starbases()
     manager = find_braced_section(text, "starbase_mgr")
     collection = find_braced_section(manager, "starbases", allow_indent=True)
     return parse_numeric_map(collection.strip())
@@ -345,6 +385,124 @@ def named_sections(text: str, key: str) -> list[str]:
         else:
             raise ValueError(f"Unclosed Clausewitz object: {key}")
     return output
+
+
+def fleet_owner_map(countries: dict[int, str | None]) -> dict[int, int]:
+    """Resolve fleet ownership while rejecting duplicated object handles."""
+    owners: dict[int, int] = {}
+    ambiguous: set[int] = set()
+    for country_id, block in countries.items():
+        if not block:
+            continue
+        for fleet_id in owned_fleet_ids(block):
+            previous = owners.get(fleet_id)
+            if previous is not None and previous != country_id:
+                ambiguous.add(fleet_id)
+            else:
+                owners[fleet_id] = country_id
+    for fleet_id in ambiguous:
+        owners.pop(fleet_id, None)
+    return owners
+
+
+def country_relation_profiles(country_block: str) -> dict[int, dict[str, Any]]:
+    """Return the route- and hostility-relevant parts of country relations."""
+    relations: dict[int, dict[str, Any]] = {}
+    manager = optional_section(country_block, "relations_manager")
+    for block in named_sections(manager, "relation"):
+        country_id = integer_scalar(block, "country")
+        if country_id is None:
+            continue
+        borders_closed = (
+            bare_scalar(block, "borders") == "yes"
+            or bare_scalar(block, "closed_borders") == "yes"
+        )
+        forced_open_borders = bool(
+            re.search(
+                r"(?<![A-Za-z0-9_])forced_open_borders\s*=\s*\"[^\"]+\"",
+                block,
+            )
+        )
+        relations[country_id] = {
+            "contact": bare_scalar(block, "contact") == "yes",
+            "communications": bare_scalar(block, "communications") == "yes",
+            "hostile": bare_scalar(block, "hostile") == "yes",
+            "closed_borders": borders_closed,
+            "forced_open_borders": forced_open_borders,
+            "subject": bare_scalar(block, "subject") == "yes",
+            "truce_id": integer_scalar(block, "truce"),
+            "war_ids": integer_values(block, "wars"),
+        }
+    return relations
+
+
+def active_war_opponents(
+    text: str,
+    owner: int,
+    *,
+    state_index: WorldStateIndex | None = None,
+) -> tuple[set[int], list[int]]:
+    """Resolve the countries on the opposite side of each active war."""
+    try:
+        wars = (
+            state_index.optional_numeric_map("war")
+            if state_index is not None
+            else parse_numeric_map(find_braced_section(text, "war").strip())
+        )
+    except ValueError:
+        return set(), []
+
+    opponents: set[int] = set()
+    active_ids: list[int] = []
+    for war_id, block in wars.items():
+        if not block:
+            continue
+        attackers = {
+            country_id
+            for entry in anonymous_sections(optional_section(block, "attackers"))
+            if (country_id := integer_scalar(entry, "country")) is not None
+        }
+        defenders = {
+            country_id
+            for entry in anonymous_sections(optional_section(block, "defenders"))
+            if (country_id := integer_scalar(entry, "country")) is not None
+        }
+        if owner in attackers:
+            opponents.update(defenders)
+            active_ids.append(war_id)
+        elif owner in defenders:
+            opponents.update(attackers)
+            active_ids.append(war_id)
+    opponents.discard(owner)
+    return opponents, sorted(active_ids)
+
+
+def known_system_ids(
+    country_block: str,
+    *,
+    owner: int,
+    systems: dict[int, str | None],
+) -> set[int]:
+    """Return systems present on the player's strategic map.
+
+    Stellaris stores persistently revealed systems under the counterintuitive
+    ``terra_incognita.systems`` path.  Direct discovery and current sensor
+    observations are retained as fallbacks for old or minimal saves.
+    """
+    known = set(
+        integer_values(optional_section(country_block, "terra_incognita"), "systems")
+    )
+    known.update(
+        system_id
+        for system_id, block in systems.items()
+        if block and owner in integer_values(block, "discovery")
+    )
+    known.update(
+        system_id
+        for observation in anonymous_sections(optional_section(country_block, "intel"))
+        if (system_id := integer_scalar(observation, "object")) is not None
+    )
+    return known
 
 
 def bitset_contains(mask: int | None, object_id: int) -> bool:
@@ -520,9 +678,7 @@ def movement_profile(fleet_block: str) -> dict[str, Any]:
     orbitable = optional_section(orbit, "orbitable")
     current_system = integer_scalar(coordinate, "origin")
     target_system = (
-        int(target_coordinate["origin"])
-        if target_coordinate is not None
-        else None
+        int(target_coordinate["origin"]) if target_coordinate is not None else None
     )
     return {
         "state": bare_scalar(manager, "state"),
@@ -564,14 +720,41 @@ def fleet_availability(
         return "UNAVAILABLE", ["not_a_verified_military_fleet"]
 
     movement_state = str(movement.get("state") or "")
-    if movement_state and movement_state not in {
-        "move_idle",
-        "move_orbit",
-        "move_formation",
-    }:
+    if movement_state and movement_state not in REDIRECTABLE_MILITARY_MOVEMENT_STATES:
         reasons.append(f"movement_state:{movement_state}")
         return "BUSY", reasons
     return "AVAILABLE", reasons
+
+
+def military_fleet_callability(
+    *,
+    availability: str,
+    movement: dict[str, Any],
+    has_current_order: bool,
+) -> dict[str, Any]:
+    """Expose capability-specific commandability without hiding current orders."""
+    movement_state = str(movement.get("state") or "")
+    operational = availability == "AVAILABLE"
+    redirectable = (
+        operational and movement_state in REDIRECTABLE_MILITARY_MOVEMENT_STATES
+    )
+    maintenance_ready = (
+        operational
+        and not has_current_order
+        and movement_state in MAINTENANCE_READY_MOVEMENT_STATES
+    )
+    return {
+        "operational_state": availability,
+        "current_order_state": movement_state
+        or ("current_order" if has_current_order else "none"),
+        "current_order_active": bool(
+            has_current_order or movement_state not in MAINTENANCE_READY_MOVEMENT_STATES
+        ),
+        "move_callable_now": redirectable,
+        "attack_callable_now": redirectable,
+        "reinforcement_callable_now": operational,
+        "maintenance_callable_now": maintenance_ready,
+    }
 
 
 def civilian_fleet_availability(
@@ -612,6 +795,38 @@ def civilian_fleet_availability(
     return "AVAILABLE", []
 
 
+def transport_fleet_availability(
+    *,
+    ship_class: str | None,
+    ship_ids: list[int],
+    mobile: bool,
+    valid_for_combat: bool,
+    movement: dict[str, Any],
+    mia_origin: int | None,
+    combat_fleet_ids: list[int],
+    has_current_order: bool,
+) -> tuple[str, list[str]]:
+    """Return whether a transport fleet may accept a fresh landing order."""
+    if ship_class != TRANSPORT_SHIP_CLASS:
+        return "UNAVAILABLE", ["not_a_transport_fleet"]
+    if not ship_ids:
+        return "UNAVAILABLE", ["fleet_has_no_transport_ships"]
+    if mia_origin is not None:
+        return "MIA", ["mia_from_is_valid"]
+    if combat_fleet_ids:
+        return "UNCERTAIN", ["fleet_is_in_combat"]
+    if not mobile:
+        return "UNAVAILABLE", ["fleet_is_not_mobile"]
+    if not valid_for_combat:
+        return "UNAVAILABLE", ["valid_for_combat_is_false"]
+    if has_current_order:
+        return "BUSY", ["fleet_has_current_order"]
+    movement_state = str(movement.get("state") or "")
+    if movement_state and movement_state not in MAINTENANCE_READY_MOVEMENT_STATES:
+        return "BUSY", [f"movement_state:{movement_state}"]
+    return "AVAILABLE", []
+
+
 def _fleet_coordinate(block: str) -> dict[str, Any] | None:
     movement = movement_profile(block).get("current_coordinate")
     if movement is not None:
@@ -638,27 +853,22 @@ def hostile_fleet_targets(
     country_block: str,
     countries: dict[int, str | None],
     fleets: dict[int, str | None],
+    systems: dict[int, str | None],
+    known_systems: set[int],
+    active_war_opponent_ids: set[int],
+    relations: dict[int, dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Resolve current hostile intel to unique global fleet object IDs.
+    """Resolve attackable fleets without exposing unseen mobile contacts.
 
     A host save contains fleets that the player has not discovered.  Exposing
-    that global collection would leak hidden information, so targets enter the
-    profile only when the selected country's ``intel.hostile`` observation
-    matches exactly one live fleet by owner, current coordinate and power.
+    that global collection would leak hidden information.  Mobile targets
+    therefore require either an exact ``intel.hostile`` match or their exact
+    object ID in the player's ``sensor_range_fleets`` visibility cache.  A
+    starbase belonging to a current war opponent may also be exposed when its
+    system is already present on the player's strategic map; current power
+    remains hidden unless the station has a live sensor observation.
     """
-    fleet_owners: dict[int, int] = {}
-    ambiguous_owner_ids: set[int] = set()
-    for country_id, block in countries.items():
-        if not block:
-            continue
-        for fleet_id in owned_fleet_ids(block):
-            previous = fleet_owners.get(fleet_id)
-            if previous is not None and previous != country_id:
-                ambiguous_owner_ids.add(fleet_id)
-            else:
-                fleet_owners[fleet_id] = country_id
-    for fleet_id in ambiguous_owner_ids:
-        fleet_owners.pop(fleet_id, None)
+    fleet_owners = fleet_owner_map(countries)
 
     candidates: list[dict[str, Any]] = []
     for fleet_id, block in fleets.items():
@@ -686,6 +896,7 @@ def hostile_fleet_targets(
                 "ship_count": len(ship_ids),
                 "military_power": float_scalar(block, "military_power"),
                 "coordinate": coordinate,
+                "system_id": int(coordinate["origin"]),
             }
         )
 
@@ -706,10 +917,21 @@ def hostile_fleet_targets(
                 or observed_power <= 0
             ):
                 continue
+            relation = relations.get(observed_owner)
+            if (
+                relation is not None
+                and observed_owner not in active_war_opponent_ids
+                and (
+                    relation.get("truce_id") is not None
+                    or not relation.get("hostile", False)
+                )
+            ):
+                continue
             matches = [
                 candidate
                 for candidate in candidates
                 if candidate["owner_country_id"] == observed_owner
+                and candidate["system_id"] == observed_system
                 and _coordinates_match(
                     candidate.get("coordinate"),
                     observed_coordinate,
@@ -737,8 +959,373 @@ def hostile_fleet_targets(
                 "intel_display_name_hint": name_hint(observation),
                 "intel_military_power": observed_power,
                 "target_authority": "player_hostile_intel_exact_live_match",
+                "target_visibility": "current_sensor_contact",
+                "current_sensor_contact": True,
+                "active_war_target": observed_owner in active_war_opponent_ids,
+                "system_name_key": name_key(systems.get(observed_system) or ""),
+                "system_display_name_hint": name_hint(
+                    systems.get(observed_system) or ""
+                ),
             }
+
+    sensor_visible_fleet_ids = set(
+        integer_values(country_block, "sensor_range_fleets")
+    )
+    for candidate in candidates:
+        fleet_id = int(candidate["fleet_id"])
+        candidate_owner = int(candidate["owner_country_id"])
+        relation = relations.get(candidate_owner)
+        military_power = candidate.get("military_power")
+        if (
+            fleet_id not in sensor_visible_fleet_ids
+            or candidate.get("ship_class")
+            not in {"shipclass_military", "shipclass_starbase"}
+            or military_power is None
+            or float(military_power) <= 0
+            or (
+                candidate_owner not in active_war_opponent_ids
+                and (
+                    relation is None
+                    or relation.get("truce_id") is not None
+                    or not relation.get("hostile", False)
+                )
+            )
+        ):
+            continue
+        system_id = int(candidate["system_id"])
+        resolved.setdefault(
+            fleet_id,
+            {
+                **candidate,
+                "intel_name_key": candidate.get("name_key"),
+                "intel_display_name_hint": candidate.get("display_name_hint"),
+                "intel_military_power": military_power,
+                "target_authority": "player_sensor_range_fleet_exact_object",
+                "target_visibility": "current_sensor_contact",
+                "current_sensor_contact": True,
+                "active_war_target": candidate_owner in active_war_opponent_ids,
+                "system_name_key": name_key(systems.get(system_id) or ""),
+                "system_display_name_hint": name_hint(
+                    systems.get(system_id) or ""
+                ),
+            },
+        )
+
+    for candidate in candidates:
+        candidate_owner = int(candidate["owner_country_id"])
+        system_id = int(candidate["system_id"])
+        if (
+            candidate_owner not in active_war_opponent_ids
+            or candidate.get("ship_class") != "shipclass_starbase"
+            or system_id not in known_systems
+        ):
+            continue
+        fleet_id = int(candidate["fleet_id"])
+        if fleet_id in resolved:
+            resolved[fleet_id]["active_war_target"] = True
+            continue
+        system_block = systems.get(system_id) or ""
+        resolved[fleet_id] = {
+            "fleet_id": fleet_id,
+            "owner_country_id": candidate_owner,
+            "name_key": candidate.get("name_key"),
+            "display_name_hint": candidate.get("display_name_hint"),
+            "ship_class": candidate.get("ship_class"),
+            "ship_count": None,
+            "military_power": None,
+            "coordinate": None,
+            "system_id": system_id,
+            "intel_name_key": None,
+            "intel_display_name_hint": None,
+            "intel_military_power": None,
+            "target_authority": "active_war_known_starbase_save_mapping",
+            "target_visibility": "strategic_map",
+            "current_sensor_contact": False,
+            "active_war_target": True,
+            "system_name_key": name_key(system_block),
+            "system_display_name_hint": name_hint(system_block),
+        }
     return [resolved[fleet_id] for fleet_id in sorted(resolved)]
+
+
+def _system_controller_country_ids(
+    *,
+    fleets: dict[int, str | None],
+    fleet_owners: dict[int, int],
+) -> dict[int, set[int]]:
+    controllers: dict[int, set[int]] = {}
+    for fleet_id, block in fleets.items():
+        if (
+            not block
+            or bare_scalar(block, "ship_class") != "shipclass_starbase"
+            or fleet_id not in fleet_owners
+        ):
+            continue
+        coordinate = _fleet_coordinate(block)
+        if coordinate is None:
+            continue
+        controllers.setdefault(int(coordinate["origin"]), set()).add(
+            fleet_owners[fleet_id]
+        )
+    return controllers
+
+
+def _reconstruct_system_path(
+    parents: dict[int, int | None],
+    target: int,
+) -> list[int]:
+    if target not in parents:
+        return []
+    path: list[int] = []
+    current: int | None = target
+    while current is not None:
+        path.append(current)
+        current = parents[current]
+    return list(reversed(path))
+
+
+def _route_tree(
+    *,
+    source_system: int,
+    graph: dict[int, list[int]],
+    allowed_systems: set[int],
+    terminal_systems: set[int],
+) -> tuple[dict[int, int], dict[int, int | None]]:
+    distances = {source_system: 0}
+    parents: dict[int, int | None] = {source_system: None}
+    queue = deque([source_system])
+    while queue:
+        current = queue.popleft()
+        if current in terminal_systems:
+            continue
+        for neighbor in graph.get(current, []):
+            if neighbor not in allowed_systems or neighbor in distances:
+                continue
+            distances[neighbor] = distances[current] + 1
+            parents[neighbor] = current
+            queue.append(neighbor)
+    return distances, parents
+
+
+def attack_target_routes(
+    *,
+    owner: int,
+    country_block: str,
+    countries: dict[int, str | None],
+    fleets: dict[int, str | None],
+    systems: dict[int, str | None],
+    known_systems: set[int],
+    relations: dict[int, dict[str, Any]],
+    active_war_opponent_ids: set[int],
+    owned_fleets: list[dict[str, Any]],
+    targets: list[dict[str, Any]],
+    source_capabilities: tuple[str, ...] = ("attack_verified_family",),
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Annotate hostile targets with conservative current-save routes."""
+    fleet_owners = fleet_owner_map(countries)
+    controllers = _system_controller_country_ids(
+        fleets=fleets,
+        fleet_owners=fleet_owners,
+    )
+    hostile_country_ids = set(active_war_opponent_ids)
+    hostile_country_ids.update(
+        country_id
+        for country_id, relation in relations.items()
+        if relation.get("hostile", False) and relation.get("truce_id") is None
+    )
+
+    def country_accessible(country_id: int) -> bool:
+        if country_id == owner or country_id in active_war_opponent_ids:
+            return True
+        relation = relations.get(country_id)
+        if relation is None:
+            return False
+        if relation.get("truce_id") is not None or relation.get(
+            "forced_open_borders", False
+        ):
+            return True
+        if relation.get("hostile", False) or relation.get("closed_borders", False):
+            return False
+        return bool(relation.get("contact") or relation.get("communications"))
+
+    restricted_systems = set(integer_values(country_block, "restricted_systems"))
+    graph = {
+        system_id: hyperlane_neighbors(block or "")
+        for system_id, block in systems.items()
+    }
+    known_route_systems = set(known_systems)
+    known_route_systems.update(
+        int(fleet["movement"]["current_system_id"])
+        for fleet in owned_fleets
+        if fleet.get("movement", {}).get("current_system_id") is not None
+    )
+    base_allowed_systems = {
+        system_id
+        for system_id in known_route_systems
+        if system_id not in restricted_systems
+        and all(
+            country_accessible(controller)
+            for controller in controllers.get(system_id, set())
+        )
+    }
+    hostile_inhibitor_systems = {
+        system_id
+        for system_id, block in systems.items()
+        if block
+        and hostile_country_ids.intersection(integer_values(block, "inhibitor_owners"))
+    }
+
+    fleets_by_system: dict[int, list[int]] = {}
+    for fleet in owned_fleets:
+        if not any(fleet.get(capability, False) for capability in source_capabilities):
+            continue
+        source_system = fleet.get("movement", {}).get("current_system_id")
+        if source_system is None:
+            continue
+        fleets_by_system.setdefault(int(source_system), []).append(
+            int(fleet["fleet_id"])
+        )
+
+    route_trees: dict[
+        int,
+        tuple[
+            dict[int, int],
+            dict[int, int | None],
+            dict[int, int],
+            dict[int, int | None],
+            dict[int, int],
+            dict[int, int | None],
+        ],
+    ] = {}
+    for source_system in fleets_by_system:
+        allowed = set(base_allowed_systems)
+        allowed.add(source_system)
+        verified = _route_tree(
+            source_system=source_system,
+            graph=graph,
+            allowed_systems=allowed,
+            terminal_systems=hostile_inhibitor_systems,
+        )
+        without_inhibitors = _route_tree(
+            source_system=source_system,
+            graph=graph,
+            allowed_systems=allowed,
+            terminal_systems=set(),
+        )
+        known_graph = _route_tree(
+            source_system=source_system,
+            graph=graph,
+            allowed_systems=known_route_systems | {source_system},
+            terminal_systems=set(),
+        )
+        route_trees[source_system] = (*verified, *without_inhibitors, *known_graph)
+
+    reachable: list[dict[str, Any]] = []
+    blocked: list[dict[str, Any]] = []
+    for raw_target in targets:
+        target = dict(raw_target)
+        target_system = int(target["system_id"])
+        route_evidence: list[dict[str, Any]] = []
+        reachable_fleet_ids: list[int] = []
+        unreachable_fleet_ids: list[int] = []
+        reachable_hops: list[int] = []
+        for source_system, source_fleet_ids in sorted(fleets_by_system.items()):
+            (
+                distances,
+                _parents,
+                no_inhibitor_distances,
+                no_inhibitor_parents,
+                known_distances,
+                known_parents,
+            ) = route_trees[source_system]
+            evidence: dict[str, Any] = {
+                "source_system_id": source_system,
+                "source_fleet_ids": sorted(source_fleet_ids),
+            }
+            if target_system in distances:
+                jumps = distances[target_system]
+                evidence.update(
+                    {
+                        "status": "reachable_by_verified_hyperlane_path",
+                        "hyperlane_jumps": jumps,
+                        "blocking_system_ids": [],
+                    }
+                )
+                reachable_fleet_ids.extend(source_fleet_ids)
+                reachable_hops.append(jumps)
+            elif target_system in no_inhibitor_distances:
+                path = _reconstruct_system_path(
+                    no_inhibitor_parents,
+                    target_system,
+                )
+                blockers = [
+                    system_id
+                    for system_id in path[1:-1]
+                    if system_id in hostile_inhibitor_systems
+                ]
+                evidence.update(
+                    {
+                        "status": "blocked_by_hostile_ftl_inhibitor",
+                        "hyperlane_jumps": no_inhibitor_distances[target_system],
+                        "blocking_system_ids": blockers,
+                        "blocking_system_names": [
+                            name_hint(systems.get(system_id) or "")
+                            or name_key(systems.get(system_id) or "")
+                            for system_id in blockers
+                        ],
+                    }
+                )
+                unreachable_fleet_ids.extend(source_fleet_ids)
+            elif target_system in known_distances:
+                path = _reconstruct_system_path(known_parents, target_system)
+                inaccessible = [
+                    system_id
+                    for system_id in path[1:]
+                    if system_id not in base_allowed_systems
+                ]
+                evidence.update(
+                    {
+                        "status": "blocked_by_border_access_or_restriction",
+                        "hyperlane_jumps": known_distances[target_system],
+                        "blocking_system_ids": inaccessible[:4],
+                        "blocking_system_names": [
+                            name_hint(systems.get(system_id) or "")
+                            or name_key(systems.get(system_id) or "")
+                            for system_id in inaccessible[:4]
+                        ],
+                        "blocking_country_ids": sorted(
+                            {
+                                country_id
+                                for system_id in inaccessible[:4]
+                                for country_id in controllers.get(system_id, set())
+                                if not country_accessible(country_id)
+                            }
+                        ),
+                    }
+                )
+                unreachable_fleet_ids.extend(source_fleet_ids)
+            else:
+                evidence.update(
+                    {
+                        "status": "no_known_hyperlane_path",
+                        "hyperlane_jumps": None,
+                        "blocking_system_ids": [],
+                    }
+                )
+                unreachable_fleet_ids.extend(source_fleet_ids)
+            route_evidence.append(evidence)
+
+        target["reachable_from_fleet_ids"] = sorted(set(reachable_fleet_ids))
+        target["unreachable_from_fleet_ids"] = sorted(set(unreachable_fleet_ids))
+        target["minimum_hyperlane_jumps"] = (
+            min(reachable_hops) if reachable_hops else None
+        )
+        target["route_evidence"] = route_evidence
+        if reachable_fleet_ids:
+            reachable.append(target)
+        else:
+            blocked.append(target)
+    return reachable, blocked
 
 
 def system_destination(
@@ -786,8 +1373,13 @@ def system_destination(
     }
 
 
-def extract_fleet_profiles(text: str, owner: int | None = None) -> dict[str, Any]:
-    players = player_countries(text)
+def extract_fleet_profiles(
+    text: str,
+    owner: int | None = None,
+    *,
+    state_index: WorldStateIndex | None = None,
+) -> dict[str, Any]:
+    players = player_countries(text, state_index=state_index)
     if owner is None:
         if len(players) != 1:
             raise ValueError(
@@ -795,15 +1387,29 @@ def extract_fleet_profiles(text: str, owner: int | None = None) -> dict[str, Any
             )
         owner = players[0]
 
-    countries = parse_numeric_map(find_braced_section(text, "country").strip())
+    countries = (
+        state_index.numeric_map("country")
+        if state_index is not None
+        else parse_numeric_map(find_braced_section(text, "country").strip())
+    )
     country = countries.get(owner)
     if country is None:
         raise ValueError(f"Country {owner} does not exist in this save.")
 
-    fleets = parse_numeric_map(find_braced_section(text, "fleet").strip())
-    ships = parse_numeric_map(find_braced_section(text, "ships").strip())
-    template_blocks = parse_numeric_map(
-        find_braced_section(text, "fleet_template").strip()
+    fleets = (
+        state_index.numeric_map("fleet")
+        if state_index is not None
+        else parse_numeric_map(find_braced_section(text, "fleet").strip())
+    )
+    ships = (
+        state_index.numeric_map("ships")
+        if state_index is not None
+        else parse_numeric_map(find_braced_section(text, "ships").strip())
+    )
+    template_blocks = (
+        state_index.numeric_map("fleet_template")
+        if state_index is not None
+        else parse_numeric_map(find_braced_section(text, "fleet_template").strip())
     )
     templates = [
         fleet_template_profile(template_id, block)
@@ -813,15 +1419,31 @@ def extract_fleet_profiles(text: str, owner: int | None = None) -> dict[str, Any
     templates_by_id = {
         int(template["fleet_template_id"]): template for template in templates
     }
-    systems = parse_numeric_map(find_braced_section(text, "galactic_object").strip())
-    planets = planet_map(text)
-    starbases = starbase_map(text)
-    queues = construction_queues(text)
+    systems = (
+        state_index.numeric_map("galactic_object")
+        if state_index is not None
+        else parse_numeric_map(find_braced_section(text, "galactic_object").strip())
+    )
+    planets = planet_map(text, state_index=state_index)
+    starbases = starbase_map(text, state_index=state_index)
+    queues = construction_queues(text, state_index=state_index)
     council_leaders = council_leader_ids(text, owner)
+    relations = country_relation_profiles(country)
+    active_war_opponent_ids, active_war_ids = active_war_opponents(
+        text,
+        owner,
+        state_index=state_index,
+    )
+    strategic_known_system_ids = known_system_ids(
+        country,
+        owner=owner,
+        systems=systems,
+    )
 
     owned_fleet_id_values = owned_fleet_ids(country)
     owned_fleet_id_set = set(owned_fleet_id_values)
     owned_planet_ids = set(integer_values(country, "owned_planets"))
+
     def queue_belongs_to_owner(starbase_block: str, key: str) -> bool:
         queue_id = integer_scalar(starbase_block, key)
         if queue_id in (None, INVALID_OBJECT_ID):
@@ -921,9 +1543,7 @@ def extract_fleet_profiles(text: str, owner: int | None = None) -> dict[str, Any
                         ),
                     }
                 )
-        targeted_design_ids = {
-            int(item["design_id"]) for item in composition
-        }
+        targeted_design_ids = {int(item["design_id"]) for item in composition}
         composition.extend(
             {
                 "design_id": design_id,
@@ -956,11 +1576,33 @@ def extract_fleet_profiles(text: str, owner: int | None = None) -> dict[str, Any
             mia_origin=mia_origin,
             combat_fleet_ids=combat_fleet_ids,
         )
+        military_callability = military_fleet_callability(
+            availability=availability,
+            movement=movement,
+            has_current_order=has_current_order,
+        )
+        military_callability["reinforcement_callable_now"] = bool(
+            military_callability["reinforcement_callable_now"]
+            and template is not None
+            and not template["queued_item_handles"]
+        )
         civilian_availability, civilian_availability_reasons = (
             civilian_fleet_availability(
                 ship_class=ship_class,
                 ship_ids=ship_ids,
                 mobile=mobile,
+                movement=movement,
+                mia_origin=mia_origin,
+                combat_fleet_ids=combat_fleet_ids,
+                has_current_order=has_current_order,
+            )
+        )
+        transport_availability, transport_availability_reasons = (
+            transport_fleet_availability(
+                ship_class=ship_class,
+                ship_ids=ship_ids,
+                mobile=mobile,
+                valid_for_combat=valid_for_combat,
                 movement=movement,
                 mia_origin=mia_origin,
                 combat_fleet_ids=combat_fleet_ids,
@@ -1004,12 +1646,9 @@ def extract_fleet_profiles(text: str, owner: int | None = None) -> dict[str, Any
                 "leader_ids": leader_ids,
                 "has_council_leader": has_council_leader,
                 "can_automate_astral_rifts": (
-                    ship_class == SCIENCE_SHIP_CLASS
-                    and not has_council_leader
+                    ship_class == SCIENCE_SHIP_CLASS and not has_council_leader
                 ),
-                "verified_automation_options": sorted(
-                    verified_automation_options
-                ),
+                "verified_automation_options": sorted(verified_automation_options),
                 "military_power": float_scalar(block, "military_power"),
                 "mobile": mobile,
                 "valid_for_combat": valid_for_combat,
@@ -1023,6 +1662,16 @@ def extract_fleet_profiles(text: str, owner: int | None = None) -> dict[str, Any
                 ),
                 "attack_verified_family": (
                     mobile and ship_class == MILITARY_SHIP_CLASS
+                ),
+                "bombardment_verified_family": (
+                    mobile and ship_class == MILITARY_SHIP_CLASS
+                ),
+                "landing_verified_family": (
+                    mobile and ship_class == TRANSPORT_SHIP_CLASS
+                ),
+                "ground_support_stance": (
+                    quoted_value(block, "ground_support_stance")
+                    or bare_scalar(block, "ground_support_stance")
                 ),
                 "repair_verified_family": (
                     mobile and ship_class == MILITARY_SHIP_CLASS
@@ -1045,17 +1694,28 @@ def extract_fleet_profiles(text: str, owner: int | None = None) -> dict[str, Any
                 "has_current_order": has_current_order,
                 "availability": availability,
                 "availability_reasons": availability_reasons,
-                "ai_callable_now": availability == "AVAILABLE",
-                "maintenance_callable_now": (
-                    availability == "AVAILABLE" and not has_current_order
+                **military_callability,
+                "callable_capabilities": {
+                    "move": military_callability["move_callable_now"],
+                    "attack": military_callability["attack_callable_now"],
+                    "bombard": military_callability["attack_callable_now"],
+                    "land_armies": transport_availability == "AVAILABLE",
+                    "reinforce": military_callability["reinforcement_callable_now"],
+                    "repair": military_callability["maintenance_callable_now"],
+                    "upgrade": military_callability["maintenance_callable_now"],
+                },
+                "ai_callable_now": bool(
+                    military_callability["move_callable_now"]
+                    or military_callability["attack_callable_now"]
+                    or military_callability["reinforcement_callable_now"]
+                    or transport_availability == "AVAILABLE"
                 ),
                 "civilian_availability": civilian_availability,
-                "civilian_availability_reasons": (
-                    civilian_availability_reasons
-                ),
-                "civilian_callable_now": (
-                    civilian_availability == "AVAILABLE"
-                ),
+                "civilian_availability_reasons": (civilian_availability_reasons),
+                "civilian_callable_now": (civilian_availability == "AVAILABLE"),
+                "landing_availability": transport_availability,
+                "landing_availability_reasons": transport_availability_reasons,
+                "landing_callable_now": transport_availability == "AVAILABLE",
             }
         )
 
@@ -1081,9 +1741,7 @@ def extract_fleet_profiles(text: str, owner: int | None = None) -> dict[str, Any
             if value != INVALID_OBJECT_ID
         ]
         owned_colonies = sorted(owned_planet_ids.intersection(planet_ids))
-        owned_starbases = sorted(
-            owned_starbase_indices.intersection(starbase_indices)
-        )
+        owned_starbases = sorted(owned_starbase_indices.intersection(starbase_indices))
         primary_stellar_planet_id = next(
             (
                 planet_id
@@ -1132,9 +1790,7 @@ def extract_fleet_profiles(text: str, owner: int | None = None) -> dict[str, Any
                     {
                         "target_system_object": system_id,
                         "target_kind": "galactic_object",
-                        "target_authority": (
-                            "paired_e02c_target_system_mapping"
-                        ),
+                        "target_authority": ("paired_e02c_target_system_mapping"),
                     }
                     if owner in discovery
                     and not starbase_indices
@@ -1168,24 +1824,65 @@ def extract_fleet_profiles(text: str, owner: int | None = None) -> dict[str, Any
             }
         )
 
-    hostile_targets = hostile_fleet_targets(
+    resolved_hostile_targets = hostile_fleet_targets(
         owner=owner,
         country_block=country,
         countries=countries,
         fleets=fleets,
+        systems=systems,
+        known_systems=strategic_known_system_ids,
+        active_war_opponent_ids=active_war_opponent_ids,
+        relations=relations,
+    )
+    hostile_targets, blocked_hostile_targets = attack_target_routes(
+        owner=owner,
+        country_block=country,
+        countries=countries,
+        fleets=fleets,
+        systems=systems,
+        known_systems=strategic_known_system_ids,
+        relations=relations,
+        active_war_opponent_ids=active_war_opponent_ids,
+        owned_fleets=fleet_output,
+        targets=resolved_hostile_targets,
     )
     return {
         "schema": "iag.stellaris_fleet_state.v1",
         "schema_version": 1,
         "game_date": quoted_value(text, "date"),
         "owner_country_id": owner,
+        "country_stockpile": resource_values(
+            optional_section(
+                optional_section(
+                    optional_section(country, "modules"),
+                    "standard_economy_module",
+                ),
+                "resources",
+            )
+        ),
         "player_country_ids": players,
+        "active_war_ids": active_war_ids,
+        "active_war_opponent_country_ids": sorted(active_war_opponent_ids),
         "player_ship_design_ids": integer_values(
             optional_section(country, "ship_design_collection"),
             "ship_design",
         ),
         "fleets": fleet_output,
         "hostile_targets": hostile_targets,
+        "blocked_hostile_targets": blocked_hostile_targets,
+        "attack_target_summary": {
+            "reachable": len(hostile_targets),
+            "blocked": len(blocked_hostile_targets),
+            "current_sensor_contacts": sum(
+                target.get("current_sensor_contact") is True
+                for target in resolved_hostile_targets
+            ),
+            "known_active_war_starbases": sum(
+                target.get("active_war_target") is True
+                and target.get("ship_class") == "shipclass_starbase"
+                for target in resolved_hostile_targets
+            ),
+        },
         "fleet_templates": templates,
         "shipyards": shipyard_output,
         "systems": system_output,
@@ -1211,6 +1908,14 @@ def selected_fleet_reinforcement(
         "player_controllable", False
     ):
         raise ValueError(f"Fleet {fleet_id} is not a controllable military fleet.")
+    if not fleet.get(
+        "reinforcement_callable_now",
+        fleet.get("ai_callable_now", False),
+    ):
+        raise ValueError(
+            f"Fleet {fleet_id} is not reinforcement-callable: "
+            f"{fleet.get('availability')}."
+        )
     fleet_template_id = fleet.get("fleet_template_id")
     if fleet_template_id is None:
         raise ValueError(f"Fleet {fleet_id} has no save-backed fleet template.")
@@ -1357,9 +2062,7 @@ def selected_new_fleet_reinforcement(
 
     design_targets = list(template.get("design_targets", []))
     foreign_targets = [
-        item
-        for item in design_targets
-        if int(item["design_id"]) != design_id
+        item for item in design_targets if int(item["design_id"]) != design_id
     ]
     if foreign_targets:
         raise ValueError(
@@ -1392,11 +2095,7 @@ def selected_new_fleet_reinforcement(
     )
     composition = list(fleet.get("fleet_composition", [])) if fleet else []
     current_row = next(
-        (
-            item
-            for item in composition
-            if int(item["design_id"]) == design_id
-        ),
+        (item for item in composition if int(item["design_id"]) == design_id),
         None,
     )
     current_count = int(current_row["current_count"]) if current_row else 0
@@ -1453,7 +2152,10 @@ def selected_move(
         raise ValueError(f"Fleet {source_fleet} is not owned by the selected country.")
     if not fleet["d32c_move_verified_family"]:
         raise ValueError(f"Fleet {source_fleet} is not in the verified d32c family.")
-    if not fleet["ai_callable_now"]:
+    if not fleet.get(
+        "move_callable_now",
+        fleet.get("ai_callable_now", False),
+    ):
         raise ValueError(
             f"Fleet {source_fleet} is not callable: {fleet['availability']}."
         )
@@ -1474,11 +2176,7 @@ def selected_move(
         )
     current_system_id = fleet["movement"]["current_system_id"]
     current_system = next(
-        (
-            item
-            for item in profile["systems"]
-            if item["system_id"] == current_system_id
-        ),
+        (item for item in profile["systems"] if item["system_id"] == current_system_id),
         None,
     )
     return {
@@ -1497,8 +2195,7 @@ def selected_move(
             "owned_by_owner": system.get("owned_by_owner", False),
             "adjacent_to_source": bool(
                 current_system
-                and destination_system
-                in current_system.get("hyperlane_neighbors", [])
+                and destination_system in current_system.get("hyperlane_neighbors", [])
             ),
         },
         "target": {
@@ -1528,7 +2225,10 @@ def selected_coordinate_move(
         raise ValueError(f"Fleet {source_fleet} is not owned by the selected country.")
     if not fleet.get("coordinate_move_verified_family", False):
         raise ValueError(f"Fleet {source_fleet} is not in the verified 4f2c family.")
-    if not fleet["ai_callable_now"]:
+    if not fleet.get(
+        "move_callable_now",
+        fleet.get("ai_callable_now", False),
+    ):
         raise ValueError(
             f"Fleet {source_fleet} is not callable: {fleet['availability']}."
         )
@@ -1538,7 +2238,9 @@ def selected_coordinate_move(
 
     x_fixed = coordinate_to_fixed(x, "x")
     y_fixed = coordinate_to_fixed(y, "y")
-    maximum_fixed = coordinate_to_fixed(maximum_abs_coordinate, "maximum_abs_coordinate")
+    maximum_fixed = coordinate_to_fixed(
+        maximum_abs_coordinate, "maximum_abs_coordinate"
+    )
     if abs(x_fixed) > maximum_fixed or abs(y_fixed) > maximum_fixed:
         raise ValueError(
             "The requested coordinate exceeds the player-configured in-system bound."
@@ -1580,7 +2282,10 @@ def selected_attack(
         raise ValueError(f"Fleet {source_fleet} is not owned by the selected country.")
     if not source.get("attack_verified_family", False):
         raise ValueError(f"Fleet {source_fleet} is not in the verified 6b33 family.")
-    if not source.get("ai_callable_now", False):
+    if not source.get(
+        "attack_callable_now",
+        source.get("ai_callable_now", False),
+    ):
         raise ValueError(
             f"Fleet {source_fleet} is not callable: {source['availability']}."
         )
@@ -1596,6 +2301,25 @@ def selected_attack(
         raise ValueError(
             f"Fleet {target_fleet} is not a uniquely resolved current hostile target."
         )
+    reachable_from = target.get("reachable_from_fleet_ids")
+    if isinstance(reachable_from, list) and source_fleet not in reachable_from:
+        source_route = next(
+            (
+                route
+                for route in target.get("route_evidence", [])
+                if source_fleet in route.get("source_fleet_ids", [])
+            ),
+            None,
+        )
+        status = (
+            source_route.get("status")
+            if isinstance(source_route, dict)
+            else "unreachable_in_current_save"
+        )
+        raise ValueError(
+            f"Fleet {target_fleet} is not reachable from source fleet "
+            f"{source_fleet}: {status}."
+        )
     return {
         "action": "attack_fleet",
         "source_fleet": {
@@ -1603,9 +2327,7 @@ def selected_attack(
             "name_key": source.get("name_key"),
             "display_name_hint": source.get("display_name_hint"),
             "military_power": source.get("military_power"),
-            "current_system_id": source.get("movement", {}).get(
-                "current_system_id"
-            ),
+            "current_system_id": source.get("movement", {}).get("current_system_id"),
         },
         "hostile_target": dict(target),
         "target": {
@@ -1655,9 +2377,7 @@ def selected_fleet_repair(
             "fleet_id": fleet_id,
             "name_key": fleet.get("name_key"),
             "display_name_hint": fleet.get("display_name_hint"),
-            "current_system_id": fleet.get("movement", {}).get(
-                "current_system_id"
-            ),
+            "current_system_id": fleet.get("movement", {}).get("current_system_id"),
             "durability_summary": fleet.get("durability_summary"),
         },
         "target": {
@@ -1684,8 +2404,7 @@ def selected_fleet_upgrade(
         (
             item
             for item in profile.get("shipyards", [])
-            if int(item["shipyard_build_queue_id"])
-            == int(shipyard_build_queue_id)
+            if int(item["shipyard_build_queue_id"]) == int(shipyard_build_queue_id)
         ),
         None,
     )
@@ -1699,9 +2418,7 @@ def selected_fleet_upgrade(
             "fleet_id": fleet_id,
             "name_key": fleet.get("name_key"),
             "display_name_hint": fleet.get("display_name_hint"),
-            "current_system_id": fleet.get("movement", {}).get(
-                "current_system_id"
-            ),
+            "current_system_id": fleet.get("movement", {}).get("current_system_id"),
             "upgradeable_ship_count": int(fleet["upgradeable_ship_count"]),
         },
         "destination_shipyard": dict(shipyard),
@@ -1740,9 +2457,8 @@ def selected_ship_automation(
     allowed = frozenset(fleet.get("verified_automation_options", []))
     unsupported = [option for option in normalized if option not in allowed]
     if unsupported:
-        if (
-            unsupported[0] == "AUTOMATION_ASTRAL_RIFTS"
-            and fleet.get("has_council_leader")
+        if unsupported[0] == "AUTOMATION_ASTRAL_RIFTS" and fleet.get(
+            "has_council_leader"
         ):
             raise ValueError(
                 "A science ship led by a council member cannot automate Astral Rifts."
@@ -1804,16 +2520,11 @@ def selected_construction_ship_starbase(
         )
     current_system_id = fleet.get("movement", {}).get("current_system_id")
     current_system = next(
-        (
-            item
-            for item in profile["systems"]
-            if item["system_id"] == current_system_id
-        ),
+        (item for item in profile["systems"] if item["system_id"] == current_system_id),
         None,
     )
-    if (
-        current_system is None
-        or destination_system not in current_system.get("hyperlane_neighbors", [])
+    if current_system is None or destination_system not in current_system.get(
+        "hyperlane_neighbors", []
     ):
         raise ValueError(
             "The first autonomous outpost release only permits an adjacent system."

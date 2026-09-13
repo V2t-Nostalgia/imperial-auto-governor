@@ -30,10 +30,24 @@ def vanilla_content_pack_root() -> Path:
     return project_root() / "content_packs" / "vanilla_4_4"
 
 
-def economy_governance_root() -> Path:
-    """Locate economy-governance resources in source and frozen builds."""
-
-    relative = Path("iag") / "applications" / "economy_governance"
+def application_root(application_id: str) -> Path:
+    """Locate one built-in Application's resources in source and frozen builds."""
+    relative = Path("iag") / "applications" / application_id
     if getattr(sys, "_MEIPASS", None):
         return project_root() / relative
     return project_root() / "src" / relative
+
+
+def economy_governance_root() -> Path:
+    """Locate economy-governance resources in source and frozen builds."""
+    return application_root("economy_governance")
+
+
+def fleet_operations_root() -> Path:
+    """Locate fleet-operations resources in source and frozen builds."""
+    return application_root("fleet_operations")
+
+
+def research_strategy_root() -> Path:
+    """Locate research-strategy resources in source and frozen builds."""
+    return application_root("research_strategy")

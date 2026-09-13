@@ -5,11 +5,16 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, ClassVar
 
 from iag.core.conversation_store import ConversationStore, now_iso
+from iag.core.resource_ledger import (
+    ResourceReservationError,
+    ResourceReservationLedger,
+)
 from iag.infrastructure.research.research_tools import ResearchClient
 from iag.stellaris.execution.iag_supervisor import (
     StaleSourceSaveError,
@@ -30,6 +35,7 @@ from iag.stellaris.state.save_ingest import (
     review_interval_months,
     save_manifest_revision,
 )
+from iag.stellaris.state.world_snapshot import WorldSnapshot, WorldStateService
 
 from .planner import (
     CAPABILITIES_PATH,
@@ -581,6 +587,12 @@ class AgentToolError(RuntimeError):
 class AgentToolbox:
     """A bounded serial batch of model-selected, host-confirmed construction clicks."""
 
+    # _load_lock performs the one-time reconciliation before either result is
+    # exposed, so concurrent callers share one initialized turn snapshot.
+    parallel_read_tools: ClassVar[frozenset[str]] = frozenset(
+        {"inspect_empire_state", "list_legal_construction_candidates"}
+    )
+
     def __init__(
         self,
         config: dict[str, Any],
@@ -588,6 +600,8 @@ class AgentToolbox:
         *,
         allow_execute: bool,
         trigger: str,
+        world_snapshot: WorldSnapshot | None = None,
+        world_state_service: WorldStateService | None = None,
         execute_fn: Callable[
             [Path, dict[str, Any]],
             dict[str, Any],
@@ -598,6 +612,9 @@ class AgentToolbox:
         self.allow_execute = allow_execute
         self.trigger = trigger
         self.execute_fn = execute_fn
+        self.world_snapshot = world_snapshot
+        self.world_state_service = world_state_service
+        self._load_lock = threading.RLock()
         self.runtime_root = Path(self.config["runtime_root"]).expanduser()
         configured_runs = Path(
             self.config.get("runs_root", self.runtime_root / "runs")
@@ -658,6 +675,7 @@ class AgentToolbox:
             pending_executions[0] if pending_executions else None
         )
         self.execution_reconciliation: dict[str, Any] | None = None
+        self.resource_reservations: dict[str, Any] | None = None
         self.execution_blocked = bool(pending_executions) and (
             self.inconclusive_rewrite_policy == "block_until_save"
         )
@@ -756,9 +774,37 @@ class AgentToolbox:
             raise AgentToolError(
                 "当前战役会话尚未绑定房主存档，不能读取状态或执行建设。"
             )
+        if self.world_snapshot is not None:
+            return self.world_snapshot.path
         return resolve_current_save(
             self.config,
             expected_campaign_id=str(self.campaign_id),
+        )
+
+    def _pinned_snapshot(self) -> WorldSnapshot | None:
+        if self.world_snapshot is not None:
+            return self.world_snapshot
+        if self.world_state_service is None:
+            return None
+        if not self.campaign_id:
+            raise AgentToolError(
+                "当前战役会话尚未绑定房主存档，不能读取状态或执行建设。"
+            )
+        self.world_snapshot = self.world_state_service.pin(
+            self.config,
+            expected_campaign_id=str(self.campaign_id),
+        )
+        return self.world_snapshot
+
+    def assert_world_snapshot_current(self) -> None:
+        snapshot = self.world_snapshot
+        service = self.world_state_service
+        if snapshot is None or service is None:
+            return
+        service.assert_current(
+            snapshot,
+            self.config,
+            expected_campaign_id=(str(self.campaign_id) if self.campaign_id else None),
         )
 
     def _review_interval_months(self) -> int:
@@ -771,12 +817,21 @@ class AgentToolbox:
         )
 
     def _load(self) -> None:
-        if self.snapshot is not None:
-            return
-        save_path = self._current_save_path()
-        self.snapshot = extract_game_state(
-            load_gamestate(save_path),
-            save_path=save_path,
+        with self._load_lock:
+            if self.snapshot is not None:
+                return
+            self._load_unlocked()
+
+    def _load_unlocked(self) -> None:
+        pinned = self._pinned_snapshot()
+        save_path = pinned.path if pinned is not None else self._current_save_path()
+        self.snapshot = (
+            pinned.economy_state()
+            if pinned is not None
+            else extract_game_state(
+                load_gamestate(save_path),
+                save_path=save_path,
+            )
         )
         upload_manifest = read_manifest(self.config) or {}
         source_save = self.snapshot.get("source_save", {})
@@ -797,6 +852,7 @@ class AgentToolbox:
             self.snapshot,
         )
         self._reconcile_pending_execution()
+        self._refresh_resource_reservations()
         self.candidates = build_candidates(
             self.snapshot,
             self.capabilities,
@@ -928,7 +984,85 @@ class AgentToolbox:
                 pending.get("action", {}),
                 pending.get("construction_cost", {}),
                 sequence=index,
+                reserve_resources=False,
             )
+
+    def _resource_ledger(self) -> ResourceReservationLedger:
+        return ResourceReservationLedger(self.store)
+
+    @staticmethod
+    def _resource_reservation_id(run_id: str, source_sha256: str) -> str:
+        return f"economy_governance:{run_id}:{source_sha256[:12]}"
+
+    def _refresh_resource_reservations(self) -> None:
+        """Project all Application reservations onto the current stockpile."""
+        assert self.snapshot is not None
+        source_save = self.snapshot.get("source_save", {})
+        source_sha256 = str(source_save.get("sha256") or "")
+        country = self.snapshot.setdefault("country", {})
+        stockpile = country.setdefault("stockpile", {})
+        authoritative = dict(stockpile) if isinstance(stockpile, dict) else {}
+        country["authoritative_stockpile"] = authoritative
+        try:
+            ledger = self._resource_ledger()
+            for pending in self.pending_execution_confirmations:
+                costs = pending.get("construction_cost", {})
+                if not isinstance(costs, dict) or not costs:
+                    continue
+                pending_run_id = str(pending.get("run_id") or "pending")
+                ledger.reserve(
+                    reservation_id=self._resource_reservation_id(
+                        pending_run_id,
+                        source_sha256,
+                    ),
+                    application_id="economy_governance",
+                    action=str(
+                        pending.get("action", {}).get("type") or "construction"
+                    ),
+                    source_save_sha256=source_sha256,
+                    source_game_date=str(self.snapshot.get("game_date") or "") or None,
+                    stockpile=authoritative,
+                    costs=costs,
+                )
+            self.resource_reservations = ledger.apply_to_stockpile(
+                source_save_sha256=source_sha256,
+                stockpile=stockpile,
+            )
+        except ResourceReservationError as error:
+            self.execution_blocked = True
+            raise AgentToolError(str(error)) from error
+
+    def _reserve_prepared_resources(self, run_id: str) -> str | None:
+        assert self.snapshot is not None
+        candidate = self.prepared_candidate
+        if not isinstance(candidate, dict):
+            raise AgentToolError("The prepared construction metadata is missing.")
+        costs = candidate.get("construction_cost", {})
+        if not isinstance(costs, dict) or not costs:
+            return None
+        source_sha256 = str(
+            self.snapshot.get("source_save", {}).get("sha256") or ""
+        )
+        authoritative = self.snapshot.get("country", {}).get(
+            "authoritative_stockpile",
+            self.snapshot.get("country", {}).get("stockpile", {}),
+        )
+        reservation_id = self._resource_reservation_id(run_id, source_sha256)
+        try:
+            self._resource_ledger().reserve(
+                reservation_id=reservation_id,
+                application_id="economy_governance",
+                action=str(candidate.get("action", {}).get("type") or "construction"),
+                source_save_sha256=source_sha256,
+                source_game_date=str(self.snapshot.get("game_date") or "") or None,
+                stockpile=(
+                    dict(authoritative) if isinstance(authoritative, dict) else {}
+                ),
+                costs=costs,
+            )
+        except ResourceReservationError as error:
+            raise AgentToolError(str(error)) from error
+        return reservation_id
 
     def _batch_status(self) -> dict[str, Any]:
         completed = len(self.successful_executions)
@@ -987,6 +1121,7 @@ class AgentToolbox:
         construction_cost: Any,
         *,
         sequence: int = 0,
+        reserve_resources: bool = True,
     ) -> None:
         """Reserve one submitted command in the in-memory save projection."""
         assert self.snapshot is not None
@@ -1062,13 +1197,20 @@ class AgentToolbox:
         construction["queue_depth"] = len(queued_ids)
         construction["has_pending_construction"] = True
 
-        stockpile = self.snapshot.get("country", {}).get("stockpile", {})
-        normalized_cost = construction_cost if isinstance(construction_cost, dict) else {}
-        for resource, amount in normalized_cost.items():
-            current = stockpile.get(resource)
-            if isinstance(current, (int, float)) and isinstance(amount, (int, float)):
-                remaining = max(float(current) - float(amount), 0.0)
-                stockpile[resource] = int(remaining) if remaining.is_integer() else remaining
+        if reserve_resources:
+            stockpile = self.snapshot.get("country", {}).get("stockpile", {})
+            normalized_cost = (
+                construction_cost if isinstance(construction_cost, dict) else {}
+            )
+            for resource, amount in normalized_cost.items():
+                current = stockpile.get(resource)
+                if isinstance(current, (int, float)) and isinstance(
+                    amount, (int, float)
+                ):
+                    remaining = max(float(current) - float(amount), 0.0)
+                    stockpile[resource] = (
+                        int(remaining) if remaining.is_integer() else remaining
+                    )
 
     def _reserve_successful_candidate(
         self,
@@ -1197,6 +1339,7 @@ class AgentToolbox:
             "observed_at": now_iso(),
             "state": state,
             "data_quality": self.snapshot.get("data_quality", {}),
+            "resource_reservations": self.resource_reservations,
             "batch": self._batch_status(),
             "execution_channel": self._execution_channel_status(),
         }
@@ -1412,6 +1555,10 @@ class AgentToolbox:
             "construction_cost": candidate.get("construction_cost", {}),
             "source_game_date": self.snapshot.get("game_date"),
             "source_save_sha256": source_save.get("sha256"),
+            "resource_reservation_id": self._resource_reservation_id(
+                run_id,
+                str(source_save.get("sha256") or ""),
+            ),
             "source_save_modified_at": source_save.get("modified_at"),
             "execution_started_at": result.get("started_at"),
             "observation_finished_at": result.get("finished_at") or now_iso(),
@@ -1475,27 +1622,39 @@ class AgentToolbox:
         actual_run_id = run_id
         refreshed_from: str | None = None
         refresh_reason: str | None = None
+        resource_reservation_id: str | None = None
         self.executed = True
         self.execution_attempts += 1
         try:
             # Recheck the live campaign binding immediately before touching the game.
             self._current_save_path()
+            resource_reservation_id = self._reserve_prepared_resources(actual_run_id)
             result = self.execute_fn(
                 self.runs_root / actual_run_id,
                 self.config,
             )
         except StaleSourceSaveError as error:
+            if resource_reservation_id is not None:
+                self._resource_ledger().release(resource_reservation_id)
+                resource_reservation_id = None
             refresh_reason = str(error)
             try:
                 refreshed_from, actual_run_id = self._refresh_prepared_run(refresh_reason)
+                resource_reservation_id = self._reserve_prepared_resources(
+                    actual_run_id
+                )
                 result = self.execute_fn(
                     self.runs_root / actual_run_id,
                     self.config,
                 )
             except Exception:
+                if resource_reservation_id is not None:
+                    self._resource_ledger().release(resource_reservation_id)
                 self.execution_blocked = True
                 raise
         except Exception:
+            if resource_reservation_id is not None:
+                self._resource_ledger().release(resource_reservation_id)
             self.execution_blocked = True
             raise
 
@@ -1509,6 +1668,12 @@ class AgentToolbox:
             and result.get("telemetry", {}).get("carrier_seen") is True
             and result.get("telemetry", {}).get("rewritten") is True
         )
+        if (
+            resource_reservation_id is not None
+            and not success
+            and not awaiting_save_confirmation
+        ):
+            self._resource_ledger().release(resource_reservation_id)
         if success:
             candidate = self.prepared_candidate
             if candidate is None:
@@ -1521,6 +1686,7 @@ class AgentToolbox:
                 "candidate_id": candidate.get("candidate_id"),
                 "action": candidate.get("action"),
                 "construction_cost": candidate.get("construction_cost"),
+                "resource_reservation_id": resource_reservation_id,
             }
             self.successful_executions.append(completed)
             self._reserve_successful_candidate(candidate)

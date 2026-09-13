@@ -33,6 +33,7 @@ class EndpointProbeResult:
     status: ProbeStatus
     detail: str
     checked_at: str
+    probe_url: str | None = None
     http_status: int | None = None
     model_found: bool | None = None
     discovered_model_count: int = 0
@@ -74,9 +75,15 @@ def _bounded_detail(raw: bytes) -> str:
 
 
 def _model_records(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, dict) or not isinstance(value.get("data"), list):
+    if isinstance(value, list):
+        raw_records = value
+    elif isinstance(value, dict) and isinstance(value.get("data"), list):
+        raw_records = value["data"]
+    elif isinstance(value, dict) and isinstance(value.get("models"), list):
+        raw_records = value["models"]
+    else:
         return []
-    return [item for item in value["data"] if isinstance(item, dict)]
+    return [item for item in raw_records if isinstance(item, dict)]
 
 
 def _selected_metadata(record: dict[str, Any]) -> dict[str, Any]:
@@ -99,6 +106,7 @@ def _selected_metadata(record: dict[str, Any]) -> dict[str, Any]:
 def _http_failure(
     endpoint: ModelEndpoint,
     error: urllib.error.HTTPError,
+    probe_url: str,
 ) -> EndpointProbeResult:
     status_code = int(error.code)
     retry_after = _retry_after_seconds(error.headers)
@@ -117,6 +125,7 @@ def _http_failure(
         status=status,
         detail=_bounded_detail(error.read()),
         checked_at=_now_iso(),
+        probe_url=probe_url,
         http_status=status_code,
         retry_after_seconds=retry_after,
     )
@@ -136,12 +145,22 @@ def probe_endpoint(
             checked_at=_now_iso(),
         )
 
-    headers = api_headers(endpoint)
+    probe_url = api_url(endpoint, endpoint.models_path)
+    try:
+        headers = api_headers(endpoint)
+    except RuntimeError as error:
+        return EndpointProbeResult(
+            endpoint_id=endpoint.endpoint_id,
+            status="authentication_failed",
+            detail=str(error),
+            checked_at=_now_iso(),
+            probe_url=probe_url,
+        )
     headers.pop("Content-Type", None)
     headers.setdefault("Accept", "application/json")
     headers.setdefault("User-Agent", "ImperialAutoGovernor/0.6")
     request = urllib.request.Request(
-        api_url(endpoint, endpoint.models_path),
+        probe_url,
         headers=headers,
         method="GET",
     )
@@ -153,7 +172,7 @@ def probe_endpoint(
             payload = json.loads(raw.decode("utf-8"))
             records = _model_records(payload)
     except urllib.error.HTTPError as error:
-        return _http_failure(endpoint, error)
+        return _http_failure(endpoint, error, probe_url)
     except (
         urllib.error.URLError,
         TimeoutError,
@@ -164,6 +183,7 @@ def probe_endpoint(
             status="unreachable",
             detail=f"{type(error).__name__}: {error}",
             checked_at=_now_iso(),
+            probe_url=probe_url,
         )
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
         return EndpointProbeResult(
@@ -171,6 +191,7 @@ def probe_endpoint(
             status="reachable_unconfirmed",
             detail=f"The models route responded, but its payload was unusable: {error}",
             checked_at=_now_iso(),
+            probe_url=probe_url,
             http_status=200,
         )
 
@@ -193,6 +214,7 @@ def probe_endpoint(
             else "The endpoint responded, but the configured model was not listed."
         ),
         checked_at=_now_iso(),
+        probe_url=probe_url,
         http_status=200,
         model_found=found,
         discovered_model_count=len(ids),

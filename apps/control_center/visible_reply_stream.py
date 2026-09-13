@@ -17,19 +17,22 @@ ALLOWED_EVENT_TYPES = {
     "assistant_final",
     "turn_finished",
 }
+APPLICATION_PAYLOAD_KEYS = {"application_id", "application_display_name"}
 ALLOWED_PAYLOAD_KEYS = {
-    "turn_started": {"trigger"},
-    "user_message": {"id", "role", "kind", "content"},
-    "assistant_started": {"round_index"},
-    "assistant_delta": {"round_index", "delta"},
+    "turn_started": {"trigger"} | APPLICATION_PAYLOAD_KEYS,
+    "user_message": {"id", "role", "kind", "content"}
+    | APPLICATION_PAYLOAD_KEYS,
+    "assistant_started": {"round_index"} | APPLICATION_PAYLOAD_KEYS,
+    "assistant_delta": {"round_index", "delta"} | APPLICATION_PAYLOAD_KEYS,
     "assistant_final": {
         "id",
         "role",
         "kind",
         "content",
         "round_index",
-    },
-    "turn_finished": {"trigger"},
+    }
+    | APPLICATION_PAYLOAD_KEYS,
+    "turn_finished": {"trigger"} | APPLICATION_PAYLOAD_KEYS,
 }
 
 

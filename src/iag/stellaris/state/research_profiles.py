@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from iag.stellaris.state.planet_profiles import (
     find_braced_section,
     parse_numeric_map,
 )
+
+if TYPE_CHECKING:
+    from iag.stellaris.state.state_index import WorldStateIndex
 
 RESEARCH_AREAS = ("physics", "society", "engineering")
 TECHNOLOGY_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -135,9 +138,14 @@ def extract_research_profile(
     owner: int | None = None,
     *,
     technology_area: Callable[[str], str | None] | None = None,
+    state_index: WorldStateIndex | None = None,
 ) -> dict[str, Any]:
     """Return authoritative research queues and legal save candidates."""
-    players = _player_countries(text)
+    players = (
+        state_index.player_countries()
+        if state_index is not None
+        else _player_countries(text)
+    )
     if owner is None:
         if len(players) != 1:
             raise ValueError(
@@ -145,7 +153,11 @@ def extract_research_profile(
             )
         owner = players[0]
 
-    countries = parse_numeric_map(find_braced_section(text, "country").strip())
+    countries = (
+        state_index.numeric_map("country")
+        if state_index is not None
+        else parse_numeric_map(find_braced_section(text, "country").strip())
+    )
     country = countries.get(owner)
     if country is None:
         raise ValueError(f"Country {owner} does not exist in this save.")

@@ -211,6 +211,40 @@ class ModelPoolConsoleTests(unittest.TestCase):
         self.assertEqual(endpoint_after_reload.model_context_window_tokens, 128_000)
         self.assertEqual(endpoint_after_reload.api_key.get_secret_value(), "official-secret")
 
+    def test_endpoint_model_replacement_migrates_referencing_profiles(self) -> None:
+        current_pool = self.service.public_model_config()["model_pools"][0]
+        current_endpoint = current_pool["endpoints"][0]
+        current_endpoint.update(
+            {
+                "model_id": "replacement-model",
+                "model": "replacement-provider-model",
+                "base_url": "https://replacement.example.test/v1",
+            }
+        )
+
+        public = self.service.save_model_pools({"model_pools": [current_pool]})
+
+        profile = next(
+            item
+            for item in public["application_model_profiles"]
+            if item["profile_id"] == "economy-default"
+        )
+        self.assertEqual(profile["model_id"], "replacement-model")
+        self.assertEqual(
+            public["profile_migrations"],
+            [
+                {
+                    "profile_id": "economy-default",
+                    "pool_id": "deepseek",
+                    "from_model_id": "deepseek-chat",
+                    "to_model_id": "replacement-model",
+                }
+            ],
+        )
+        reloaded = RuntimeConfig.load(self.path).snapshot()
+        self.assertEqual(reloaded.application_profile.model_id, "replacement-model")
+        self.assertEqual(reloaded.endpoint.model, "replacement-provider-model")
+
     def test_application_can_select_second_logical_model_in_pool(self) -> None:
         current_pool = self.service.public_model_config()["model_pools"][0]
         reasoner = endpoint("reasoner", 1, "reasoner-secret")
@@ -265,6 +299,35 @@ class ModelPoolConsoleTests(unittest.TestCase):
         self.assertEqual(saved["messages_path"], "/v1/messages")
         self.assertTrue(public["conversation_supported"])
         self.assertNotIn("anthropic-secret", json.dumps(public))
+
+    def test_specialist_profile_can_explicitly_follow_economy_model(self) -> None:
+        public = self.service.save_application_model_profile(
+            {
+                "profile_id": "fleet-shared",
+                "display_name": "舰队沿用经济模型",
+                "application_id": "fleet_operations",
+                "pool_id": "deepseek",
+                "model_id": "deepseek-chat",
+                "inherit_model_from_application_id": "economy_governance",
+            }
+        )
+
+        profile = next(
+            item
+            for item in public["application_model_profiles"]
+            if item["profile_id"] == "fleet-shared"
+        )
+        self.assertEqual(
+            profile["inherit_model_from_application_id"],
+            "economy_governance",
+        )
+        route = next(
+            item
+            for item in self.service.application_agent_routes()
+            if item["application_id"] == "fleet_operations"
+        )
+        self.assertEqual(route["binding_mode"], "inherited")
+        self.assertEqual(route["model_source_profile_id"], "economy-default")
 
 
 if __name__ == "__main__":

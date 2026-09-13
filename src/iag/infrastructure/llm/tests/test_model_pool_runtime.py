@@ -136,6 +136,7 @@ class ModelPoolRuntimeTests(unittest.TestCase):
                 status="available",
                 detail="listed",
                 checked_at="2026-08-10T00:00:00+00:00",
+                probe_url="https://cheap.example.test/v1/models",
                 http_status=200,
                 model_found=True,
                 discovered_model_count=2,
@@ -155,6 +156,10 @@ class ModelPoolRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(cheap["status"], "available")
         self.assertEqual(cheap["discovered_model_count"], 2)
+        self.assertEqual(
+            cheap["probe_url"],
+            "https://cheap.example.test/v1/models",
+        )
 
 
 if __name__ == "__main__":

@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>帝国内政代理控制台</title>
-  <link rel="stylesheet" href="styles.css?v=28">
-  <link rel="stylesheet" href="conversation.css?v=26">
+  <link rel="stylesheet" href="styles.css?v=29">
+  <link rel="stylesheet" href="conversation.css?v=30">
   <link rel="stylesheet" href="construction.css">
 </head>
 <body>
@@ -166,7 +166,7 @@
           <span id="autonomy-state" class="status-tag">自动巡检已暂停</span>
         </div>
         <div class="conversation-toolbar">
-          <label>对话对象
+          <label hidden>对话对象
             <select id="conversation-application">
               <option value="economy_governance">帝国经济总管</option>
             </select>
@@ -229,19 +229,37 @@
             </section>
           </div>
         </details>
-        <div id="conversation-log" class="conversation-log" aria-live="polite">
-          <p class="conversation-empty" id="conversation-empty">会话尚未建立。</p>
+        <div class="application-chat-shell">
+          <aside class="application-contact-pane" aria-label="Applications">
+            <div class="application-contact-heading">
+              <span class="kicker">APPLICATIONS</span>
+              <strong>通讯对象</strong>
+            </div>
+            <div id="application-contact-list" class="application-contact-list"></div>
+          </aside>
+          <section class="application-thread-pane">
+            <header class="application-thread-heading">
+              <div>
+                <span class="kicker">PRIVATE THREAD</span>
+                <h3 id="application-thread-title">帝国经济总管</h3>
+              </div>
+              <span id="application-thread-state" class="status-tag">等待消息</span>
+            </header>
+            <div id="conversation-log" class="conversation-log" aria-live="polite">
+              <p class="conversation-empty" id="conversation-empty">会话尚未建立。</p>
+            </div>
+            <div class="conversation-composer">
+              <textarea id="chat-input" rows="3" placeholder="告诉灰风新的战略要求，或询问当前帝国状态。Enter 发送，Shift+Enter 换行。"></textarea>
+              <div class="button-row">
+                <button class="primary" id="send-message">发送</button>
+                <button class="danger" id="stop-button">紧急停止</button>
+                <button id="clear-stop-button" disabled>解除紧急停止</button>
+                <span id="execution-interlock-state" class="status-tag good">执行锁未启用</span>
+              </div>
+            </div>
+            <p class="hint application-thread-hint">当前窗口只写入并显示所选 Application 的私有上下文；联合复盘保留在明确的协调记录中。</p>
+          </section>
         </div>
-        <div class="conversation-composer">
-          <textarea id="chat-input" rows="3" placeholder="告诉灰风新的战略要求，或询问当前帝国状态。Enter 发送，Shift+Enter 换行。"></textarea>
-          <div class="button-row">
-            <button class="primary" id="send-message">发送</button>
-            <button class="danger" id="stop-button">紧急停止</button>
-            <button id="clear-stop-button" disabled>解除紧急停止</button>
-            <span id="execution-interlock-state" class="status-tag good">执行锁未启用</span>
-          </div>
-        </div>
-        <p class="hint">完整记录保存在本地数据库；模型调用会在所选上下文上限内重放历史。实际建设仍受一发式、存档哈希、等长改写和房主确认约束。</p>
       </article>
 
       <article class="panel prompt-panel">
@@ -286,6 +304,7 @@
           <label>Application<select id="application-select"></select></label>
           <label>已保存配置<select id="application-profile-select"></select></label>
           <label class="application-profile-name">配置名称<input id="application-profile-name" type="text" maxlength="120" placeholder="例如：经济治理 · 低成本"></label>
+          <label>模型路由方式<select id="application-model-route-mode"><option value="dedicated">为此 Application 独立指定</option><option value="economy_governance">沿用经济治理当前模型</option></select></label>
           <label>使用模型池<select id="application-pool-select"></select></label>
           <label>池内逻辑模型<select id="application-model-select"></select></label>
         </div>
@@ -325,6 +344,12 @@
           <button id="delete-application-profile" type="button" class="danger-outline">删除配置</button>
           <button id="open-model-catalog" type="button">模型配置面板</button>
         </div>
+        <div class="application-binding-grid fast-advisor-settings">
+          <label>快速参谋模型<select id="fast-advisor-profile"><option value="">不配置，异常直接交给主模型</option></select></label>
+          <label>局部判断超时（秒）<input id="fast-advisor-timeout" type="number" min="5" max="60" step="1" value="60"></label>
+          <div class="button-row"><button id="save-fast-advisor" type="button">保存快速参谋</button></div>
+        </div>
+        <p class="hint">快速参谋只接收已定位的异常、受影响计划片段和相关事实；它只能确认继续、局部修补或整理后升级给主模型。</p>
       </article>
 
       <article class="panel settings-panel execution-settings-panel">
@@ -345,6 +370,11 @@
           </div>
           <label class="check-line"><input id="session-proxy-acknowledged" type="checkbox">我理解会话代理会维护本局可靠流，并会在退出房间前保持代理运行</label>
           <div class="proxy-runtime-detail" id="session-proxy-detail">尚未建立代理进程。</div>
+          <div id="session-proxy-flow-candidates" class="proxy-flow-candidates" hidden>
+            <div class="subpanel-heading"><strong>候选流明细</strong><span class="hint">自动识别失败时可人工确认</span></div>
+            <p class="hint">玩家可以锁定列表中的任意候选四元组；人工路径不检查方向、可靠帧、活跃时间或自动评分。请自行确认目标属于当前多人房间。锁定后仍会执行 actor、serial 与命令校验。</p>
+            <div id="session-proxy-flow-candidate-list" class="proxy-flow-candidate-list"></div>
+          </div>
           <div class="button-row"><button id="start-session-proxy" type="button">进房前启动代理</button><button id="stop-session-proxy" type="button" class="danger-outline">退房后停止代理</button><button id="open-protocol-suite" type="button">协议兼容性验收</button></div>
         </div>
         <label>规划存档最多落后（上传版本数）<input id="maximum-source-save-lag-versions" type="number" min="0" max="24" step="1"></label>
@@ -367,6 +397,12 @@
         <label>最低殖民宜居度（%）<input id="minimum-colonization-habitability" type="number" min="0" max="100" step="1"></label>
         <label class="check-line"><input id="experimental-starbase-tools-enabled" type="checkbox">向模型开放恒星基地升级、模块与建筑工具（实验）</label>
         <label class="check-line"><input id="experimental-starbase-replacement-enabled" type="checkbox">允许替换已有恒星基地模块或建筑（高影响）</label>
+        <label class="check-line"><input id="experimental-invasion-tools-enabled" type="checkbox">向模型开放轨道轰炸、运输舰队登陆与陆军招募（实验）</label>
+        <label>单次陆军招募上限<input id="maximum-army-recruitment-batch" type="number" min="1" max="5" step="1"></label>
+        <label class="check-line"><input id="auto-authorize-recruited-transport-fleets" type="checkbox">自动允许本程序刚招募并由新存档唯一确认的运输舰队登陆</label>
+        <label>战役空间军力安全系数<input id="campaign-space-force-ratio" type="number" min="1" max="5" step="0.05"></label>
+        <label>战役登陆兵力安全系数<input id="campaign-ground-force-ratio" type="number" min="1" max="5" step="0.05"></label>
+        <label>轰炸转登陆破坏度阈值（%）<input id="campaign-bombardment-threshold" type="number" min="0" max="100" step="1"></label>
         <label class="check-line"><input id="experimental-research-tools-enabled" type="checkbox">向模型开放 062d 科技选择工具（实验）</label>
         <label class="check-line"><input id="experimental-research-reselection-enabled" type="checkbox">允许停止当前科技并中途换题（高影响）</label>
         <p class="hint">存档版本容差填 0 表示只接受最新上传版本；默认 2 表示一轮分析期间即使又上传两份新档，原批次仍可继续。<span id="fixed-click-guard-hint">关闭界面校验会保留截图和匹配分数，但不再因分数不足阻止点击，需自行承担误点风险。</span>时效填 0 只关闭墙钟年龄限制；存档哈希和战役绑定仍然有效。</p>
@@ -378,7 +414,11 @@
           <div><span class="kicker">FLEET AUTHORIZATION</span><h2>舰队调用权限</h2></div>
           <span id="fleet-summary-state" class="status-tag">等待存档</span>
         </div>
-        <p class="hint">舰队和民用船由最新同步存档识别。每支新船队默认禁止调用；移动、攻击、编制增援、自动化与工程船建站权限互相独立。增援工具调整的是舰队目标总数，不是立即生成舰船。</p>
+        <label class="check-line fleet-full-delegation">
+          <input id="fleet-full-delegation" type="checkbox">
+          舰队全权托管：允许模型使用所有当前及后续舰队的可授权能力
+        </label>
+        <p class="hint">全权托管只替代逐舰队授权，不会绕过命令族、存档、可达性、军力、资源或执行安全检查。关闭后继续使用下方细粒度权限。增援工具调整的是舰队目标总数，不是立即生成舰船。</p>
         <div id="fleet-permission-list" class="fleet-permission-list"></div>
       </article>
     </section>
@@ -569,6 +609,6 @@
     </div>
   </dialog>
 
-  <script src="app_v2.js?v=28"></script>
+  <script src="app_v2.js?v=30"></script>
 </body>
 </html>

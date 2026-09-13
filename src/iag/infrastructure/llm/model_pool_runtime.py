@@ -53,6 +53,7 @@ class EndpointHealth:
     model_found: bool | None = None
     discovered_model_count: int = 0
     retry_after_seconds: int | None = None
+    probe_url: str | None = None
 
 
 class ModelPoolExhaustedError(RuntimeError):
@@ -325,6 +326,7 @@ class ModelPoolRuntime:
             health.model_found = result.model_found
             health.discovered_model_count = result.discovered_model_count
             health.retry_after_seconds = result.retry_after_seconds
+            health.probe_url = result.probe_url
             cooldown = 0
             if result.status == "rate_limited":
                 endpoint = next(
@@ -397,6 +399,7 @@ class ModelPoolRuntime:
                         "model_found": health.model_found,
                         "discovered_model_count": health.discovered_model_count,
                         "retry_after_seconds": health.retry_after_seconds,
+                        "probe_url": health.probe_url,
                         "cooldown_until": (
                             _utc_iso(cooldown_until)
                             if cooldown_until and cooldown_until > now
