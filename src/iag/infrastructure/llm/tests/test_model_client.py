@@ -511,9 +511,7 @@ class ModelClientTests(unittest.IsolatedAsyncioTestCase):
         def client_factory(**kwargs: Any) -> AsyncOpenAI:
             return AsyncOpenAI(
                 **kwargs,
-                http_client=httpx.AsyncClient(
-                    transport=httpx.MockTransport(handler)
-                ),
+                http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
             )
 
         endpoint = base_endpoint()
@@ -610,9 +608,7 @@ class ModelClientTests(unittest.IsolatedAsyncioTestCase):
         def client_factory(**kwargs: Any) -> AsyncOpenAI:
             return AsyncOpenAI(
                 **kwargs,
-                http_client=httpx.AsyncClient(
-                    transport=httpx.MockTransport(handler)
-                ),
+                http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
             )
 
         endpoint = base_endpoint(provider="responses_compatible")
@@ -683,9 +679,7 @@ class ModelClientTests(unittest.IsolatedAsyncioTestCase):
             AnthropicSDKTransport,
         )
         self.assertIsInstance(
-            transport_from_endpoint(
-                base_endpoint(model_transport="raw_http")
-            ),
+            transport_from_endpoint(base_endpoint(model_transport="raw_http")),
             RawHTTPTransport,
         )
         invalid = base_endpoint().model_copy(
@@ -698,9 +692,7 @@ class ModelClientTests(unittest.IsolatedAsyncioTestCase):
         body = chat_completion_body(
             base_endpoint(),
             [{"role": "user", "content": "hello"}],
-            request_options=base_options(
-                request_body_overrides={"top_p": 0.8}
-            ),
+            request_options=base_options(request_body_overrides={"top_p": 0.8}),
         )
         self.assertEqual(body["top_p"], 0.8)
         self.assertEqual(body["temperature"], 0.2)

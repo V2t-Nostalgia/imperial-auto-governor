@@ -31,4 +31,18 @@ if ($LASTEXITCODE -ne 0) { throw "Failed to install Windows build dependencies."
     (Join-Path $ProjectRoot "apps\control_center\IAGWindowsAgent.spec")
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed." }
 
+$NativeOutput = Join-Path $BuildBase "native-runtime"
+& powershell -ExecutionPolicy Bypass -File `
+    (Join-Path $ScriptRoot "Build-StellarisNativeRuntime.ps1") `
+    -OutputRoot $NativeOutput
+if ($LASTEXITCODE -ne 0) { throw "Native runtime build failed." }
+$PackagedNativeRoot = Join-Path $OutputRoot "IAGWindowsAgent\_internal\native_runtime"
+New-Item -ItemType Directory -Path $PackagedNativeRoot -Force | Out-Null
+Copy-Item -LiteralPath `
+    (Join-Path $NativeOutput "iag_stellaris_native_runtime.dll") `
+    -Destination $PackagedNativeRoot
+Copy-Item -LiteralPath `
+    (Join-Path $NativeOutput "iag_stellaris_native_runtime_loader.exe") `
+    -Destination $PackagedNativeRoot
+
 Write-Host "Windows agent created: $(Join-Path $OutputRoot 'IAGWindowsAgent')"

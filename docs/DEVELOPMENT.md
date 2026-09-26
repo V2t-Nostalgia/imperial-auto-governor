@@ -24,6 +24,34 @@
 5. 把玩家可调整政策放入配置，不写死最低储备或巡检频率。
 6. 在模块自己的 `tests/` 下验证工具隔离、模型绑定、私有历史和执行事实。
 7. 只有确定性验证器通过的 `ActionIntent` 才能进入执行层；多个 Application 的游戏副作用必须经共享执行锁串行化。
+8. Application 通过 `PreparedAction` / `ExecutionBroker` 执行，不得导入 session proxy、
+   packet builder、carrier click 或 native runtime client。manifest 声明 semantic action
+   capability，不声明 transport。
+
+## 添加 Semantic Action
+
+1. 在 `src/iag/stellaris/execution/action_registry.py` 登记稳定动作名、版本、strict/frozen
+   target、风险、验证状态与 semantic capability。
+2. target 只表达游戏语义；wire tag、actor serial、queue object 和 hook 地址属于 backend。
+3. Application/state 层生成并校验候选，Broker 只验证候选身份、权限、snapshot 和 dispatch。
+4. 为每个正式 backend 增加明确 resolver 与机器确认测试。未知 native command 不得进入
+   production registry。
+5. 若动作需要多步，使用 ordered sequence；不要称为 transaction，也不要承诺回滚。
+
+## 添加 Execution Backend
+
+实现 `ExecutionBackend` 的 capability、support、单动作和 ordered sequence contract。
+Backend 返回 typed evidence，公共状态由 Broker 标准化为 `ExecutionResult`。新增
+扩展 `NativeRuntimeBackend` 不得要求 Application 修改业务代码；runtime probe 与
+production backend 必须位于不同目录并采用不同准入标准。当前实机验证动作是
+Linux 4.4.6 的 `stop_research.v1`、`move_fleet.v1`、`attack_fleet.v1`，以及 Windows
+4.4.6 的 `move_fleet.v1`。runtime 自描述的未归类 action 默认进入 `etc`，其中不运行
+自主 Agent。详见
+[`EXECUTION_BROKER.md`](EXECUTION_BROKER.md)。
+
+新增原生动作不得复制 game-loop Hook 或直接调用业务 `Execute()`。动作实现、版本
+binding、Application 归属、严格参数、准入证据与测试清单见
+[`runtime/NATIVE_RUNTIME_ACTION_CONTRIBUTING.md`](runtime/NATIVE_RUNTIME_ACTION_CONTRIBUTING.md)。
 
 ## 添加 Content Pack
 
@@ -47,6 +75,12 @@ apps/host_bridge/tests/
 ```
 
 测试源码应进入 Git；只有测试输出、临时目录和私密 fixture 被 `.gitignore` 排除。公开发行脚本应排除整个测试目录。
+
+仓库级验证命令与 CI 相同：
+
+```bash
+python scripts/validation/run_tests.py --quiet
+```
 
 ## 修改执行链
 

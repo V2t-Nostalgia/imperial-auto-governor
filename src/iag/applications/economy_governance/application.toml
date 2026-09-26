@@ -20,5 +20,10 @@ action_types = [
 ]
 required_platform_capabilities = [
   "stellaris_save_state_v1",
-  "host_inbound_rewrite_v1",
+  "stellaris.execution.v1",
+  "stellaris.action.build_building.v1",
+  "stellaris.action.build_district.v1",
+  "stellaris.action.build_zone.v1",
+  "stellaris.action.upgrade_building.v1",
+  "stellaris.action.replace_building.v1",
 ]

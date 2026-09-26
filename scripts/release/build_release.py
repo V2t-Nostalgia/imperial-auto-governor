@@ -679,9 +679,17 @@ def windows_agent_health(stage: Path) -> list[str]:
     )
     if len(driver_files) < 2:
         raise ReleaseError("The Windows Agent package lacks WinDivert DLL/SYS files.")
+    native_root = stage / "_internal" / "native_runtime"
+    native_files = (
+        native_root / "iag_stellaris_native_runtime.dll",
+        native_root / "iag_stellaris_native_runtime_loader.exe",
+    )
+    if any(not path.is_file() for path in native_files):
+        raise ReleaseError("The Windows Agent package lacks the native runtime.")
     return [
         "packaged Windows Agent health check and specialist prompts: passed",
         "session proxy import and PyDivert DLL/SYS presence: passed",
+        "Windows native runtime DLL and loader presence: passed",
     ]
 
 
@@ -760,6 +768,7 @@ def ubuntu_source_files(files: list[Path]) -> list[Path]:
         "docs/",
         "scripts/deploy/",
         "services/research/",
+        "services/stellaris_native_runtime/",
         "src/",
         "stellaris_mod/",
     )

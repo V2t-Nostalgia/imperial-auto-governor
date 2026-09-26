@@ -42,9 +42,21 @@ Mandate 是主总管授予专业 Agent 的完整、不可变授权文件，包�
 
 ### Execution Broker
 
-Execution Broker 是未来统一的游戏副作用入口。它负责串行化冲突动作、检查候选与权限、锁定载体、调用 Host Bridge，并把网络或存档证据写入账本。模型文本不能直接把动作标记为成功。
+Execution Broker 是统一的游戏副作用入口。它负责校验版本化 semantic action、严格
+target、Application 权限、候选指纹和存档新鲜度，串行化冲突动作，选择 backend，并把
+机器证据标准化为 `iag.core.contracts.ExecutionResult`。模型文本不能直接把动作标记为
+成功。
 
-当前 v0.5.10 的 `iag_supervisor.py`、各 Application 的 `agent_tools.py` 和 `SessionProxyController` 已承担其中一部分职责；后续应在保持行为兼容的前提下逐步抽出独立 Broker，而不是重写已验证链路。
+第一阶段已经新增 `stellaris/execution/action_registry.py` 与 `broker.py`，并把科研执行
+迁移到通用 Broker；`SessionProxyBackend` 保留原路径。native runtime 通过自描述 manifest
+提交 action/version、所属 Application、严格参数、风险与验证状态，Broker 不再为每个
+C++ action 增加 Python dispatch。Linux 4.4.6 已验证科研停止、舰队移动和舰队攻击，
+Windows 4.4.6 已独立验证舰队移动；各平台只公布本 profile 完整支持的动作。尚未确定
+长期领域归属的新 action 进入无自主 Agent 的 `etc` 暂存 Application，最终归类不需要
+修改 Hook。舰队 Application 的其它动作与经济仍保留 v0.5.10 已验证路径，按明确
+allowlist 逐项迁移；这不是重写 packet builders、response correlation 或可靠流。
+Application manifest 只声明 semantic capability，不选择具体 backend。完整边界与迁移约束
+见 [`EXECUTION_BROKER.md`](EXECUTION_BROKER.md)。
 
 ### Resource Reservation Ledger
 

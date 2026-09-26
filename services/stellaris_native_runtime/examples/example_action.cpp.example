@@ -1,0 +1,85 @@
+// Copy this file into actions/<semantic_action>.cpp and replace every example
+// binding only after a live trace proves the native command chain.
+#include <array>
+#include <memory>
+#include <span>
+#include <string>
+
+#include "iag_native_runtime/action.h"
+#include "iag_native_runtime/game_api.h"
+
+namespace iag::native_runtime {
+namespace {
+
+class ExampleInvocation final : public ActionInvocation {
+ public:
+  explicit ExampleInvocation(std::uint32_t object_id) : object_id_(object_id) {}
+
+  [[nodiscard]] std::string_view action_type() const noexcept override {
+    return "example_action";
+  }
+  [[nodiscard]] std::string TargetEcho() const override {
+    return std::to_string(object_id_);
+  }
+  [[nodiscard]] PrepareResult Prepare(
+      const GameApi&, std::uint32_t, const void*) override {
+    return PrepareResult::Failed("example_has_no_verified_native_binding");
+  }
+  [[nodiscard]] std::optional<RuntimeResult> Verify(
+      const GameApi&, std::uint32_t, const void*) override {
+    return std::nullopt;
+  }
+  [[nodiscard]] std::string_view TimeoutDetail() const noexcept override {
+    return "example_postcondition_not_observed";
+  }
+
+ private:
+  std::uint32_t object_id_;
+};
+
+std::unique_ptr<ActionInvocation> ParseExample(
+    std::span<const std::string> fields, std::string& error_detail) {
+  if (fields.size() != 1U) {
+    error_detail = "invalid_semantic_target";
+    return nullptr;
+  }
+  const auto object_id = ParseUint32(fields[0]);
+  if (!object_id.has_value()) {
+    error_detail = "invalid_semantic_target";
+    return nullptr;
+  }
+  return std::make_unique<ExampleInvocation>(*object_id);
+}
+
+bool ExampleSupported(const BuildProfile&) noexcept {
+  // Change only after the selected platform profile has verified bindings.
+  return false;
+}
+
+constexpr std::array<ActionParameterDescriptor, 1> kParameters = {{
+    {
+        .name = "object_id",
+        .type = ActionParameterType::kUint32,
+        .required = true,
+        .description = "Generation-bearing object id from the pinned snapshot.",
+        .minimum = 0,
+        .maximum = UINT32_MAX,
+    },
+}};
+
+const ActionDescriptor kDescriptor = {
+    .action_type = "example_action",
+    .action_version = 1,
+    .application_id = "etc",
+    .description = "Example staging action; replace before production use.",
+    .risk_class = "state_change",
+    .verification_state = "live_verified",
+    .parameters = kParameters,
+    .parse = &ParseExample,
+    .supported = &ExampleSupported,
+};
+IAG_NATIVE_ACTION_REGISTRATION const ActionRegistration kRegistration{
+    kDescriptor};
+
+}  // namespace
+}  // namespace iag::native_runtime

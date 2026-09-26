@@ -18,6 +18,8 @@ venv/
 *.zip
 *.tar
 *.tar.gz
+*.obj
+*.pdb
 
 # 游戏、Agent 与抓包运行数据
 /runtime/

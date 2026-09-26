@@ -27,6 +27,25 @@ jobs:
         run: python -m pip install --disable-pip-version-check -e ".[overlay]" "ruff>=0.12,<1"
       - name: Compile Python
         run: python -m compileall -q src apps scripts
+      - name: Build Stellaris native runtime
+        if: runner.os == 'Linux'
+        run: >-
+          cmake -S services/stellaris_native_runtime
+          -B build/stellaris_native_runtime
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DIAG_NATIVE_RUNTIME_BUILD_TESTS=ON &&
+          cmake --build build/stellaris_native_runtime --parallel 4 &&
+          ctest --test-dir build/stellaris_native_runtime --output-on-failure &&
+          cmake -S services/stellaris_native_runtime/research
+          -B build/stellaris_native_runtime/research
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo &&
+          cmake --build build/stellaris_native_runtime/research --parallel 4
+      - name: Build Stellaris native runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: >-
+          ./scripts/build/Build-StellarisNativeRuntime.ps1
+          -OutputRoot ./build/stellaris_native_runtime/ci-dist
       - name: Run repository tests
         run: python scripts/validation/run_tests.py --quiet
       - name: Check fatal Python diagnostics

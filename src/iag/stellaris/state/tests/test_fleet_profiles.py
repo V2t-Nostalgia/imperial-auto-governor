@@ -918,6 +918,26 @@ class ExtractFleetProfilesTests(unittest.TestCase):
         self.assertEqual(availability, "BUSY")
         self.assertEqual(reasons, ["movement_state:move_unverified"])
 
+        availability, reasons = fleet_availability(
+            ship_class="shipclass_military",
+            ship_ids=[1],
+            mobile=True,
+            valid_for_combat=True,
+            movement={"state": "move_idle"},
+            mia_origin=None,
+            combat_fleet_ids=[77],
+        )
+        callability = military_fleet_callability(
+            availability=availability,
+            movement={"state": "move_idle"},
+            has_current_order=False,
+        )
+        self.assertEqual(availability, "BUSY")
+        self.assertEqual(reasons, ["fleet_is_in_combat"])
+        self.assertFalse(callability["move_callable_now"])
+        self.assertFalse(callability["attack_callable_now"])
+        self.assertFalse(callability["maintenance_callable_now"])
+
     def test_selects_verified_civilian_ship_actions(self) -> None:
         result = extract_fleet_profiles(FIXTURE)
         automation = selected_ship_automation(

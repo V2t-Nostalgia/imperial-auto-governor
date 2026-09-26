@@ -10,6 +10,7 @@ VENV_ROOT="${IAG_VENV_ROOT:-$PROJECT_ROOT/.venv}"
 sudo apt-get update
 sudo apt-get install -y \
   build-essential \
+  cmake \
   ffmpeg \
   libnetfilter-queue-dev \
   nftables \
@@ -56,6 +57,21 @@ fi
 "$VENV_ROOT/bin/python" -m pip install --upgrade pip
 "$VENV_ROOT/bin/python" -m pip install -r "$PROJECT_ROOT/requirements.txt"
 "$VENV_ROOT/bin/python" -m pip install --editable "$PROJECT_ROOT"
+
+NATIVE_SOURCE="$PROJECT_ROOT/services/stellaris_native_runtime"
+NATIVE_BUILD="$PROJECT_ROOT/build/stellaris_native_runtime"
+NATIVE_INSTALL="$RUNTIME_ROOT/native_runtime"
+if [[ -f "$NATIVE_SOURCE/CMakeLists.txt" ]]; then
+  cmake -S "$NATIVE_SOURCE" -B "$NATIVE_BUILD" \
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+    -DIAG_NATIVE_RUNTIME_BUILD_TESTS=ON
+  cmake --build "$NATIVE_BUILD" --parallel 4
+  ctest --test-dir "$NATIVE_BUILD" --output-on-failure
+  mkdir -p "$NATIVE_INSTALL"
+  install -m 755 \
+    "$NATIVE_BUILD/libiag_stellaris_native_runtime.so" \
+    "$NATIVE_INSTALL/libiag_stellaris_native_runtime.so"
+fi
 
 if [[ ! -f "$RUNTIME_ROOT/agent_config.json" ]]; then
   mkdir -p "$RUNTIME_ROOT"
