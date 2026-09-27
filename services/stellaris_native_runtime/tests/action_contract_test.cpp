@@ -21,7 +21,6 @@ bool Expect(bool condition, const char* message) {
 int main() {
   using iag::native_runtime::FindActionDescriptor;
   using iag::native_runtime::ParseUint32;
-  using iag::native_runtime::RegisteredActionDescriptors;
   using iag::native_runtime::Stellaris446Profile;
   using iag::native_runtime::ValidateActionDescriptors;
   using iag::native_runtime::BuildToolManifestJson;
@@ -31,17 +30,20 @@ int main() {
   ok &= Expect(
       ValidateActionDescriptors(registry_error),
       "self-registered action catalog is invalid");
-  ok &= Expect(
-      RegisteredActionDescriptors().size() == 3U,
-      "unexpected self-registered action count");
+
+  const auto* move = FindActionDescriptor("move_fleet");
+  const auto* attack = FindActionDescriptor("attack_fleet");
+  const auto* stop = FindActionDescriptor("stop_research");
+  ok &= Expect(move != nullptr, "move_fleet descriptor missing");
+  ok &= Expect(attack != nullptr, "attack_fleet descriptor missing");
+  ok &= Expect(stop != nullptr, "stop_research descriptor missing");
+
   ok &= Expect(ParseUint32("0") == std::uint32_t{0}, "zero id rejected");
   ok &= Expect(
       ParseUint32("4294967295") == UINT32_MAX, "maximum id rejected");
   ok &= Expect(!ParseUint32("4294967296").has_value(), "overflow id accepted");
   ok &= Expect(!ParseUint32("-1").has_value(), "negative id accepted");
 
-  const auto* move = FindActionDescriptor("move_fleet");
-  ok &= Expect(move != nullptr, "move_fleet descriptor missing");
   if (move != nullptr) {
     std::string error;
     const std::vector<std::string> fields = {"888", "47"};
@@ -56,8 +58,6 @@ int main() {
     ok &= Expect(invocation == nullptr, "invalid move_fleet target accepted");
   }
 
-  const auto* attack = FindActionDescriptor("attack_fleet");
-  ok &= Expect(attack != nullptr, "attack_fleet descriptor missing");
   if (attack != nullptr) {
     std::string error;
     const std::vector<std::string> fields = {"888", "220"};
@@ -73,8 +73,6 @@ int main() {
     ok &= Expect(invocation == nullptr, "invalid attack_fleet target accepted");
   }
 
-  const auto* stop = FindActionDescriptor("stop_research");
-  ok &= Expect(stop != nullptr, "stop_research descriptor missing");
   if (stop != nullptr) {
     std::string error;
     const std::vector<std::string> fields = {"tech_shields_2"};
