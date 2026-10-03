@@ -75,6 +75,7 @@ class ApplicationAgentRoutingTests(unittest.TestCase):
             set(routes),
             {
                 "economy_governance",
+                "etc",
                 "fleet_operations",
                 "research_strategy",
             },
@@ -89,7 +90,14 @@ class ApplicationAgentRoutingTests(unittest.TestCase):
                 routes[application_id]["model_source_application_id"],
                 "economy_governance",
             )
-        self.assertTrue(all(item["conversation_supported"] for item in routes.values()))
+        self.assertFalse(routes["etc"]["conversation_supported"])
+        self.assertTrue(
+            all(
+                item["conversation_supported"]
+                for key, item in routes.items()
+                if key != "etc"
+            )
+        )
 
     def test_selected_specialist_response_stays_in_private_thread(self) -> None:
         class FakeResearchAgent:

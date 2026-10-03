@@ -7,6 +7,7 @@ Application 是平台原生的专业能力模块。每个 Application 拥有受�
 - `economy_governance`：殖民地建设与经济治理。
 - `fleet_operations`：默认关闭的实验性舰队、民用船、殖民、恒星基地、舰船设计与逐舰队编制增援。
 - `research_strategy`：默认关闭的实验性科研候选读取和科技选择。
+- `etc`：native runtime 新工具的显式暂存域，等待最终语义归类；默认不自主执行。
 
 三个 Application 由独立的持久模型 Agent 驱动：各自读取自己的模型配置、角色提示词、
 工具集合和会话历史。网页会话栏可以直接选择对话对象。科研与舰队的完整工具协议保存
@@ -18,7 +19,8 @@ Application 是平台原生的专业能力模块。每个 Application 拥有受�
 前端明确标注；运行时不会偷偷修改配置文件。玩家可在模型配置面板为每个 Application
 建立并绑定独立配置。新的 Windows/Linux 示例配置已经分别提供三份默认配置。
 
-新增能力必须显式注册并声明所需平台能力，不能靠目录扫描自动加载代码。
+Python Application 仍必须显式登记。Native runtime 的 `actions/*.cpp` 会自登记
+版本化工具清单；尚未归类的贡献默认进入 `etc`，最终归属只改清单/策略，不改 Hook。
 
 跨存档动作通过 `save_continuations.py` 注册固定续接器。模型只记录一次持久意图；新存档
 到达后由续接器解析字段并推进状态机，不把纯机械的 ID 解析重新交给模型。

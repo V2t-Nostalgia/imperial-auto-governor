@@ -16,6 +16,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from iag.stellaris.execution.action_registry import BackendId, builtin_action_registry
+
 PLAN_SCHEMA = "iag.protocol_compatibility_plan.v1"
 CATALOG_SCHEMA = "iag.protocol_command_catalog.v1"
 REPORT_SCHEMA = "iag.protocol_compatibility_report.v1"
@@ -516,9 +518,7 @@ COMMAND_SPECS = (
         setup="从最新存档/工具生成完整蓝图，并使用不会覆盖现有设计的新名称。",
         operator_check="确认新设计出现且原设计仍被保留。",
         example_target={
-            "blueprint": {
-                "replace_with_complete_blueprint": "<SHIP_BLUEPRINT_OBJECT>"
-            }
+            "blueprint": {"replace_with_complete_blueprint": "<SHIP_BLUEPRINT_OBJECT>"}
         },
     ),
     ProtocolCommandSpec(
@@ -587,6 +587,20 @@ COMMAND_SPECS = (
 
 COMMAND_SPEC_BY_ACTION = {spec.action: spec for spec in COMMAND_SPECS}
 SUPPORTED_SESSION_PROXY_ACTIONS = tuple(spec.action for spec in COMMAND_SPECS)
+
+# This remains a session-proxy-specific wire/fixture catalog. Semantic risk and
+# per-backend verification are owned by action_registry; fail at import time if
+# the mirror used by compatibility reports drifts.
+for _protocol_spec in COMMAND_SPECS:
+    _semantic_spec = builtin_action_registry().get(_protocol_spec.action)
+    if _protocol_spec.risk != _semantic_spec.risk_class.value:
+        raise RuntimeError(f"Protocol risk drift for {_protocol_spec.action!r}.")
+    if _protocol_spec.verification_state != _semantic_spec.verification_for(
+        BackendId.SESSION_PROXY
+    ).value:
+        raise RuntimeError(
+            f"Protocol verification drift for {_protocol_spec.action!r}."
+        )
 
 # These targets exercise every deterministic command builder without touching a
 # live game.  They belong to the shipped diagnostic runtime rather than the test

@@ -18,6 +18,13 @@
 来源舰队，没有显式恒星基地、星系或船坞队列目标。游戏依据当前状态选择返港目的地，
 执行器不得擅自塞入额外目标字段。
 
+Linux 4.4.6 的 native writer 已将该记录精确还原为
+`CQueueFleetOrderCommand`（`_Token=0x328f`，wire `8f32`）包裹
+`CRepairFleetOrder`（order token `0x3020`，wire `2030`）。外层
+`822c`/`502c` 分别是 `CCountry`/`CFleet` 引用；内层 `9232` 与
+`163b` 是构造器的两个布尔参数。旧样本使用默认 replace 队列模式，故没有额外
+queue-mode 分支。所有字段均已由 native 类型和 writer 覆盖，无需重复抓包。
+
 Agent 候选要求最新存档确认舰队属于玩家、当前空闲、未失踪、未交战，并且按单舰最大值
 归一化后的船体、装甲或护盾聚合能够证明存在损伤。网络确认只证明返港命令成立；维修
 进度和完成状态仍由后续存档确认。
@@ -43,6 +50,12 @@ Agent 候选要求最新存档确认舰队属于玩家、当前空闲、未失�
 `shipyard_build_queue`，并要求至少一艘舰船的
 `ship_design_implementation.upgrade` 不是 `0xffffffff`。准备和执行阶段都会重新验证
 舰队与队列；模型不能自行填写任意对象 ID。
+
+其 native 类型是 `CFleetUpgradeDesignCommand`：`_Token=0x2f8f` 对应 wire
+`8f2f`；writer 以 `0x2c82`、`0x2c50`、`0x3dc3`、`0x4063`、
+`0x35de` 写入 country、fleet、`CConstructionQueue`、queue 和
+queue-to-front，逐项对应 wire 的 `822c`、`502c`、`c33d`、`6340`、
+`de35`。这也从 C++ 类型层面独立确认了 `c33d` 是建设队列引用。
 
 ## 验证状态
 

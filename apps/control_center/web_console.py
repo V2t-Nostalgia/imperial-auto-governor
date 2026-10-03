@@ -1248,7 +1248,9 @@ class ConsoleService:
                 binding_mode = "inherited"
                 source_application_id = ECONOMY_APPLICATION_ID
             pool = runtime.model_pool
-            conversation_supported = any(
+            conversation_supported = application_id in getattr(
+                self, "application_agents", {}
+            ) and any(
                 endpoint.enabled
                 and endpoint.provider in TOOL_CALL_PROTOCOLS
                 and endpoint.supports_tools

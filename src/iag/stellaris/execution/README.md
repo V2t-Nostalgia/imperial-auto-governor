@@ -9,12 +9,21 @@
 - `iag_supervisor.py` 在 `carrier_click` 与 `session_proxy` 之间选择执行链，并记录机器确认事实。
 - `session_proxy.py` 在整局可靠流中插入受约束命令并维护偏移、ACK 和 actor serial。它登记经济建设/变更、舰队移动/攻击/维修/升级、轨道轰炸、陆军登陆/招募、科研、舰船自动化、殖民、恒星基地、舰船设计以及 Fleet Manager 编制/增援等 28 个动作。
 - `session_proxy_controller.py` 管理代理的进房前启动、玩家确认候选四元组、动作提交和离房后停止。自动发现会动态补齐端口归属，并对房主 IP 直连与 Steam 中继采用分层置信规则；人工锁定接受当前列表中的任意候选，不检查方向、新鲜度、可靠帧或评分，并留下独立审计标记。
-- `protocol_compatibility.py` 是会话代理命令目录、版本验收计划与差异报告的唯一登记层。
+- `protocol_compatibility.py` 是会话代理专属的 wire/fixture 目录、版本验收计划与差异报告；
+  semantic action 的唯一登记层是 `action_registry.py`。
 - `protocol_compatibility_control.py` 把同一目录接入网页控制端，持久化逐项验收状态，且不调用 LLM。
+- `action_registry.py` 定义 Application 可依赖的版本化 semantic action 与 strict target。
+- `broker.py` 负责权限、snapshot、串行、幂等、backend 选择和公共结果标准化；当前科研
+  通过通用组合入口接入 Broker。`SessionProxyBackend` 复用现有 controller；
+  `NativeRuntimeBackend` 消费 runtime 自描述目录，不再维护 action-specific dispatch。
+- `native_runtime.py` 是 Broker 与 Linux/Windows 进程内 runtime 之间的私有客户端。
+  runtime 声明 action、所属 Application、风险、验证状态与严格参数；Broker 再与上层
+  权限相交。未完成领域归类的新动作进入 `etc`，Application 不接触 IPC、函数地址、
+  command 对象或 hook。
 - `passive_network_observer.py` 只读观测 Linux 端流量。
 - `packet/` 包含已验证的命令解析、精确构造和兼容点击模式的改写器。
 
-未来的统一 Execution Broker 应从这里演进。它必须串行化游戏副作用，但不能让主模型成为每个动作的审批瓶颈。`session_proxy` 当前仅支持 Windows，并且必须由管理员进程在合作端加入房间前启动。新增命令族只有在成对样本、离线 fixture 和当前会话实机闭环都通过后，才能从实验状态升级为稳定能力。
+Execution Broker 从这里渐进迁移现有链路。它必须串行化游戏副作用，但不能让主模型成为每个动作的审批瓶颈。`session_proxy` 当前仅支持 Windows，并且必须由管理员进程在合作端加入房间前启动。新增命令族只有在成对样本、离线 fixture 和当前会话实机闭环都通过后，才能从实验状态升级为稳定能力。
 
 游戏版本更新后的完整回归入口是
 `scripts/diagnostics/run_protocol_compatibility_suite.py`。它默认只执行仓库测试与离线构包；

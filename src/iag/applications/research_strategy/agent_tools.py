@@ -8,9 +8,17 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from iag.core.conversation_store import ConversationStore
-from iag.stellaris.execution.session_proxy_controller import (
-    SessionProxyController,
-    SessionProxyError,
+from iag.stellaris.execution import (
+    ActionRisk,
+    CandidateIdentity,
+    ExecutionAuthority,
+    ExecutionBroker,
+    ExecutionBrokerError,
+    OrderedActionSequence,
+    PreparedAction,
+    ResearchTarget,
+    SourceSnapshot,
+    build_execution_broker,
 )
 from iag.stellaris.game_knowledge import (
     detect_game_root,
@@ -21,7 +29,11 @@ from iag.stellaris.state.research_profiles import (
     RESEARCH_AREAS,
     extract_research_profile,
 )
-from iag.stellaris.state.save_ingest import resolve_current_save
+from iag.stellaris.state.save_ingest import (
+    read_manifest,
+    resolve_current_save,
+    save_manifest_revision,
+)
 from iag.stellaris.state.world_snapshot import WorldSnapshot, WorldStateService
 
 INSPECT_RESEARCH_TOOL = {
@@ -114,12 +126,14 @@ class TechnologyToolbox:
         allow_execute: bool,
         world_snapshot: WorldSnapshot | None = None,
         world_state_service: WorldStateService | None = None,
+        execution_broker: ExecutionBroker | None = None,
     ) -> None:
         self.config = dict(config)
         self.store = store
         self.allow_execute = allow_execute
         self.world_snapshot = world_snapshot
         self.world_state_service = world_state_service
+        self.execution_broker = execution_broker
         self.enabled = bool(
             self.config.get("experimental_research_tools_enabled", False)
         )
@@ -130,6 +144,92 @@ class TechnologyToolbox:
             )
         )
         self.prepared: dict[str, Any] | None = None
+
+    def _source_snapshot(
+        self,
+        path: Path,
+        profile: dict[str, Any],
+    ) -> SourceSnapshot:
+        metadata = self.store.conversation_metadata()
+        campaign_id = str(metadata.get("campaign_id") or "unbound")
+        revision = 0
+        save_hash = sha256_file(path)
+        if self.world_snapshot is not None:
+            identity = self.world_snapshot.identity
+            campaign_id = identity.campaign_id or campaign_id
+            revision = int(identity.revision or 0)
+            save_hash = identity.sha256
+        else:
+            manifest = read_manifest(self.config) or {}
+            manifest_path = str(manifest.get("stored_path") or "")
+            if (
+                manifest_path
+                and Path(manifest_path).expanduser().resolve() == path.resolve()
+            ):
+                campaign_id = str(manifest.get("campaign_id") or campaign_id)
+                revision = int(save_manifest_revision(self.config, manifest) or 0)
+                save_hash = str(manifest.get("sha256") or save_hash)
+        return SourceSnapshot(
+            campaign_id=campaign_id,
+            revision=revision,
+            save_sha256=save_hash,
+            game_date=(
+                str(profile.get("game_date"))
+                if profile.get("game_date") is not None
+                else None
+            ),
+        )
+
+    def _validate_source_snapshot(self, source: SourceSnapshot) -> None:
+        self.assert_world_snapshot_current()
+        path = self._save_path()
+        if sha256_file(path) != source.save_sha256:
+            raise TechnologyToolError(
+                "科研命令绑定的同步存档已经变化，必须重新读取候选。"
+            )
+        manifest = read_manifest(self.config) or {}
+        if (
+            source.revision
+            and int(save_manifest_revision(self.config, manifest) or 0)
+            != source.revision
+        ):
+            raise TechnologyToolError("科研命令绑定的存档 revision 已经过时。")
+
+    def _broker(self) -> ExecutionBroker:
+        if self.execution_broker is None:
+            self.execution_broker = build_execution_broker(
+                self.config,
+                application_action_types={
+                    "research_strategy": frozenset({"start_research", "stop_research"})
+                },
+                snapshot_validator=self._validate_source_snapshot,
+                candidate_validator=self._validate_execution_candidate,
+            )
+        return self.execution_broker
+
+    def _validate_execution_candidate(self, action: PreparedAction) -> None:
+        target = action.target
+        if not isinstance(target, ResearchTarget):
+            raise TechnologyToolError("科研执行 target 类型无效。")
+        expected_candidate_id = f"research:{target.area}:{target.technology_id}"
+        if action.candidate.candidate_id != expected_candidate_id:
+            raise TechnologyToolError("科研候选身份与已验证 target 不一致。")
+        _path, profile = self._profile()
+        if int(profile["owner_country_id"]) != action.authority.actor_country_id:
+            raise TechnologyToolError("科研动作 authority 不属于当前玩家国家。")
+        field = profile["fields"][target.area]
+        current = field.get("current")
+        current_id = current.get("technology_id") if current else None
+        if current_id != target.expected_current_technology_id:
+            raise TechnologyToolError("科研候选验证期间当前项目已经变化。")
+        if action.action_type == "start_research":
+            if target.technology_id not in field["legal_candidate_ids"]:
+                raise TechnologyToolError("科研候选已不在当前合法候选中。")
+        elif action.action_type == "stop_research":
+            if target.technology_id != current_id:
+                raise TechnologyToolError("待停止科技不是当前研究项目。")
+        else:
+            raise TechnologyToolError("科研 Application 收到了非科研动作。")
 
     def schemas(self) -> list[dict[str, Any]]:
         if not self.enabled:
@@ -244,27 +344,28 @@ class TechnologyToolbox:
         if current_id == technology_id:
             raise TechnologyToolError(f"{technology_id} 已经是该领域当前研究。")
         if current_id is not None and not self.reselection_enabled:
-            raise TechnologyToolError(
-                "该领域已有进行中的研究，玩家尚未启用中途换题。"
-            )
+            raise TechnologyToolError("该领域已有进行中的研究，玩家尚未启用中途换题。")
 
-        target = {
-            "context_822c": int(profile["owner_country_id"]),
-            "technology_id": technology_id,
-        }
+        target = ResearchTarget(
+            area=area,
+            technology_id=technology_id,
+            expected_current_technology_id=current_id,
+        ).model_dump(mode="json")
         sequence: list[dict[str, Any]] = []
         if current_id is not None:
             sequence.append(
                 {
                     "action": "stop_research",
-                    "target": {
-                        "context_822c": int(profile["owner_country_id"]),
-                        "technology_id": current_id,
-                    },
+                    "target": ResearchTarget(
+                        area=area,
+                        technology_id=current_id,
+                        expected_current_technology_id=current_id,
+                    ).model_dump(mode="json"),
                 }
             )
         sequence.append({"action": "start_research", "target": target})
         run_id = "research_" + datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
+        source_snapshot = self._source_snapshot(path, profile)
         self.prepared = {
             "run_id": run_id,
             "area": area,
@@ -272,7 +373,8 @@ class TechnologyToolbox:
             "expected_current_technology_id": current_id,
             "reason": reason,
             "sequence": sequence,
-            "source_save_sha256": sha256_file(path),
+            "source_snapshot": source_snapshot.model_dump(mode="json"),
+            "source_save_sha256": source_snapshot.save_sha256,
             "source_game_date": profile.get("game_date"),
             "prepared_at": now_iso(),
         }
@@ -285,7 +387,7 @@ class TechnologyToolbox:
         if self.prepared is None or run_id != self.prepared["run_id"]:
             raise TechnologyToolError("run_id 必须来自本回合刚准备的科研命令。")
 
-        _, profile = self._profile()
+        _path, profile = self._profile()
         area = str(self.prepared["area"])
         technology_id = str(self.prepared["technology_id"])
         field = profile["fields"][area]
@@ -299,23 +401,84 @@ class TechnologyToolbox:
         if technology_id not in field["legal_candidate_ids"]:
             raise TechnologyToolError("准备后的新存档不再提供该科技候选。")
 
-        confirmations: list[dict[str, Any]] = []
-        completed_steps = 0
-        controller = SessionProxyController(self.config)
-        try:
-            for index, step in enumerate(self.prepared["sequence"], start=1):
-                result = controller.arm_and_wait(
-                    action=str(step["action"]),
-                    target=dict(step["target"]),
-                    request_id=f"{run_id}_{index}",
+        source_snapshot = SourceSnapshot.model_validate(
+            self.prepared["source_snapshot"]
+        )
+        granted_actions = tuple(
+            str(step["action"]) for step in self.prepared["sequence"]
+        )
+        allowed_risks = [ActionRisk.STATE_CHANGE]
+        if "stop_research" in granted_actions:
+            allowed_risks.append(ActionRisk.DESTRUCTIVE_STATE_CHANGE)
+        authority = ExecutionAuthority(
+            application_id="research_strategy",
+            execution_authorized=self.allow_execute,
+            granted_action_types=granted_actions,
+            allowed_risk_classes=tuple(allowed_risks),
+            actor_country_id=int(profile["owner_country_id"]),
+        )
+        prepared_actions: list[PreparedAction] = []
+        for index, step in enumerate(self.prepared["sequence"], start=1):
+            step_action = str(step["action"])
+            semantic_target = ResearchTarget.model_validate(step["target"])
+            candidate = CandidateIdentity.for_target(
+                f"research:{area}:{semantic_target.technology_id}",
+                semantic_target,
+            )
+            prepared_actions.append(
+                PreparedAction(
+                    request_id=f"{run_id}:{index}",
+                    action_intent_id=run_id,
+                    application_id="research_strategy",
+                    action_type=step_action,
+                    target=semantic_target,
+                    candidate=candidate,
+                    source_snapshot=source_snapshot,
+                    authority=authority,
                 )
-                confirmations.append(result)
-                if result.get("outcome") != "confirmed":
-                    raise TechnologyToolError(
-                        str(result.get("error") or "科研命令未获房主权威确认。")
-                    )
-                completed_steps += 1
-        except (SessionProxyError, TechnologyToolError) as error:
+            )
+
+        confirmations: list[dict[str, Any]] = []
+        broker_diagnostics: list[dict[str, Any]] = []
+        completed_steps = 0
+        try:
+            sequence_result = self._broker().execute_sequence(
+                OrderedActionSequence(
+                    request_id=run_id,
+                    actions=tuple(prepared_actions),
+                )
+            )
+            broker_diagnostics = [
+                item.model_dump(mode="json") for item in sequence_result.results
+            ]
+            confirmations = [
+                {
+                    "request_id": item.run_id,
+                    "action": item.evidence.get("action_type"),
+                    "status": item.status,
+                }
+                for item in sequence_result.results
+            ]
+            completed_steps = sum(
+                item.status in {"confirmed_by_packet", "confirmed_by_save"}
+                for item in sequence_result.results
+            )
+            if sequence_result.status not in {
+                "confirmed_by_packet",
+                "confirmed_by_save",
+            }:
+                raise TechnologyToolError(
+                    sequence_result.error or "科研命令未获房主权威确认。"
+                )
+        except (ExecutionBrokerError, TechnologyToolError) as error:
+            self.store.set_state(
+                "last_research_execution_diagnostics",
+                {
+                    "run_id": run_id,
+                    "broker_results": broker_diagnostics,
+                    "recorded_at": now_iso(),
+                },
+            )
             self.store.set_state(
                 "last_research_execution",
                 {
@@ -340,6 +503,14 @@ class TechnologyToolbox:
             "confirmations": confirmations,
         }
         self.store.set_state(
+            "last_research_execution_diagnostics",
+            {
+                "run_id": run_id,
+                "broker_results": broker_diagnostics,
+                "recorded_at": now_iso(),
+            },
+        )
+        self.store.set_state(
             "last_research_execution",
             {**result, "recorded_at": now_iso()},
         )
@@ -354,21 +525,18 @@ class TechnologyToolbox:
         if name == "inspect_research_state":
             result = self.inspect()
             occupied = sum(
-                field.get("current") is not None
-                for field in result["fields"].values()
+                field.get("current") is not None for field in result["fields"].values()
             )
             summary = f"已读取三系科研状态；{occupied} 个领域正在研究。"
         elif name == "prepare_research_selection":
             result = self.prepare(arguments)
             summary = (
-                f"已准备 {result['area']} 科技 {result['technology_id']}；"
-                "尚未发包。"
+                f"已准备 {result['area']} 科技 {result['technology_id']}；尚未发包。"
             )
         elif name == "execute_prepared_research":
             result = self.execute(arguments)
             summary = (
-                f"{result['area']} 科技 {result['technology_id']} "
-                "已获房主权威确认。"
+                f"{result['area']} 科技 {result['technology_id']} 已获房主权威确认。"
             )
         else:
             raise TechnologyToolError(f"Unknown research tool: {name}")

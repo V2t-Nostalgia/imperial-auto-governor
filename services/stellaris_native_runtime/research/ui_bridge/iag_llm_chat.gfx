@@ -1,0 +1,13 @@
+spriteTypes = {
+    spriteType = {
+        name = "GFX_iag_assistant_portrait"
+        textureFile = "gfx/interface/iag/assistant_portrait.dds"
+        noOfFrames = 1
+    }
+
+    spriteType = {
+        name = "GFX_iag_thought_bubble"
+        textureFile = "gfx/interface/iag/thought_bubble.dds"
+        noOfFrames = 1
+    }
+}

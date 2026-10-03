@@ -7,7 +7,7 @@ from iag.core.application_registry import (
 
 
 def builtin_application_registry() -> ApplicationRegistry:
-    """返回当前平台内置的经济、科研与舰队能力。"""
+    """返回当前平台内置的领域能力与扩展暂存域。"""
 
     return ApplicationRegistry(
         [
@@ -33,7 +33,12 @@ def builtin_application_registry() -> ApplicationRegistry:
                 ),
                 required_platform_capabilities=(
                     "stellaris_save_state_v1",
-                    "host_inbound_rewrite_v1",
+                    "stellaris.execution.v1",
+                    "stellaris.action.build_building.v1",
+                    "stellaris.action.build_district.v1",
+                    "stellaris.action.build_zone.v1",
+                    "stellaris.action.upgrade_building.v1",
+                    "stellaris.action.replace_building.v1",
                 ),
             ),
             ApplicationManifest(
@@ -41,9 +46,7 @@ def builtin_application_registry() -> ApplicationRegistry:
                 application_id="fleet_operations",
                 version="0.5.10",
                 display_name_zh="舰队与扩张行动",
-                description_zh=(
-                    "管理玩家授权的舰队、民用船、殖民与恒星基地命令。"
-                ),
+                description_zh=("管理玩家授权的舰队、民用船、殖民与恒星基地命令。"),
                 agent_roles=("fleet_operator",),
                 message_types=(
                     "fleet_assessment",
@@ -54,6 +57,8 @@ def builtin_application_registry() -> ApplicationRegistry:
                     "move_fleet",
                     "move_fleet_to_coordinate",
                     "attack_fleet",
+                    "repair_fleet",
+                    "upgrade_fleet",
                     "configure_ship_automation",
                     "build_starbase",
                     "order_colony_ship_and_colonize",
@@ -67,7 +72,21 @@ def builtin_application_registry() -> ApplicationRegistry:
                 required_platform_capabilities=(
                     "stellaris_fleet_state_v1",
                     "stellaris_expansion_state_v1",
-                    "session_proxy_v1",
+                    "stellaris.execution.v1",
+                    "stellaris.action.move_fleet.v1",
+                    "stellaris.action.move_fleet_to_coordinate.v1",
+                    "stellaris.action.attack_fleet.v1",
+                    "stellaris.action.repair_fleet.v1",
+                    "stellaris.action.upgrade_fleet.v1",
+                    "stellaris.action.configure_ship_automation.v1",
+                    "stellaris.action.build_starbase.v1",
+                    "stellaris.action.order_colony_ship_and_colonize.v1",
+                    "stellaris.action.upgrade_starbase.v1",
+                    "stellaris.action.set_starbase_module.v1",
+                    "stellaris.action.set_starbase_building.v1",
+                    "stellaris.action.create_ship_design.v1",
+                    "stellaris.action.create_new_fleet.v1",
+                    "stellaris.action.reinforce_fleet_to_target.v1",
                 ),
             ),
             ApplicationManifest(
@@ -85,8 +104,23 @@ def builtin_application_registry() -> ApplicationRegistry:
                 action_types=("start_research", "stop_research"),
                 required_platform_capabilities=(
                     "stellaris_research_state_v1",
-                    "session_proxy_v1",
+                    "stellaris.execution.v1",
+                    "stellaris.action.start_research.v1",
+                    "stellaris.action.stop_research.v1",
                 ),
+            ),
+            ApplicationManifest(
+                schema_version="iag.application_manifest.v1",
+                application_id="etc",
+                version="0.5.10",
+                display_name_zh="其它实验能力",
+                description_zh=(
+                    "暂存 native runtime 自描述但尚未完成最终领域归类的工具。"
+                ),
+                agent_roles=("extension_operator",),
+                message_types=("extension_capability", "escalation"),
+                action_types=(),
+                required_platform_capabilities=("stellaris.execution.v1",),
             ),
         ]
     )

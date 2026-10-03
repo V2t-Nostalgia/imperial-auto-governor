@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -131,19 +131,22 @@ class Escalation(AgentMessage):
     evidence: dict[str, Any] = Field(default_factory=dict)
 
 
+ExecutionStatus: TypeAlias = Literal[
+    "confirmed_by_packet",
+    "confirmed_by_save",
+    "provisional_pending_save",
+    "rejected",
+    "failed",
+    "cancelled",
+]
+
+
 class ExecutionResult(AgentMessage):
     """Execution Broker 写入的机器事实，不接受模型自行宣称成功。"""
 
     kind: Literal[MessageKind.EXECUTION_RESULT] = MessageKind.EXECUTION_RESULT
     action_intent_id: str
-    status: Literal[
-        "confirmed_by_packet",
-        "confirmed_by_save",
-        "provisional_pending_save",
-        "rejected",
-        "failed",
-        "cancelled",
-    ]
+    status: ExecutionStatus
     run_id: str | None = None
     evidence: dict[str, Any] = Field(default_factory=dict)
 

@@ -3,13 +3,65 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from iag.applications.research_strategy.agent_tools import (
     TechnologyToolbox,
     TechnologyToolError,
 )
 from iag.core.conversation_store import ConversationStore
+from iag.stellaris.execution.action_registry import BackendId, ResearchTarget
+from iag.stellaris.execution.broker import (
+    BackendExecutionResult,
+    BackendSequenceResult,
+    ExecutionBroker,
+    OrderedActionSequence,
+    SourceSnapshot,
+)
+
+
+class RecordingResearchBackend:
+    backend_id = BackendId.SESSION_PROXY
+
+    def __init__(self) -> None:
+        self.sequences: list[OrderedActionSequence] = []
+        self.next_results: list[BackendExecutionResult] | None = None
+
+    def capabilities(self) -> tuple[str, ...]:
+        return (
+            "stellaris.execution.v1",
+            "stellaris.action.start_research.v1",
+            "stellaris.action.stop_research.v1",
+        )
+
+    def supports(self, spec: object) -> bool:
+        return getattr(spec, "action_type", None) in {
+            "start_research",
+            "stop_research",
+        }
+
+    def execute(self, action: object) -> BackendExecutionResult:
+        raise AssertionError("Research toolbox should use an ordered sequence.")
+
+    def execute_ordered_sequence(
+        self,
+        sequence: OrderedActionSequence,
+    ) -> BackendSequenceResult:
+        self.sequences.append(sequence)
+        results = self.next_results
+        if results is None:
+            results = [
+                BackendExecutionResult(
+                    backend_id=self.backend_id,
+                    status="confirmed_by_packet",
+                    evidence={"raw_transport": "hidden"},
+                )
+                for _action in sequence.actions
+            ]
+        return BackendSequenceResult(
+            backend_id=self.backend_id,
+            requested_steps=len(sequence.actions),
+            results=tuple(results),
+        )
 
 
 def research_profile(current: str | None = None) -> dict[str, object]:
@@ -62,13 +114,28 @@ class TechnologyToolboxTests(unittest.TestCase):
             "experimental_research_tools_enabled": True,
             "experimental_research_reselection_enabled": False,
         }
+        self.backend = RecordingResearchBackend()
+        self.broker = ExecutionBroker(
+            backends=(self.backend,),
+            application_action_types={
+                "research_strategy": frozenset({"start_research", "stop_research"})
+            },
+            snapshot_validator=lambda _snapshot: None,
+            candidate_validator=lambda _action: None,
+        )
 
     def toolbox(self, current: str | None = None) -> TechnologyToolbox:
-        value = TechnologyToolbox(self.config, self.store, allow_execute=True)
+        value = TechnologyToolbox(
+            self.config,
+            self.store,
+            allow_execute=True,
+            execution_broker=self.broker,
+        )
         value._profile = lambda: (  # type: ignore[method-assign]
             self.save,
             research_profile(current),
         )
+        value._save_path = lambda: self.save  # type: ignore[method-assign]
         return value
 
     def test_rejects_technology_not_in_save_candidates(self) -> None:
@@ -90,19 +157,39 @@ class TechnologyToolboxTests(unittest.TestCase):
                 "reason": "Defensive baseline.",
             }
         )
-        with patch(
-            "iag.applications.research_strategy.agent_tools.SessionProxyController"
-        ) as controller_type:
-            controller_type.return_value.arm_and_wait.return_value = {
-                "outcome": "confirmed"
-            }
-            result = toolbox.execute({"run_id": prepared["run_id"]})
+        result = toolbox.execute({"run_id": prepared["run_id"]})
         self.assertTrue(result["success"])
-        controller_type.return_value.arm_and_wait.assert_called_once()
+        self.assertNotIn("raw_transport", str(result["confirmations"]))
+        diagnostics = self.store.get_state(
+            "last_research_execution_diagnostics",
+            {},
+        )
+        self.assertIn("raw_transport", str(diagnostics))
+        self.assertEqual(len(self.backend.sequences), 1)
+        actions = self.backend.sequences[0].actions
+        self.assertEqual(len(actions), 1)
         self.assertEqual(
-            controller_type.return_value.arm_and_wait.call_args.kwargs["action"],
+            actions[0].action_type,
             "start_research",
         )
+        self.assertIsInstance(actions[0].target, ResearchTarget)
+        self.assertEqual(actions[0].target.technology_id, "tech_shields_2")
+
+    def test_prepare_binds_the_source_save_snapshot(self) -> None:
+        toolbox = self.toolbox()
+        prepared = toolbox.prepare(
+            {
+                "area": "physics",
+                "technology_id": "tech_shields_2",
+                "reason": "Bind the candidate to this save.",
+            }
+        )
+        snapshot = SourceSnapshot.model_validate(prepared["source_snapshot"])
+        self.assertEqual(snapshot.save_sha256, prepared["source_save_sha256"])
+
+        self.save.write_bytes(b"new save")
+        with self.assertRaisesRegex(TechnologyToolError, "已经变化"):
+            toolbox._validate_source_snapshot(snapshot)
 
     def test_reselection_is_default_denied_and_then_strictly_ordered(self) -> None:
         with self.assertRaisesRegex(TechnologyToolError, "尚未启用"):
@@ -123,18 +210,8 @@ class TechnologyToolboxTests(unittest.TestCase):
                 "reason": "Switch focus.",
             }
         )
-        with patch(
-            "iag.applications.research_strategy.agent_tools.SessionProxyController"
-        ) as controller_type:
-            controller_type.return_value.arm_and_wait.side_effect = [
-                {"outcome": "confirmed"},
-                {"outcome": "confirmed"},
-            ]
-            result = toolbox.execute({"run_id": prepared["run_id"]})
-        actions = [
-            call.kwargs["action"]
-            for call in controller_type.return_value.arm_and_wait.call_args_list
-        ]
+        result = toolbox.execute({"run_id": prepared["run_id"]})
+        actions = [action.action_type for action in self.backend.sequences[-1].actions]
         self.assertEqual(actions, ["stop_research", "start_research"])
         self.assertEqual(result["replaced_technology_id"], "tech_shields_2")
 
@@ -148,15 +225,19 @@ class TechnologyToolboxTests(unittest.TestCase):
                 "reason": "Switch focus.",
             }
         )
-        with patch(
-            "iag.applications.research_strategy.agent_tools.SessionProxyController"
-        ) as controller_type:
-            controller_type.return_value.arm_and_wait.side_effect = [
-                {"outcome": "confirmed"},
-                {"outcome": "failed", "error": "start rejected"},
-            ]
-            with self.assertRaisesRegex(TechnologyToolError, "start rejected"):
-                toolbox.execute({"run_id": prepared["run_id"]})
+        self.backend.next_results = [
+            BackendExecutionResult(
+                backend_id=BackendId.SESSION_PROXY,
+                status="confirmed_by_packet",
+            ),
+            BackendExecutionResult(
+                backend_id=BackendId.SESSION_PROXY,
+                status="failed",
+                error="start rejected",
+            ),
+        ]
+        with self.assertRaisesRegex(TechnologyToolError, "start rejected"):
+            toolbox.execute({"run_id": prepared["run_id"]})
 
         audit = self.store.get_state("last_research_execution", {})
         self.assertFalse(audit["success"])

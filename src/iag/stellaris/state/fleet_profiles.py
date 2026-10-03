@@ -711,7 +711,7 @@ def fleet_availability(
     if mia_origin is not None:
         return "MIA", ["mia_from_is_valid"]
     if combat_fleet_ids:
-        return "UNCERTAIN", ["fleet_is_in_combat"]
+        return "BUSY", ["fleet_is_in_combat"]
     if not mobile:
         return "UNAVAILABLE", ["fleet_is_not_mobile"]
     if not valid_for_combat:
@@ -780,7 +780,7 @@ def civilian_fleet_availability(
     if mia_origin is not None:
         return "MIA", ["mia_from_is_valid"]
     if combat_fleet_ids:
-        return "UNCERTAIN", ["fleet_is_in_combat"]
+        return "BUSY", ["fleet_is_in_combat"]
     if not mobile:
         return "UNAVAILABLE", ["fleet_is_not_mobile"]
     if has_current_order:
@@ -814,7 +814,7 @@ def transport_fleet_availability(
     if mia_origin is not None:
         return "MIA", ["mia_from_is_valid"]
     if combat_fleet_ids:
-        return "UNCERTAIN", ["fleet_is_in_combat"]
+        return "BUSY", ["fleet_is_in_combat"]
     if not mobile:
         return "UNAVAILABLE", ["fleet_is_not_mobile"]
     if not valid_for_combat:

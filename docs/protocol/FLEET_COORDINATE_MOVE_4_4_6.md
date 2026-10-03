@@ -19,6 +19,12 @@
 
 X/Y 的协议整数等于存档十进制坐标乘以 `100000`。构造器保留两个未知标志为已验证的 0，只允许改写 actor、origin、serial、舰队、X、Y 和当前星系 origin；构造完成后会重新解析全部目标字段。
 
+Linux 4.4.6 的 native 对照现已确认该 wire family 就是
+`CFleetFlyToCoordinatesCommand`：`_Token=0x2c4f` 对应小端 wire 字节
+`4f2c`，writer 的来源、坐标容器、queue 与 queue-to-front token 依次为
+`0x2c50`、`0x006b`、`0x4063`、`0x35de`。坐标在 native 对象内使用
+48.15 定点数，writer 负责转成 wire 的十进制定点表示；二者不是两套动作。
+
 ## 验证等级
 
 - 四方向非房主请求与房主回传：已有成对样本。
