@@ -332,6 +332,15 @@ def extract_expansion_profiles(
         research_profile=research,
         state_index=state_index,
     )
+    country_modules = optional_section(country, "modules")
+    expansion_module = optional_section(
+        country_modules,
+        "standard_expansion_module",
+    )
+    expansion_list = optional_section(expansion_module, "expansion_list")
+    active_colonization_targets = set(
+        repeated_integer(expansion_list, "target_planet")
+    )
 
     starbase_profiles = _owned_starbase_profiles(
         owner=owner,
@@ -433,6 +442,8 @@ def extract_expansion_profiles(
         for planet in colonizable_planets:
             if not planet["meets_habitability_policy"]:
                 continue
+            if int(planet["planet_id"]) in active_colonization_targets:
+                continue
             for source in source_shipyards:
                 for design in colonizer_designs:
                     design_id = int(design["design_id"])
@@ -482,6 +493,9 @@ def extract_expansion_profiles(
         "colonizer_designs": colonizer_designs,
         "source_shipyards": source_shipyards,
         "colonizable_planets": colonizable_planets,
+        "active_colonization_target_planet_ids": sorted(
+            active_colonization_targets
+        ),
         "colonization_candidates": colonization_candidates,
         "starbases": starbase_profiles,
         "starbase_operation_candidates": [

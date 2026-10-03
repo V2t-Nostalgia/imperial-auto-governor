@@ -154,13 +154,17 @@ The snapshot chain was:
 | `war_after.sav` | `d4f9a8f5bd9d30c39eb9015f70408dfea18c7478afd933469225284850f3995d` |
 | `war_after2.sav` | `4bedac3962285de7a2b012a730c307347959cb49908df08c68f5ab08a7d223f4` |
 | `war_after3.sav` | `dcb9a82e43595dfcf55840eb17dcc1e5d622bccaeb5896d8f6080ce95a37c2b8` |
+| `war_after4.sav` | `d5497a1d067c785308cdf8e2efff128acb42b2d1dc9a07c4c4cf5b1c05ba65f5` |
+| `war_after5_repair.sav` | `e87aa7fc1f0c7f493544dcaefd9288b92ff1098804450cc20100cce2b6776b11` |
+| `war_after6_upgrade.sav` | `2ca26135d9e4e9ffc4ff75cb850100538f9c678f89a02a98a80020d25b8c3f3f8` |
+| `war_after7_landing.sav` | `9e0f26b6f0fa6705cd17ec07d4a76c85f312da4f695cae7ba90a423c1e09a21d` |
 
-Save-backed behavior was confirmed for 20 generated actions:
+Save-backed behavior was confirmed for 23 generated actions:
 
 | Domain | Confirmed actions |
 | --- | --- |
 | Economy | `build_building`, `upgrade_building`, `replace_building`, `build_district`, `build_zone` |
-| Fleet orders | `move_fleet_to_coordinate`, `set_orbital_bombardment_stance` |
+| Fleet orders | `move_fleet_to_coordinate`, `set_orbital_bombardment_stance`, `land_armies`, `repair_fleet`, `upgrade_fleet` |
 | Army / expansion | `recruit_army`, `order_colony_ship_and_colonize` |
 | Starbase | `upgrade_starbase`, `set_starbase_module`, `set_starbase_building` |
 | Research | `start_research` after the existing research was stopped |
@@ -170,12 +174,28 @@ The evidence includes concrete construction queue entries, research selection,
 fleet order/stance changes, automation state, a colonization expansion-list
 entry, a new ship design, and fleet-template mutations. `add` and `remove`
 were retested in separate snapshots so their effects could not cancel each
-other in the final state.
+other in the final state. The follow-up snapshots additionally contain:
 
-Five generated actions were not submitted because the save had no legal fresh
-candidate: `land_armies`, `repair_fleet`, `upgrade_fleet`, `build_starbase`,
-and `colonize_with_existing_ship`. They remain unverified rather than being
-tested against fabricated object IDs.
+- `repair_fleet_order` for fleet `251662165`, routing to the repair orbit in
+  system `2`;
+- `upgrade_design_at_orbitable_fleet_order` for that fleet, with five ships in
+  `upgrade_waiting` state and shipyard queue `9167` in system `217`;
+- `land_armies_order` for transport fleet `3103785054`, targeting colony `298`
+  and planet `2983`.
+
+`build_starbase` was then submitted as request
+`war7-04-build-enigmas-end` for construction fleet `16777379` and system
+`546` (`Enigmas_End`). The runtime accepted and posted the command, and the
+player confirmed the generated travel/build order while the game remained
+paused. No subsequent save was made, so this is live player-visible evidence,
+not yet a save-backed postcondition.
+
+`colonize_with_existing_ship` was intentionally not submitted. The preferred
+automatic path, `order_colony_ship_and_colonize`, was already confirmed by
+request `war-10-order_colony_ship_and_colonize`: target planet `6068` appears
+in `standard_expansion_module.expansion_list` with queue item `3841982519`.
+Repeating it without advancing time would create or attempt a duplicate order,
+so the candidate layer now suppresses planets already present in that list.
 
 The run also established an important negative result. Native deserialization
 and the command's validator do not prove that all higher-level game rules allow
@@ -200,8 +220,10 @@ For live promotion, each action still needs:
 6. a semantic resolver that eliminates captured queue/context fields before
    enabling the native backend in the Broker.
 
-Items 1-4 are now satisfied for the 20 actions listed above. The remaining
-five actions still require all six gates.
+Items 1-4 are now satisfied for the 23 save-backed actions listed above.
+`build_starbase` has native-post and live-order evidence but still needs a
+subsequent save postcondition. `colonize_with_existing_ship` still requires all
+six gates.
 
 ## Confidence
 
@@ -218,20 +240,23 @@ Static and offline evidence:
 
 Live 4.4.6 evidence:
 
-- 20 generated actions produced action-specific changes in subsequent saves;
+- 23 generated actions produced action-specific changes in subsequent saves;
+- `build_starbase` produced a player-confirmed native order while paused;
 - all submitted command objects passed the live factory/validator/post path;
-- the game process remained alive throughout all three ordered batches;
+- the game process remained alive throughout the ordered batches and follow-up;
 - native validation alone is not a substitute for semantic candidate checks.
 
 ### B. High confidence, still requires a legal live candidate
 
-- `land_armies`, `repair_fleet`, `upgrade_fleet`, `build_starbase`, and
-  `colonize_with_existing_ship` use the same recovered factory/post path and
-  pass exact offline body reconstruction, but were not submitted in this run.
+- `build_starbase` uses the recovered factory/post path and has a confirmed
+  live order, but still needs a subsequent save postcondition.
+- `colonize_with_existing_ship` passes exact offline body reconstruction but
+  was intentionally not submitted in this run.
 
 ### C. Not yet established
 
-- save-backed postconditions for the five untested generated actions;
+- save-backed postconditions for `build_starbase` and
+  `colonize_with_existing_ship`;
 - invalid-ID and wrong-authority rejection behavior for generated actions;
 - production semantic resolution for queue IDs and other private captured
   fields;

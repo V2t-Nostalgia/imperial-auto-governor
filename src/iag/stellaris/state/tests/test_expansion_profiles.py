@@ -297,6 +297,40 @@ class ExpansionProfileTests(unittest.TestCase):
         )
         self.assertEqual(selected["target"]["starbase_object"], 12)
 
+    def test_does_not_offer_planets_already_in_expansion_list(self) -> None:
+        save = SAVE_FIXTURE.replace(
+            "   standard_economy_module=",
+            """   standard_expansion_module=
+   {
+    expansion_list=
+    {
+     {
+      target_planet=200
+      construction_queue=46
+      construction_queue_item=9001
+     }
+    }
+   }
+   standard_economy_module=""",
+            1,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            profile = extract_expansion_profiles(
+                save,
+                game_root=self.game_root(Path(directory)),
+                minimum_habitability=0.30,
+            )
+
+        self.assertEqual(
+            profile["active_colonization_target_planet_ids"],
+            [200],
+        )
+        self.assertEqual(
+            [item["planet_id"] for item in profile["colonizable_planets"]],
+            [200],
+        )
+        self.assertEqual(profile["colonization_candidates"], [])
+
     def test_does_not_offer_duplicate_unique_starbase_buildings(self) -> None:
         save = SAVE_FIXTURE.replace(
             'level="starbase_level_starport"\n   build_queue=44',
