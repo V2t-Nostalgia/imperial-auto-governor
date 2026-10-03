@@ -72,7 +72,7 @@ class NativeRuntimeParameter(FrozenContract):
     description: str = Field(min_length=1, max_length=500)
     minimum: int | None = Field(default=None, ge=0)
     maximum: int | None = Field(default=None, ge=0)
-    maximum_length: int | None = Field(default=None, ge=1, le=4096)
+    maximum_length: int | None = Field(default=None, ge=1, le=60_000)
 
     @model_validator(mode="after")
     def validate_type_limits(self) -> NativeRuntimeParameter:

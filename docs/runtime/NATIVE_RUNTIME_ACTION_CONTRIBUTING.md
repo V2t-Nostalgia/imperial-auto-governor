@@ -116,3 +116,18 @@ must not call the colony construction business method directly.
 
 Unknown or inferred commands remain under `research/` until all of these
 conditions are met.
+
+## Existing packet-grounded staging path
+
+The 4.4.6 Linux profile also contains a generated staging adapter for command
+families that already have paired packet fixtures. Do not hand-edit
+`actions/generated_capture_actions.inc`. Its source is
+`tools/generate_capture_actions.py`, which derives and validates every field
+offset against the existing packet builders.
+
+These descriptors intentionally remain `paired_capture` and are not a shortcut
+around the requirements above. A contribution that promotes one of them should
+replace private captured queue/context fields with a semantic resolver, add a
+specific postcondition, attach live evidence, and only then enable the native
+backend for that reviewed Broker action. See
+[`CAPTURE_BACKED_NATIVE_ACTIONS_4_4_6.md`](CAPTURE_BACKED_NATIVE_ACTIONS_4_4_6.md).

@@ -3,14 +3,15 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
-from unittest.mock import patch
 from pathlib import Path
+from unittest.mock import patch
 
 from iag.stellaris.execution.native_runtime import (
     NATIVE_RUNTIME_BUILD_ID,
     WINDOWS_NATIVE_RUNTIME_BUILD_ID,
     NativeRuntimeClient,
     NativeRuntimeError,
+    NativeRuntimeManifest,
     NativeRuntimeOutcome,
 )
 
@@ -228,6 +229,40 @@ class NativeRuntimeClientTests(unittest.TestCase):
         self.assertEqual(
             requests[1],
             b"IAG1\toptional-1\texample_action\t4\t9\t\n",
+        )
+
+    def test_manifest_accepts_bounded_capture_record_parameter(self) -> None:
+        manifest = NativeRuntimeManifest.model_validate(
+            {
+                "schema_version": "iag.native_tool_manifest.v1",
+                "platform": "linux-x86_64",
+                "game_version": "Stellaris 4.4.6",
+                "build_id": NATIVE_RUNTIME_BUILD_ID,
+                "tools": (
+                    {
+                        "action_type": "create_ship_design",
+                        "action_version": 1,
+                        "application_id": "fleet_operations",
+                        "description": "Capture-backed ship design.",
+                        "risk_class": "state_change",
+                        "verification_state": "paired_capture",
+                        "parameters": (
+                            {
+                                "name": "verified_record_hex",
+                                "type": "string",
+                                "required": True,
+                                "description": "Verified record body.",
+                                "maximum_length": 60_000,
+                            },
+                        ),
+                    },
+                ),
+            }
+        )
+
+        self.assertEqual(
+            manifest.tools[0].parameters[0].maximum_length,
+            60_000,
         )
 
 

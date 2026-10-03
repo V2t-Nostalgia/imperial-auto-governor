@@ -58,6 +58,14 @@ allowlist 逐项迁移；这不是重写 packet builders、response correlation 
 Application manifest 只声明 semantic capability，不选择具体 backend。完整边界与迁移约束
 见 [`EXECUTION_BROKER.md`](EXECUTION_BROKER.md)。
 
+Linux 4.4.6 另已从游戏原生 binary-persistence factory 恢复出共享的
+`CreateCommand(bytes) -> virtual IsValid -> PostCommandToSession` 路径，并从现有成对抓包 fixture
+自动生成 25 个 action adapter。它们当前只标记为 `paired_capture`：runtime manifest 可供诊断
+验收，但 Broker 不会把它们设为 Application 可执行 backend；既有三个实机验证 action 也不会
+被替换。每项只有在补齐语义 target resolver、实机后置条件和错误路径证据后才可单独晋级。
+精确函数地址、对象生命周期、生成校验和待验收范围见
+[`runtime/CAPTURE_BACKED_NATIVE_ACTIONS_4_4_6.md`](runtime/CAPTURE_BACKED_NATIVE_ACTIONS_4_4_6.md)。
+
 单机观察者模式另有一个仍处于 research 阶段的权限域：Linux 4.4.6 实机已证明可以在
 `CCountryAI::PostAICommandsToSession()` 按 generation-bearing country ID 只替换一个被管理
 AI 国家的待提交命令批次，再由游戏原生 `PostCommandToSession(..., true)` 路径执行；玩家

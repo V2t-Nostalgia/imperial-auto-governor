@@ -4,12 +4,14 @@ This directory contains the production-side in-process runtime for verified
 Stellaris native commands. It is deliberately separate from packet execution
 and from reverse-engineering probes.
 
-The supported build/action set remains intentionally narrow and is described
-by the loaded runtime itself:
+The supported build/action set remains exact-build and is described by the
+loaded runtime itself:
 
 - Linux Stellaris `4.4.6 (fdde)`, ELF build ID
-  `c6969e60fd81d738948222a94c0b5a0841abbffc`: `stop_research.v1`,
-  `move_fleet.v1`, and `attack_fleet.v1`;
+  `c6969e60fd81d738948222a94c0b5a0841abbffc`: live-verified
+  `stop_research.v1`, `move_fleet.v1`, and `attack_fleet.v1`, plus 25
+  generated `paired_capture` actions reconstructed through the game's native
+  binary-persistence command factory;
 - Windows Stellaris `4.4.6 (fdde)`, Steam build `24109497`:
   `move_fleet.v1`.
 
@@ -65,6 +67,8 @@ Fleet movement evidence is recorded in
 [`docs/runtime/NATIVE_FLEET_MOVE_HOOK_4_4_6.md`](../../docs/runtime/NATIVE_FLEET_MOVE_HOOK_4_4_6.md),
 fleet attack evidence in
 [`docs/runtime/NATIVE_FLEET_ATTACK_HOOK_4_4_6.md`](../../docs/runtime/NATIVE_FLEET_ATTACK_HOOK_4_4_6.md),
+the shared capture-backed factory and its staged action catalog in
+[`docs/runtime/CAPTURE_BACKED_NATIVE_ACTIONS_4_4_6.md`](../../docs/runtime/CAPTURE_BACKED_NATIVE_ACTIONS_4_4_6.md),
 with the wider command/order family map in
 [`docs/runtime/FLEET_MOVEMENT_NATIVE_4_4_6.md`](../../docs/runtime/FLEET_MOVEMENT_NATIVE_4_4_6.md).
 The separate single-player observer takeover proposal and its recovered

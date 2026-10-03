@@ -494,7 +494,7 @@ std::string HandleRequest(std::string_view line) {
 bool ReadLine(HANDLE pipe, std::string& output) {
   output.clear();
   char character = 0;
-  while (output.size() <= 8192U) {
+  while (output.size() <= 65'536U) {
     DWORD read = 0;
     if (ReadFile(pipe, &character, 1, &read, nullptr) == 0 || read != 1U) {
       return false;

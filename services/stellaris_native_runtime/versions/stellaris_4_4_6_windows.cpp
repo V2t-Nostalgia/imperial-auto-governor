@@ -87,6 +87,7 @@ const BuildProfile kProfile = {
         .move_order_type = 0x2cde,
     },
     .attack_fleet = {},
+    .serialized_command = {},
     .required_anchors = kRequiredAnchors.data(),
     .required_anchor_count = kRequiredAnchors.size(),
 };

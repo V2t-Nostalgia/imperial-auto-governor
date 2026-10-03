@@ -34,9 +34,18 @@ int main() {
   const auto* move = FindActionDescriptor("move_fleet");
   const auto* attack = FindActionDescriptor("attack_fleet");
   const auto* stop = FindActionDescriptor("stop_research");
+  const auto* build = FindActionDescriptor("build_building");
+  const auto* coordinate = FindActionDescriptor("move_fleet_to_coordinate");
+  const auto* start = FindActionDescriptor("start_research");
+  const auto* ship_design = FindActionDescriptor("create_ship_design");
   ok &= Expect(move != nullptr, "move_fleet descriptor missing");
   ok &= Expect(attack != nullptr, "attack_fleet descriptor missing");
   ok &= Expect(stop != nullptr, "stop_research descriptor missing");
+  ok &= Expect(build != nullptr, "build_building descriptor missing");
+  ok &= Expect(
+      coordinate != nullptr, "move_fleet_to_coordinate descriptor missing");
+  ok &= Expect(start != nullptr, "start_research descriptor missing");
+  ok &= Expect(ship_design != nullptr, "create_ship_design descriptor missing");
 
   ok &= Expect(ParseUint32("0") == std::uint32_t{0}, "zero id rejected");
   ok &= Expect(
@@ -85,6 +94,34 @@ int main() {
     }
   }
 
+  if (build != nullptr) {
+    std::string error;
+    const std::vector<std::string> fields = {
+        "1", "2", "3", "4", "building_foundry_1"};
+    auto invocation = build->parse(std::span<const std::string>(fields), error);
+    ok &= Expect(invocation != nullptr, "valid captured building target rejected");
+    const std::vector<std::string> incomplete = {
+        "1", "2", "3", "4"};
+    invocation = build->parse(
+        std::span<const std::string>(incomplete), error);
+    ok &= Expect(
+        invocation == nullptr, "incomplete captured building target accepted");
+  }
+
+  if (coordinate != nullptr) {
+    std::string error;
+    const std::vector<std::string> fields = {"7", "-123", "456", "9"};
+    auto invocation = coordinate->parse(
+        std::span<const std::string>(fields), error);
+    ok &= Expect(
+        invocation != nullptr, "valid captured coordinate target rejected");
+    const std::vector<std::string> invalid = {"7", "not-int64", "456", "9"};
+    invocation = coordinate->parse(
+        std::span<const std::string>(invalid), error);
+    ok &= Expect(
+        invocation == nullptr, "invalid captured coordinate target accepted");
+  }
+
   ok &= Expect(
       FindActionDescriptor("unknown_action") == nullptr,
       "unknown action descriptor accepted");
@@ -102,11 +139,23 @@ int main() {
       manifest.find("\"application_id\":\"research_strategy\"") !=
           std::string::npos,
       "research Application assignment missing from manifest");
+  ok &= Expect(
+      manifest.find("\"action_type\":\"build_building\"") !=
+          std::string::npos,
+      "supported capture-backed action missing from Linux manifest");
+  ok &= Expect(
+      manifest.find("\"verification_state\":\"paired_capture\"") !=
+          std::string::npos,
+      "capture-backed verification state missing from manifest");
 #else
   ok &= Expect(
       manifest.find("\"action_type\":\"stop_research\"") ==
           std::string::npos,
       "unsupported Windows research action leaked into manifest");
+  ok &= Expect(
+      manifest.find("\"action_type\":\"build_building\"") ==
+          std::string::npos,
+      "unsupported Windows capture action leaked into manifest");
 #endif
   return ok ? 0 : 1;
 }

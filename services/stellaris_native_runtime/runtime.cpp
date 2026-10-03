@@ -445,7 +445,7 @@ bool SendAll(int socket, std::string_view data) {
 std::optional<std::string> ReceiveLine(int socket) {
   std::string line;
   std::array<char, 256> buffer{};
-  while (line.size() <= 1024U) {
+  while (line.size() <= 65'536U) {
     const ssize_t count = ::recv(socket, buffer.data(), buffer.size(), 0);
     if (count <= 0) {
       return std::nullopt;

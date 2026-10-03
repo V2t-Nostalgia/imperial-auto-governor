@@ -7,6 +7,9 @@ namespace {
 
 using PostCommandFn = void (*)(void*, bool);
 using GetLocalObservedFn = const void* (*)(const void*);
+using CreateCommandFromBytesFn = void* (*)(const unsigned char*, unsigned int);
+using CommandMethodFn = bool (*)(void*);
+using CommandDestructorFn = void (*)(void*);
 
 }  // namespace
 
@@ -103,6 +106,65 @@ const void* GameApi::ResolvePdxObject(
       static_cast<const unsigned char*>(object) +
       database_profile.object_id_offset);
   return resolved_id == object_id ? object : nullptr;
+}
+
+void* GameApi::CreateSerializedCommand(
+    std::span<const unsigned char> command_body) const noexcept {
+  const auto& bindings = profile_.serialized_command;
+  if (bindings.create_command_from_bytes == 0U || command_body.empty() ||
+      command_body.size() > UINT32_MAX) {
+    return nullptr;
+  }
+  return FunctionAt<CreateCommandFromBytesFn>(
+      bindings.create_command_from_bytes)(
+      command_body.data(), static_cast<unsigned int>(command_body.size()));
+}
+
+void GameApi::SetCommandActor(
+    void* command,
+    std::uint32_t country_id) const noexcept {
+  if (command == nullptr) {
+    return;
+  }
+  *reinterpret_cast<std::uint32_t*>(
+      static_cast<unsigned char*>(command) +
+      profile_.serialized_command.command_actor_offset) = country_id;
+}
+
+bool GameApi::IsCommandValid(void* command) const noexcept {
+  if (command == nullptr) {
+    return false;
+  }
+  const auto* vtable = *reinterpret_cast<void* const* const*>(command);
+  if (vtable == nullptr) {
+    return false;
+  }
+  const std::size_t index =
+      profile_.serialized_command.command_is_valid_vtable_offset /
+      sizeof(void*);
+  const void* method = vtable[index];
+  if (!IsTextPointer(method)) {
+    return false;
+  }
+  return reinterpret_cast<CommandMethodFn>(const_cast<void*>(method))(command);
+}
+
+void GameApi::DestroyCommand(void* command) const noexcept {
+  if (command == nullptr) {
+    return;
+  }
+  const auto* vtable = *reinterpret_cast<void* const* const*>(command);
+  if (vtable == nullptr) {
+    return;
+  }
+  const std::size_t index =
+      profile_.serialized_command.command_deleting_destructor_vtable_offset /
+      sizeof(void*);
+  const void* method = vtable[index];
+  if (!IsTextPointer(method)) {
+    return;
+  }
+  reinterpret_cast<CommandDestructorFn>(const_cast<void*>(method))(command);
 }
 
 void GameApi::PostCommand(void* command) const noexcept {

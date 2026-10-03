@@ -45,8 +45,12 @@ constexpr std::array<unsigned char, 12> kFleetGetExecutingOrderPrefix = {
     0x48, 0x8b, 0xbf, 0xc8, 0x02, 0x00,
     0x00, 0xe9, 0xf4, 0xcf, 0x06, 0x00,
 };
+constexpr std::array<unsigned char, 12> kCreateCommandFromBytesPrefix = {
+    0x55, 0x41, 0x57, 0x41, 0x56, 0x53,
+    0x48, 0x81, 0xec, 0xa8, 0x05, 0x00,
+};
 
-constexpr std::array<FunctionAnchor, 10> kRequiredAnchors = {{
+constexpr std::array<FunctionAnchor, 11> kRequiredAnchors = {{
     {"CGameIdler::Idle", 0x17bd4a0, kGameIdlerIdlePrefix.data(),
      kGameIdlerIdlePrefix.size()},
     {"PostCommandToSession", 0x17c2290, kPostCommandPrefix.data(),
@@ -68,6 +72,9 @@ constexpr std::array<FunctionAnchor, 10> kRequiredAnchors = {{
     {"CFleet::GetExecutingOrder", 0x25ae690,
      kFleetGetExecutingOrderPrefix.data(),
      kFleetGetExecutingOrderPrefix.size()},
+    {"CreateCommand(bytes)", 0x381c8d0,
+     kCreateCommandFromBytesPrefix.data(),
+     kCreateCommandFromBytesPrefix.size()},
 }};
 
 const BuildProfile kProfile = {
@@ -144,6 +151,12 @@ const BuildProfile kProfile = {
             .null_object_instance = 0x548bc18,
             .object_id_offset = 0x30,
         },
+    },
+    .serialized_command = {
+        .create_command_from_bytes = 0x381c8d0,
+        .command_actor_offset = 0x08,
+        .command_is_valid_vtable_offset = 0x40,
+        .command_deleting_destructor_vtable_offset = 0x08,
     },
     .required_anchors = kRequiredAnchors.data(),
     .required_anchor_count = kRequiredAnchors.size(),

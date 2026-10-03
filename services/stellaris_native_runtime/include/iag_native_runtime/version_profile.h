@@ -85,6 +85,17 @@ struct AttackFleetBindings {
   ObjectDatabaseProfile fleets;
 };
 
+// Stellaris' own binary-persistence command factory. The input is the command
+// object body beginning with its token (the six-byte reliable-stream record
+// envelope is deliberately excluded). This keeps capture-backed actions on the
+// same native object, validator, session-post and ownership path as UI actions.
+struct SerializedCommandBindings {
+  std::uintptr_t create_command_from_bytes;
+  std::size_t command_actor_offset;
+  std::size_t command_is_valid_vtable_offset;
+  std::size_t command_deleting_destructor_vtable_offset;
+};
+
 struct BuildProfile {
   const char* platform_id;
   const char* game_version;
@@ -94,6 +105,7 @@ struct BuildProfile {
   StopResearchBindings stop_research;
   MoveFleetBindings move_fleet;
   AttackFleetBindings attack_fleet;
+  SerializedCommandBindings serialized_command;
   const FunctionAnchor* required_anchors;
   std::size_t required_anchor_count;
 };

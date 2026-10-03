@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 import unittest
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[5]
 RUNTIME_ROOT = ROOT / "services" / "stellaris_native_runtime"
@@ -25,6 +26,14 @@ class NativeRuntimeLayoutTests(unittest.TestCase):
         self.assertTrue(action_sources)
         for source in action_sources:
             content = source.read_text(encoding="utf-8")
+            if source.name == "capture_action.cpp":
+                self.assertIn("ParseCaptureAction", content)
+                continue
+            if source.name == "captured_actions.cpp":
+                generated = (
+                    RUNTIME_ROOT / "actions" / "generated_capture_actions.inc"
+                ).read_text(encoding="ascii")
+                content += generated
             self.assertIn("ActionRegistration", content, msg=source.name)
             self.assertIn(".application_id", content, msg=source.name)
             self.assertIn(".parameters", content, msg=source.name)
@@ -32,6 +41,23 @@ class NativeRuntimeLayoutTests(unittest.TestCase):
         self.assertNotIn("AttackFleetDescriptor", registry)
         self.assertNotIn("MoveFleetDescriptor", registry)
         self.assertNotIn("StopResearchDescriptor", registry)
+
+    def test_capture_actions_are_regenerated_from_reviewed_fixtures(self) -> None:
+        generator = (
+            RUNTIME_ROOT / "tools" / "generate_capture_actions.py"
+        )
+        completed = subprocess.run(
+            [sys.executable, str(generator), "--check"],
+            cwd=ROOT,
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            msg=completed.stdout + completed.stderr,
+        )
 
     def test_version_profiles_are_explicit_build_inputs(self) -> None:
         cmake = (RUNTIME_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")

@@ -20,6 +20,9 @@
   runtime 声明 action、所属 Application、风险、验证状态与严格参数；Broker 再与上层
   权限相交。未完成领域归类的新动作进入 `etc`，Application 不接触 IPC、函数地址、
   command 对象或 hook。
+- `_native_capture_adapter.py` 仅供 4.4.6 实机验收使用：对两个嵌套变长记录复用已验证
+  packet builder，绝不作为 Application 或模型 target。其余抓包动作保持结构化字段；全部
+  在逐项补齐语义 resolver 和存档后置条件前维持 `paired_capture`、不可由 Broker 执行。
 - `passive_network_observer.py` 只读观测 Linux 端流量。
 - `packet/` 包含已验证的命令解析、精确构造和兼容点击模式的改写器。
 

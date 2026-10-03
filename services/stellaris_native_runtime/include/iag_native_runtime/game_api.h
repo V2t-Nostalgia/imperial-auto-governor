@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 
 #include "iag_native_runtime/version_profile.h"
 
@@ -26,6 +27,11 @@ class GameApi {
   [[nodiscard]] const void* ResolvePdxObject(
       const ObjectDatabaseProfile& database,
       std::uint32_t object_id) const noexcept;
+  [[nodiscard]] void* CreateSerializedCommand(
+      std::span<const unsigned char> command_body) const noexcept;
+  void SetCommandActor(void* command, std::uint32_t country_id) const noexcept;
+  [[nodiscard]] bool IsCommandValid(void* command) const noexcept;
+  void DestroyCommand(void* command) const noexcept;
   void PostCommand(void* command) const noexcept;
 
  private:
