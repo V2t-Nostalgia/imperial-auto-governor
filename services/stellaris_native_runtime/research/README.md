@@ -52,6 +52,50 @@ write API. Unknown commands remain discovery evidence and cannot become a
 production action until their semantics and execution chain are independently
 verified.
 
+The separate [`ui_bridge/`](ui_bridge/) probe records the live-verified native
+conversation panel, Application-scoped message lists, and bidirectional
+`IAGUI1` process bridge. It is presentation/IPC research and is not an
+execution backend.
+
+The proposed single-process, per-country observer takeover boundary is
+documented in
+[`docs/runtime/OBSERVER_AI_COUNTRY_TAKEOVER_4_4_6.md`](../../../docs/runtime/OBSERVER_AI_COUNTRY_TAKEOVER_4_4_6.md).
+It uses `CCountryAI::PostAICommandsToSession()` as the country-specific gate;
+it does not globally replace player, system, or unmanaged-AI commands.
+
+`observer_takeover_probe.cpp` is the exact-build, one-shot implementation used
+to validate that boundary. It starts in read-only observation mode and exposes
+a user-owned (`0600`) local Unix socket. It will not suppress a target
+country's batch until a reviewed `move_fleet` action has prepared successfully
+and every queued command exposes a module-owned native deleting destructor.
+After one replacement it becomes verification-only and cannot replace another
+batch without an explicit new arm request.
+
+Build and inspect it with:
+
+```bash
+cmake -S services/stellaris_native_runtime/research \
+  -B /tmp/iag-observer-takeover-build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build /tmp/iag-observer-takeover-build \
+  --target iag_stellaris_observer_takeover_probe -j4
+
+python3 observer_takeover_client.py status
+python3 observer_takeover_client.py arm-move \
+  <generation-bearing-country-id> <fleet-id> <destination-system-id>
+python3 observer_takeover_client.py status
+```
+
+The live evidence stream is
+`/tmp/iag-stellaris-observer-takeover.jsonl`. The 2026-09-28 experiment
+replaced country `1`'s three-command batch with `move_fleet(7, 114)`, confirmed
+the native movement-order postcondition, observed subsequent non-empty batches
+from unmanaged countries, and left Stellaris running. Full evidence and the
+remaining production boundary are in the document linked above.
+
+This remains a disposable-save research probe. Do not hot-unload it, register
+it as an Execution Broker backend, or interpret its one-shot success as broad
+command-coverage validation.
+
 Analyze a completed or live capture with:
 
 ```bash

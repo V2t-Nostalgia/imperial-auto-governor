@@ -58,6 +58,16 @@ allowlist 逐项迁移；这不是重写 packet builders、response correlation 
 Application manifest 只声明 semantic capability，不选择具体 backend。完整边界与迁移约束
 见 [`EXECUTION_BROKER.md`](EXECUTION_BROKER.md)。
 
+单机观察者模式另有一个仍处于 research 阶段的权限域：Linux 4.4.6 实机已证明可以在
+`CCountryAI::PostAICommandsToSession()` 按 generation-bearing country ID 只替换一个被管理
+AI 国家的待提交命令批次，再由游戏原生 `PostCommandToSession(..., true)` 路径执行；玩家
+命令、系统命令和未托管 AI 国家均不经过该替换分支。这个结果不改变当前生产 Broker 的
+`LocalPlayer` 权限边界，也不代表已支持长期全域托管或多人同步。生产化时必须新增显式的
+`ObserverManagedCountry` authority scope，并为每个国家独立绑定 controller、snapshot、
+资源账本、顺序队列和 request-id 去重。完整调用链、精确版本指纹、对象生命周期、一次性
+实机证据及待验证项见
+[`runtime/OBSERVER_AI_COUNTRY_TAKEOVER_4_4_6.md`](runtime/OBSERVER_AI_COUNTRY_TAKEOVER_4_4_6.md)。
+
 ### Resource Reservation Ledger
 
 控制台任务锁负责进程内副作用串行化；`ResourceReservationLedger` 进一步处理“多个

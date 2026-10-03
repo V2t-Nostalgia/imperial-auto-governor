@@ -67,6 +67,9 @@ fleet attack evidence in
 [`docs/runtime/NATIVE_FLEET_ATTACK_HOOK_4_4_6.md`](../../docs/runtime/NATIVE_FLEET_ATTACK_HOOK_4_4_6.md),
 with the wider command/order family map in
 [`docs/runtime/FLEET_MOVEMENT_NATIVE_4_4_6.md`](../../docs/runtime/FLEET_MOVEMENT_NATIVE_4_4_6.md).
+The separate single-player observer takeover proposal and its recovered
+per-country AI queue boundary are recorded in
+[`docs/runtime/OBSERVER_AI_COUNTRY_TAKEOVER_4_4_6.md`](../../docs/runtime/OBSERVER_AI_COUNTRY_TAKEOVER_4_4_6.md).
 
 Build on the Linux game host:
 

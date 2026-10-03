@@ -1,0 +1,554 @@
+guiTypes = {
+    containerWindowType = {
+        name = "iag_message_player_header"
+        position = { x = 18 y = 0 }
+        size = { width = 598 height = 30 }
+        orientation = upper_left
+
+        background = {
+            name = "background"
+            spriteType = "GFX_social_chat_self"
+            alwaystransparent = yes
+        }
+
+        instantTextBoxType = {
+            name = "text"
+            position = { x = 18 y = 4 }
+            font = "malgun_goth_24"
+            borderSize = { x = 0 y = 0 }
+            maxWidth = 560
+            maxHeight = 24
+            text = "YOU"
+            text_color_code = "H"
+            alwaysTransparent = yes
+        }
+    }
+
+    containerWindowType = {
+        name = "iag_message_player_line"
+        position = { x = 18 y = 0 }
+        size = { width = 598 height = 24 }
+        orientation = upper_left
+
+        background = {
+            name = "background"
+            spriteType = "GFX_social_chat_self"
+            alwaystransparent = yes
+        }
+
+        instantTextBoxType = {
+            name = "text"
+            position = { x = 22 y = 1 }
+            font = "cg_16b"
+            borderSize = { x = 0 y = 0 }
+            maxWidth = 552
+            maxHeight = 22
+            text = ""
+            text_color_code = "G"
+            alwaysTransparent = yes
+        }
+    }
+
+    containerWindowType = {
+        name = "iag_message_agent_header"
+        position = { x = 0 y = 0 }
+        size = { width = 598 height = 30 }
+        orientation = upper_left
+
+        background = {
+            name = "background"
+            spriteType = "GFX_social_chat_other"
+            alwaystransparent = yes
+        }
+
+        instantTextBoxType = {
+            name = "text"
+            position = { x = 18 y = 4 }
+            font = "malgun_goth_24"
+            borderSize = { x = 0 y = 0 }
+            maxWidth = 560
+            maxHeight = 24
+            text = "IAG"
+            text_color_code = "E"
+            alwaysTransparent = yes
+        }
+    }
+
+    containerWindowType = {
+        name = "iag_message_agent_line"
+        position = { x = 0 y = 0 }
+        size = { width = 598 height = 24 }
+        orientation = upper_left
+
+        background = {
+            name = "background"
+            spriteType = "GFX_social_chat_other"
+            alwaystransparent = yes
+        }
+
+        instantTextBoxType = {
+            name = "text"
+            position = { x = 22 y = 1 }
+            font = "cg_16b"
+            borderSize = { x = 0 y = 0 }
+            maxWidth = 552
+            maxHeight = 22
+            text = ""
+            text_color_code = "E"
+            alwaysTransparent = yes
+        }
+    }
+
+    containerWindowType = {
+        name = "iag_message_spacer"
+        position = { x = 0 y = 0 }
+        size = { width = 598 height = 8 }
+        orientation = upper_left
+
+        instantTextBoxType = {
+            name = "text"
+            position = { x = 0 y = 0 }
+            font = "cg_16b"
+            borderSize = { x = 0 y = 0 }
+            maxWidth = 1
+            maxHeight = 1
+            text = ""
+            alwaysTransparent = yes
+        }
+    }
+
+    containerWindowType = {
+        name = "iag_llm_chat_launcher"
+        position = { x = -198 y = -294 }
+        size = { width = 184 height = 180 }
+        moveable = no
+        orientation = lower_right
+
+        iconType = {
+            name = "assistant_portrait"
+            position = { x = 12 y = 18 }
+            spriteType = "GFX_iag_assistant_portrait"
+            scale = 0.30
+            alwaysTransparent = yes
+        }
+
+        buttonType = {
+            name = "open_chat"
+            position = { x = 12 y = 18 }
+            size = { x = 154 y = 154 }
+            quadTextureSprite = "GFX_invisible"
+            pdx_tooltip = "IAG Strategic Communications"
+            clicksound = confirmation
+            oversound = mouse_over
+        }
+
+        instantTextBoxType = {
+            name = "unread_badge"
+            position = { x = 150 y = 10 }
+            font = "malgun_goth_24"
+            borderSize = { x = 0 y = 0 }
+            maxWidth = 28
+            maxHeight = 20
+            text = ""
+            text_color_code = "R"
+            alwaysTransparent = yes
+        }
+    }
+
+    containerWindowType = {
+        name = "iag_llm_notification"
+        position = { x = -552 y = -478 }
+        size = { width = 352 height = 184 }
+        moveable = no
+        orientation = lower_right
+
+        iconType = {
+            name = "notification_bubble"
+            position = { x = 0 y = 0 }
+            spriteType = "GFX_iag_thought_bubble"
+            scale = 0.34
+            alwaysTransparent = yes
+        }
+
+        buttonType = {
+            name = "notification_open"
+            position = { x = 8 y = 8 }
+            size = { x = 316 y = 144 }
+            quadTextureSprite = "GFX_invisible"
+            pdx_tooltip = "Open this Application thread"
+            clicksound = confirmation
+            oversound = mouse_over
+        }
+
+        instantTextBoxType = {
+            name = "notification_application"
+            position = { x = 32 y = 28 }
+            font = "cg_16b"
+            borderSize = { x = 0 y = 0 }
+            maxWidth = 238
+            maxHeight = 20
+            text = "IAG"
+            text_color_code = "B"
+            alwaysTransparent = yes
+        }
+
+        instantTextBoxType = {
+            name = "notification_text"
+            position = { x = 32 y = 53 }
+            font = "cg_16b"
+            borderSize = { x = 0 y = 0 }
+            maxWidth = 252
+            maxHeight = 70
+            text = ""
+            text_color_code = "B"
+            alwaysTransparent = yes
+        }
+
+        buttonType = {
+            name = "notification_dismiss"
+            spriteType = "GFX_button_close_24"
+            position = { x = 292 y = 20 }
+            clicksound = back_click
+            oversound = mouse_over
+        }
+    }
+
+    containerWindowType = {
+        name = "iag_llm_chat_window"
+        position = { x = 0 y = 0 }
+        size = { width = 940 height = 600 }
+        moveable = yes
+        orientation = center
+        origo = center
+
+        background = {
+            name = "background"
+            quadTextureSprite = "GFX_tile_outliner_bg"
+        }
+
+        buttonType = {
+            name = "close"
+            spriteType = "GFX_button_close_24"
+            position = { x = -38 y = 14 }
+            orientation = upper_right
+            shortcut = "ESCAPE"
+            actionShortcut = "cancel"
+            clicksound = back_click
+        }
+
+        instantTextBoxType = {
+            name = "title"
+            position = { x = 28 y = 18 }
+            font = "malgun_goth_24"
+            borderSize = { x = 0 y = 0 }
+            maxWidth = 840
+            maxHeight = 32
+            text = ""
+            format = left
+        }
+
+        instantTextBoxType = {
+            name = "contact_label"
+            position = { x = 28 y = 50 }
+            font = "cg_16b"
+            borderSize = { x = 0 y = 0 }
+            maxWidth = 840
+            maxHeight = 20
+            text = "LOCAL IAG CONTACTS // PRIVATE APPLICATION THREADS"
+            text_color_code = "S"
+        }
+
+        iconType = {
+            name = "header_line"
+            spriteType = "GFX_line_center"
+            position = { x = 18 y = 67 }
+            alwaysTransparent = yes
+        }
+
+        containerWindowType = {
+            name = "contacts_surface"
+            position = { x = 24 y = 86 }
+            size = { width = 214 height = 448 }
+
+            background = {
+                name = "contacts_background"
+                spriteType = "GFX_tiles_dark_area_cut_8"
+                alwaysTransparent = yes
+            }
+        }
+
+        instantTextBoxType = {
+            name = "applications_heading"
+            position = { x = 34 y = 93 }
+            font = "malgun_goth_24"
+            borderSize = { x = 0 y = 0 }
+            maxWidth = 190
+            maxHeight = 26
+            text = "APPLICATIONS"
+            text_color_code = "H"
+        }
+
+        buttonType = {
+            name = "contact_fleet"
+            position = { x = 31 y = 124 }
+            size = { x = 200 y = 34 }
+            spriteType = "GFX_standard_button_200_34_button"
+            buttonText = "Fleet & Expansion"
+            buttonFont = "cg_16b"
+            clicksound = confirmation
+            oversound = mouse_over
+        }
+
+        instantTextBoxType = {
+            name = "active_fleet"
+            position = { x = 35 y = 131 }
+            font = "cg_16b"
+            borderSize = { x = 0 y = 0 }
+            maxWidth = 12
+            maxHeight = 20
+            text = ""
+            text_color_code = "H"
+            alwaysTransparent = yes
+        }
+
+        instantTextBoxType = {
+            name = "unread_fleet"
+            position = { x = 207 y = 131 }
+            font = "cg_16b"
+            borderSize = { x = 0 y = 0 }
+            maxWidth = 20
+            maxHeight = 20
+            text = ""
+            text_color_code = "R"
+            alwaysTransparent = yes
+        }
+
+        buttonType = {
+            name = "contact_economy"
+            position = { x = 31 y = 172 }
+            size = { x = 200 y = 34 }
+            spriteType = "GFX_standard_button_200_34_button"
+            buttonText = "Economy Governance"
+            buttonFont = "cg_16b"
+            clicksound = confirmation
+            oversound = mouse_over
+        }
+
+        instantTextBoxType = {
+            name = "active_economy"
+            position = { x = 35 y = 179 }
+            font = "cg_16b"
+            borderSize = { x = 0 y = 0 }
+            maxWidth = 12
+            maxHeight = 20
+            text = ""
+            text_color_code = "H"
+            alwaysTransparent = yes
+        }
+
+        instantTextBoxType = {
+            name = "unread_economy"
+            position = { x = 207 y = 179 }
+            font = "cg_16b"
+            borderSize = { x = 0 y = 0 }
+            maxWidth = 20
+            maxHeight = 20
+            text = ""
+            text_color_code = "R"
+            alwaysTransparent = yes
+        }
+
+        buttonType = {
+            name = "contact_research"
+            position = { x = 31 y = 220 }
+            size = { x = 200 y = 34 }
+            spriteType = "GFX_standard_button_200_34_button"
+            buttonText = "Research Strategy"
+            buttonFont = "cg_16b"
+            clicksound = confirmation
+            oversound = mouse_over
+        }
+
+        instantTextBoxType = {
+            name = "active_research"
+            position = { x = 35 y = 227 }
+            font = "cg_16b"
+            borderSize = { x = 0 y = 0 }
+            maxWidth = 12
+            maxHeight = 20
+            text = ""
+            text_color_code = "H"
+            alwaysTransparent = yes
+        }
+
+        instantTextBoxType = {
+            name = "unread_research"
+            position = { x = 207 y = 227 }
+            font = "cg_16b"
+            borderSize = { x = 0 y = 0 }
+            maxWidth = 20
+            maxHeight = 20
+            text = ""
+            text_color_code = "R"
+            alwaysTransparent = yes
+        }
+
+        buttonType = {
+            name = "contact_etc"
+            position = { x = 31 y = 268 }
+            size = { x = 200 y = 34 }
+            spriteType = "GFX_standard_button_200_34_button"
+            buttonText = "Other Capabilities"
+            buttonFont = "cg_16b"
+            clicksound = confirmation
+            oversound = mouse_over
+        }
+
+        instantTextBoxType = {
+            name = "active_etc"
+            position = { x = 35 y = 275 }
+            font = "cg_16b"
+            borderSize = { x = 0 y = 0 }
+            maxWidth = 12
+            maxHeight = 20
+            text = ""
+            text_color_code = "H"
+            alwaysTransparent = yes
+        }
+
+        instantTextBoxType = {
+            name = "unread_etc"
+            position = { x = 207 y = 275 }
+            font = "cg_16b"
+            borderSize = { x = 0 y = 0 }
+            maxWidth = 20
+            maxHeight = 20
+            text = ""
+            text_color_code = "R"
+            alwaysTransparent = yes
+        }
+
+        instantTextBoxType = {
+            name = "contacts_hint"
+            position = { x = 35 y = 482 }
+            font = "cg_16b"
+            borderSize = { x = 0 y = 0 }
+            maxWidth = 188
+            maxHeight = 20
+            text = "PRIVATE CONTEXT"
+            text_color_code = "S"
+            alwaysTransparent = yes
+        }
+
+        instantTextBoxType = {
+            name = "contacts_hint_2"
+            position = { x = 35 y = 505 }
+            font = "cg_16b"
+            borderSize = { x = 0 y = 0 }
+            maxWidth = 188
+            maxHeight = 20
+            text = "UNREAD STATE ISOLATED"
+            text_color_code = "S"
+            alwaysTransparent = yes
+        }
+
+        instantTextBoxType = {
+            name = "active_title"
+            position = { x = 260 y = 86 }
+            font = "malgun_goth_24"
+            borderSize = { x = 0 y = 0 }
+            maxWidth = 620
+            maxHeight = 30
+            text = ""
+            text_color_code = "H"
+        }
+
+        instantTextBoxType = {
+            name = "thread_label"
+            position = { x = 260 y = 112 }
+            font = "cg_16b"
+            borderSize = { x = 0 y = 0 }
+            maxWidth = 620
+            maxHeight = 18
+            text = "PRIVATE APPLICATION THREAD"
+            text_color_code = "S"
+        }
+
+        containerWindowType = {
+            name = "conversation_surface"
+            position = { x = 250 y = 134 }
+            size = { width = 660 height = 322 }
+
+            background = {
+                name = "conversation_background"
+                spriteType = "GFX_empty_green_frame"
+                alwaysTransparent = yes
+            }
+        }
+
+        smoothListBoxType = {
+            name = "message_list"
+            position = { x = 258 y = 142 }
+            orientation = upper_left
+            size = { x = 644 y = 306 }
+            borderSize = { x = 0 y = 0 }
+            scrollbartype = "standardlistbox_slider"
+            spacing = 0
+            wraparound = no
+        }
+
+        containerWindowType = {
+            name = "composer_surface"
+            position = { x = 250 y = 470 }
+            size = { width = 660 height = 58 }
+
+            background = {
+                name = "composer_background"
+                spriteType = "GFX_tiles_dark_area_cut_8"
+                alwaysTransparent = yes
+            }
+        }
+
+        editBoxType = {
+            name = "chat_input"
+            position = { x = 260 y = 479 }
+            size = { x = 490 y = 38 }
+            font = "cg_16b"
+            borderSize = { x = 8 y = 6 }
+            allow_multi_line = no
+            max_characters = 4096
+            text = ""
+        }
+
+        buttonType = {
+            name = "send"
+            position = { x = 762 y = 481 }
+            size = { x = 142 y = 34 }
+            spriteType = "GFX_standard_button_142_34_button"
+            buttonText = "SEND"
+            buttonFont = "malgun_goth_24"
+            shortcut = "RETURN"
+            actionShortcut = "accept"
+            clicksound = confirmation
+            oversound = mouse_over
+        }
+
+        iconType = {
+            name = "footer_line"
+            spriteType = "GFX_line_center"
+            position = { x = 246 y = 538 }
+            alwaysTransparent = yes
+        }
+
+        instantTextBoxType = {
+            name = "status"
+            position = { x = 256 y = 556 }
+            font = "cg_16b"
+            borderSize = { x = 0 y = 0 }
+            maxWidth = 640
+            maxHeight = 20
+            text = ""
+            text_color_code = "S"
+        }
+    }
+}
