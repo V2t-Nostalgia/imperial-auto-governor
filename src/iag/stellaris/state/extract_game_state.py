@@ -378,6 +378,119 @@ def construction_item_profile(
                 "colony_id": scalar(district, "planet"),
             }
         )
+        return profile
+
+    for section_name, kind, source_field in (
+        (
+            "buildable_planet_upgrade_building",
+            "upgrade_building",
+            "upgrade_building",
+        ),
+        (
+            "buildable_planet_replace_building",
+            "replace_building",
+            "replace_building",
+        ),
+    ):
+        operation = optional_section(item_block, section_name)
+        if operation:
+            profile.update(
+                {
+                    "kind": kind,
+                    "building_id": quoted_scalar(operation, "building"),
+                    "colony_id": scalar(operation, "planet"),
+                    "zone_id": scalar(operation, "zone"),
+                    "source_building_object_id": scalar(
+                        operation,
+                        source_field,
+                    ),
+                }
+            )
+            return profile
+
+    starbase_upgrade = optional_section(
+        item_block,
+        "buildable_starbase_upgrade",
+    )
+    if starbase_upgrade:
+        profile.update(
+            {
+                "kind": "starbase_upgrade",
+                "target_level": quoted_scalar(
+                    starbase_upgrade,
+                    "starbase_upgrade",
+                ),
+                "starbase_object": scalar(starbase_upgrade, "starbase"),
+            }
+        )
+        return profile
+
+    for section_name, kind, component_field in (
+        ("buildable_starbase_module", "starbase_module", "starbase_module"),
+        (
+            "buildable_starbase_building",
+            "starbase_building",
+            "starbase_building",
+        ),
+    ):
+        component = optional_section(item_block, section_name)
+        if component:
+            profile.update(
+                {
+                    "kind": kind,
+                    "component_id": quoted_scalar(component, component_field),
+                    "slot_index": scalar(component, "slot"),
+                    "starbase_object": scalar(component, "starbase"),
+                }
+            )
+            return profile
+
+    army = optional_section(item_block, "buildable_army")
+    if army:
+        profile.update(
+            {
+                "kind": "army",
+                "army_type": quoted_scalar(army, "army_type"),
+                "species_id": scalar(army, "species"),
+                "source_colony_object": scalar(army, "planet"),
+                "recruitment_starbase_object": scalar(army, "starbase"),
+            }
+        )
+        return profile
+
+    for section_name, kind in (
+        ("buildable_ship", "ship"),
+        ("buildable_ship_reinforcement", "ship_reinforcement"),
+        ("buildable_colony_ship", "colony_ship"),
+    ):
+        ship = optional_section(item_block, section_name)
+        if not ship:
+            continue
+        implementation = optional_section(ship, "ship_design_implementation")
+        orbitable = optional_section(ship, "orbitable")
+        profile.update(
+            {
+                "kind": kind,
+                "design_id": scalar(implementation, "design"),
+                "upgrade_id": scalar(implementation, "upgrade"),
+                "growth_stage": scalar(implementation, "growth_stage"),
+                "destination_starbase_object": scalar(orbitable, "starbase"),
+            }
+        )
+        if kind == "ship_reinforcement":
+            profile["fleet_template_id"] = scalar(ship, "fleet_template")
+        elif kind == "colony_ship":
+            colonization = optional_section(ship, "colonization_data")
+            profile.update(
+                {
+                    "species_id": scalar(colonization, "species"),
+                    "colony_designation": quoted_scalar(
+                        colonization,
+                        "designation",
+                    ),
+                }
+            )
+        return profile
     return profile
 
 

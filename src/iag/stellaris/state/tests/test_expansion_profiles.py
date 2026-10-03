@@ -297,6 +297,36 @@ class ExpansionProfileTests(unittest.TestCase):
         )
         self.assertEqual(selected["target"]["starbase_object"], 12)
 
+    def test_does_not_offer_duplicate_unique_starbase_buildings(self) -> None:
+        save = SAVE_FIXTURE.replace(
+            'level="starbase_level_starport"\n   build_queue=44',
+            'level="starbase_level_starhold"\n   build_queue=44',
+            1,
+        ).replace('buildings={ }', 'buildings={ 0=crew_quarters }', 1)
+        with tempfile.TemporaryDirectory() as directory:
+            profile = extract_expansion_profiles(
+                save,
+                game_root=self.game_root(Path(directory)),
+                minimum_habitability=0.30,
+            )
+
+        candidates = [
+            item
+            for item in profile["starbase_operation_candidates"]
+            if item["action"] == "set_starbase_building"
+            and item["target"]["starbase_object"] == 12
+        ]
+        self.assertFalse(
+            any(item["component_id"] == "crew_quarters" for item in candidates)
+        )
+        self.assertTrue(
+            any(
+                item["component_id"] == "hydroponics_bay"
+                and item["slot_index"] == 1
+                for item in candidates
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

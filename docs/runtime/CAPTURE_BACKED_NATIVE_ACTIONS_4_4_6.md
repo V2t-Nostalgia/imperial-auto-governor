@@ -137,6 +137,59 @@ uses the private nested-record adapter only where required, submits actions in
 order, stops on the first rejection/failure, and writes a JSON evidence report.
 It is not an Application API and does not bypass Broker authority in production.
 
+## Live validation: 2026-10-03
+
+A disposable Stellaris 4.4.6 single-player run exercised the generated path on
+the exact Linux Build ID above. Every submitted request was reconstructed by
+the live factory, accepted by the native validator, and posted through the
+common game-thread path without terminating the game process. New saves were
+then compared with the exact source snapshots; runtime acceptance by itself
+was not treated as success.
+
+The snapshot chain was:
+
+| Snapshot | SHA-256 |
+| --- | --- |
+| `war.sav` | `0d1c55e08498098f43f11486b95d55781b9877e31a96a7f9295edd4cbe43157f` |
+| `war_after.sav` | `d4f9a8f5bd9d30c39eb9015f70408dfea18c7478afd933469225284850f3995d` |
+| `war_after2.sav` | `4bedac3962285de7a2b012a730c307347959cb49908df08c68f5ab08a7d223f4` |
+| `war_after3.sav` | `dcb9a82e43595dfcf55840eb17dcc1e5d622bccaeb5896d8f6080ce95a37c2b8` |
+
+Save-backed behavior was confirmed for 20 generated actions:
+
+| Domain | Confirmed actions |
+| --- | --- |
+| Economy | `build_building`, `upgrade_building`, `replace_building`, `build_district`, `build_zone` |
+| Fleet orders | `move_fleet_to_coordinate`, `set_orbital_bombardment_stance` |
+| Army / expansion | `recruit_army`, `order_colony_ship_and_colonize` |
+| Starbase | `upgrade_starbase`, `set_starbase_module`, `set_starbase_building` |
+| Research | `start_research` after the existing research was stopped |
+| Ship / template | `build_ship`, `configure_ship_automation`, `create_ship_design`, `create_fleet_template`, `add_fleet_template_ship`, `remove_fleet_template_ship`, `reinforce_selected_fleet` |
+
+The evidence includes concrete construction queue entries, research selection,
+fleet order/stance changes, automation state, a colonization expansion-list
+entry, a new ship design, and fleet-template mutations. `add` and `remove`
+were retested in separate snapshots so their effects could not cancel each
+other in the final state.
+
+Five generated actions were not submitted because the save had no legal fresh
+candidate: `land_armies`, `repair_fleet`, `upgrade_fleet`, `build_starbase`,
+and `colonize_with_existing_ship`. They remain unverified rather than being
+tested against fabricated object IDs.
+
+The run also established an important negative result. Native deserialization
+and the command's validator do not prove that all higher-level game rules allow
+the action. An already installed unique starbase building, a district with no
+remaining capacity, and an ineligible titan build were accepted by the native
+post path but produced no save mutation. The candidate layer must therefore
+continue to enforce freshness, ownership, uniqueness, capacity, resources and
+other domain rules before execution. The follow-up used legal alternatives and
+confirmed the same command families.
+
+These results are live save-backed evidence, but the generated descriptors
+remain `paired_capture`. Promotion to `live_verified` still requires the
+production semantic resolver and the rejection/authority gates below.
+
 For live promotion, each action still needs:
 
 1. a disposable-save target whose IDs are fresh;
@@ -147,9 +200,14 @@ For live promotion, each action still needs:
 6. a semantic resolver that eliminates captured queue/context fields before
    enabling the native backend in the Broker.
 
+Items 1-4 are now satisfied for the 20 actions listed above. The remaining
+five actions still require all six gates.
+
 ## Confidence
 
-### A. Confirmed statically and offline
+### A. Confirmed
+
+Static and offline evidence:
 
 - the native byte factory, its consumers, body boundary and virtual validator;
 - the common `PostCommandToSession` handoff and game-owned command lifecycle;
@@ -158,16 +216,23 @@ For live promotion, each action still needs:
 - Windows MSVC `/W4 /WX` and Linux GCC `-Werror` builds and contract tests;
 - unsupported Windows profiles do not advertise capture-backed actions.
 
-### B. High confidence, requires the planned live batch
+Live 4.4.6 evidence:
 
-- every generated body is accepted by the live factory for a fresh legal
-  target;
-- the native validator agrees with the prior packet-side candidate validator;
-- submitted commands reach the expected concrete game behavior.
+- 20 generated actions produced action-specific changes in subsequent saves;
+- all submitted command objects passed the live factory/validator/post path;
+- the game process remained alive throughout all three ordered batches;
+- native validation alone is not a substitute for semantic candidate checks.
+
+### B. High confidence, still requires a legal live candidate
+
+- `land_armies`, `repair_fleet`, `upgrade_fleet`, `build_starbase`, and
+  `colonize_with_existing_ship` use the same recovered factory/post path and
+  pass exact offline body reconstruction, but were not submitted in this run.
 
 ### C. Not yet established
 
-- save-backed postconditions for every generated action;
+- save-backed postconditions for the five untested generated actions;
+- invalid-ID and wrong-authority rejection behavior for generated actions;
 - production semantic resolution for queue IDs and other private captured
   fields;
 - Windows factory signature, offsets and ABI;

@@ -230,6 +230,15 @@ def _owned_starbase_profiles(
                 for component_id in components:
                     if current_component == component_id or not queue_idle:
                         continue
+                    if (
+                        kind == "building"
+                        and component_id in occupied.values()
+                    ):
+                        # Starbase buildings are unique per starbase.  Exposing
+                        # an already installed building for another empty slot
+                        # produces a command which deserializes cleanly but is
+                        # ignored by the game's construction rules.
+                        continue
                     rule = starbase_component_rule(
                         game_root,
                         kind,

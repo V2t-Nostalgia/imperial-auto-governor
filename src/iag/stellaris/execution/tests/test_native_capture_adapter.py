@@ -53,6 +53,34 @@ class NativeCaptureAdapterTests(unittest.TestCase):
                 self.assertEqual(adapted, {"verified_record_hex": expected})
                 self.assertTrue(uses_serialized_body_adapter(action_type))
 
+    def test_signed_coordinate_fields_are_encoded_as_decimal_strings(self) -> None:
+        adapted = adapt_capture_target(
+            action_type="move_fleet_to_coordinate",
+            target={
+                "source_fleet_object": 4778,
+                "x_fixed": 1780000,
+                "y_fixed": -1930000,
+                "system_origin": 2,
+            },
+            country_id=0,
+        )
+
+        self.assertEqual(adapted["x_fixed"], "1780000")
+        self.assertEqual(adapted["y_fixed"], "-1930000")
+
+    def test_coordinate_adapter_rejects_non_integer_coordinates(self) -> None:
+        with self.assertRaisesRegex(ValueError, "x_fixed must be an integer"):
+            adapt_capture_target(
+                action_type="move_fleet_to_coordinate",
+                target={
+                    "source_fleet_object": 4778,
+                    "x_fixed": "1780000",
+                    "y_fixed": -1930000,
+                    "system_origin": 2,
+                },
+                country_id=0,
+            )
+
     def test_unknown_action_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unknown captured action"):
             adapt_capture_target(

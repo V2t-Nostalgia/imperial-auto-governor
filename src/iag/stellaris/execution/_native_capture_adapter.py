@@ -23,6 +23,9 @@ from iag.stellaris.execution.session_proxy import (
 _RAW_BODY_ACTIONS: Final = frozenset(
     {"configure_ship_automation", "create_ship_design"}
 )
+_SIGNED_DECIMAL_STRING_FIELDS: Final = {
+    "move_fleet_to_coordinate": ("x_fixed", "y_fixed"),
+}
 _SESSION_ID: Final = "native-capture-materializer"
 
 
@@ -37,7 +40,13 @@ def adapt_capture_target(
     if action_type not in COMMAND_SPEC_BY_ACTION:
         raise ValueError(f"Unknown captured action: {action_type!r}.")
     if action_type not in _RAW_BODY_ACTIONS:
-        return dict(target)
+        adapted = dict(target)
+        for field in _SIGNED_DECIMAL_STRING_FIELDS.get(action_type, ()):
+            value = adapted.get(field)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"{action_type}.{field} must be an integer.")
+            adapted[field] = str(value)
+        return adapted
     request = parse_arm_document(
         {
             "request_id": f"materialize-{action_type}",
